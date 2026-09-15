@@ -17,6 +17,7 @@ let expect_ok = function
   | `Revoked -> Alcotest.fail "expected `Ok, got `Revoked"
   | `Wrong_caller -> Alcotest.fail "expected `Ok, got `Wrong_caller"
   | `Unknown -> Alcotest.fail "expected `Ok, got `Unknown"
+  | `Prefix_denied -> Alcotest.fail "expected `Ok, got `Prefix_denied"
 
 let test_ping () =
   Db.init (Db.config_from_env ())
@@ -147,23 +148,23 @@ let test_grants () =
   S.mint_grant p ~prim:"echo" ~args_attenuation:"{}" ~caller:me.S.i_id ()
   >>= fun g ->
   Alcotest.(check string) "prim" "echo" g.S.g_prim;
-  S.check_grant p ~id:g.S.g_id ~caller:me.S.i_id >>= fun ok ->
+  S.check_grant p ~id:g.S.g_id ~caller:me.S.i_id () >>= fun ok ->
   expect_ok ok;
   (* wrong caller *)
-  S.check_grant p ~id:g.S.g_id ~caller:"not-an-identity" >>= fun wrong ->
+  S.check_grant p ~id:g.S.g_id ~caller:"not-an-identity" () >>= fun wrong ->
   (match wrong with
    | `Wrong_caller | `Unknown -> ()
    | _ -> Alcotest.fail "expected denial for wrong caller");
   (* revoke: forward-only *)
   S.revoke_grant p g.S.g_id >>= fun () ->
-  S.check_grant p ~id:g.S.g_id ~caller:me.S.i_id >>= fun revoked ->
+  S.check_grant p ~id:g.S.g_id ~caller:me.S.i_id () >>= fun revoked ->
   (match revoked with
    | `Revoked -> ()
    | _ -> Alcotest.fail "expected revoked");
   S.fetch_grant p g.S.g_id >>= fun g2 ->
   Alcotest.(check bool) "revoked_at set" true
     (Option.is_some (expect_some "grant row" g2).S.g_revoked_at);
-  S.check_grant p ~id:"ffffffff-0000-0000-0000-000000000000" ~caller:me.S.i_id
+  S.check_grant p ~id:"ffffffff-0000-0000-0000-000000000000" ~caller:me.S.i_id ()
   >>= fun unknown ->
   (match unknown with
    | `Unknown -> Lwt.return ()

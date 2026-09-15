@@ -165,7 +165,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
              , None
              , Some args_ternary )
        | Some (gid, attenuation) -> (
-           S.check_grant pool ~id:gid ~caller
+           S.check_grant pool ~id:gid ~caller ()
            >>= function
            | `Ok ->
                if attenuation_ok attenuation args_ternary then
@@ -178,17 +178,18 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
                           "grant denial: prim %s args exceed attenuation" name)
                    , Some gid
                    , Some args_ternary )
-           | (`Revoked | `Wrong_caller | `Unknown) as denial ->
-               Lwt.return
-                 ( `Error
-                     (Printf.sprintf "grant denial (%s) for prim %s"
-                        (match denial with
-                        | `Revoked -> "revoked"
-                        | `Wrong_caller -> "wrong caller"
-                        | `Unknown -> "unknown")
-                        name)
-                 , Some gid
-                 , Some args_ternary )))
+            | (`Revoked | `Wrong_caller | `Unknown | `Prefix_denied) as denial ->
+                Lwt.return
+                  ( `Error
+                      (Printf.sprintf "grant denial (%s) for prim %s"
+                         (match denial with
+                          | `Revoked -> "revoked"
+                          | `Wrong_caller -> "wrong caller"
+                          | `Unknown -> "unknown"
+                          | `Prefix_denied -> "path outside grant prefix")
+                         name)
+                   , Some gid
+                   , Some args_ternary )))
     >>= fun (answer, grant_id, args_inline) ->
     let wall_ms = int_of_float ((Unix.gettimeofday () -. t0) *. 1000.) in
     let ev : S.journal_event =
@@ -236,18 +237,23 @@ let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
   if fuel < 1 || size_cap < 1 then
     Lwt.return (Error (400, "fuel and size_cap must be >= 1"))
   else
-    let rec check gs =
-      match gs with
-      | [] -> Lwt.return None
-      | gid :: rest -> (
-          S.check_grant pool ~id:gid ~caller
-          >>= function
-          | `Ok -> check rest
-          | `Revoked -> Lwt.return (Some (Printf.sprintf "grant %s is revoked" gid))
-          | `Wrong_caller ->
-              Lwt.return
-                (Some (Printf.sprintf "grant %s does not belong to caller" gid))
-          | `Unknown -> Lwt.return (Some (Printf.sprintf "grant %s not found" gid)))
+      let rec check gs =
+        match gs with
+        | [] -> Lwt.return None
+        | gid :: rest -> (
+            S.check_grant pool ~id:gid ~caller ()
+            >>= function
+            | `Ok -> check rest
+            | `Revoked -> Lwt.return (Some (Printf.sprintf "grant %s is revoked" gid))
+            | `Wrong_caller ->
+                Lwt.return
+                  (Some (Printf.sprintf "grant %s does not belong to caller" gid))
+            | `Unknown -> Lwt.return (Some (Printf.sprintf "grant %s not found" gid))
+            | `Prefix_denied ->
+                Lwt.return
+                  (Some
+                     (Printf.sprintf
+                        "grant %s does not cover this call's paths" gid)))
     in
     check grant_ids
     >>= (function

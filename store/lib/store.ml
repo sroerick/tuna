@@ -468,29 +468,36 @@ type grant = {
   g_id : string
 ; g_prim : string
 ; g_args_attenuation : string  (* yojson text *)
+; g_path_prefix : string option  (* M10: NULL matches everything *)
 ; g_caller : string
 ; g_minted_by : string option
 ; g_revoked_at : string option
 }
 
 let select_grant_by_id =
-  "SELECT id::text, prim, args_attenuation::text, caller::text, minted_by::text, \
-   revoked_at::text FROM grants WHERE id = $1::uuid"
+  "SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
+   minted_by::text, revoked_at::text FROM grants WHERE id = $1::uuid"
 
 let grant_of_row r =
   { g_id = text r 0 "grant.id"
   ; g_prim = text r 1 "grant.prim"
   ; g_args_attenuation = text r 2 "grant.args_attenuation"
-  ; g_caller = text r 3 "grant.caller"
-  ; g_minted_by = opt_text r 4
-  ; g_revoked_at = opt_text r 5 }
+  ; g_path_prefix = opt_text r 3
+  ; g_caller = text r 4 "grant.caller"
+  ; g_minted_by = opt_text r 5
+  ; g_revoked_at = opt_text r 6 }
 
-let mint_grant p ~prim ~args_attenuation ~caller ?(minted_by = None) () =
+let mint_grant p ~prim ~args_attenuation ?(path_prefix = None) ~caller
+    ?(minted_by = None) () =
   Db.q
-    ~params:[ p_str prim; p_str args_attenuation; p_str caller; p_opt minted_by ]
+    ~params:[ p_str prim
+            ; p_str args_attenuation
+            ; p_opt path_prefix
+            ; p_str caller
+            ; p_opt minted_by ]
     p
-    "INSERT INTO grants (prim, args_attenuation, caller, minted_by) \
-     VALUES ($1, $2::jsonb, $3::uuid, $4::uuid) RETURNING id::text"
+    "INSERT INTO grants (prim, args_attenuation, path_prefix, caller, minted_by) \
+     VALUES ($1, $2::jsonb, $3, $4::uuid, $5::uuid) RETURNING id::text"
   >>= fun rows ->
   (match rows with
   | [ r ] ->
@@ -505,8 +512,8 @@ let mint_grant p ~prim ~args_attenuation ~caller ?(minted_by = None) () =
 (* newest-first listing for the UI admin page (M8) *)
 let list_grants p ?(limit = 100) () =
   Db.q ~params:[ p_int limit ] p
-    ("SELECT id::text, prim, args_attenuation::text, caller::text, minted_by::text, \
-      revoked_at::text FROM grants ORDER BY created_at DESC LIMIT $1")
+    ("SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
+      minted_by::text, revoked_at::text FROM grants ORDER BY created_at DESC LIMIT $1")
   >>= fun rows -> Lwt.return (List.map grant_of_row rows)
 
 let fetch_grant p id =
@@ -526,14 +533,31 @@ let revoke_grant p id =
 
 (* deny-check at a prim boundary: grant must exist, be unrevoked, and
    belong to the claiming caller.  Recorded runs never re-check (the
-   journal answers, not the grant table). *)
-let check_grant p ~id ~caller : [ `Ok | `Revoked | `Wrong_caller | `Unknown ] Lwt.t =
+   journal answers, not the grant table).
+
+   M10 path scoping: when the call carries tree paths (the substrate
+   prims + ns/fork pass every path it would read or write), the grant's
+   path_prefix must cover ALL of them (simple string prefix; NULL
+   matches everything).  A path-scoped grant cannot authorize a
+   pathless call - the narrowing is the grant. *)
+let prefix_match prefix path =
+  String.length path >= String.length prefix
+  && String.sub path 0 (String.length prefix) = prefix
+
+let check_grant p ~id ~caller ?(paths = []) () :
+  [ `Ok | `Revoked | `Wrong_caller | `Unknown | `Prefix_denied ] Lwt.t =
   fetch_grant p id
   >>= function
   | None -> Lwt.return `Unknown
   | Some g when g.g_revoked_at <> None -> Lwt.return `Revoked
   | Some g when g.g_caller <> caller -> Lwt.return `Wrong_caller
-  | Some _ -> Lwt.return `Ok
+  | Some g -> (
+      match (g.g_path_prefix, paths) with
+      | None, _ -> Lwt.return `Ok
+      | Some _, [] -> Lwt.return `Prefix_denied
+      | Some prefix, ps ->
+          if List.for_all (prefix_match prefix) ps then Lwt.return `Ok
+          else Lwt.return `Prefix_denied)
 
 (* -- identities ------------------------------------------------------ *)
 
