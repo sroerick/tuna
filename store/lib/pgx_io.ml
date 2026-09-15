@@ -45,7 +45,16 @@ module Thread : Pgx_lwt.Io_intf.S = struct
         let i = Random.int len in
         let addr = h_addr_list.(i) in
         Unix.ADDR_INET (addr, port))
-    >>= Lwt_io.open_connection
+    >>= fun addr ->
+    match addr with
+    | Unix.ADDR_UNIX _ ->
+      (* Lwt 6's open_connection attempts TCP_NODELAY by default and only
+         swallows EOPNOTSUPP; OpenBSD answers that setsockopt on an
+         AF_UNIX socket with ENOPROTOOPT, killing the connect (the same
+         gotcha that forced TCP on the town box).  NODELAY is a TCP-only
+         knob: turn it off for unix sockets. *)
+      Lwt_io.open_connection ~set_tcp_nodelay:false addr
+    | Unix.ADDR_INET _ -> Lwt_io.open_connection addr
   ;;
 end
 
