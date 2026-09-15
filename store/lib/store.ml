@@ -592,6 +592,323 @@ let verify_token p token =
     "SELECT id::text, name, token_hash, is_admin FROM identities WHERE token_hash = $1"
   >>= fun rows ->
   (match rows with
+   | [] -> Lwt.return None
+   | [ r ] -> Lwt.return (Some (identity_of_row r))
+   | _ -> Lwt.return None)
+
+(* -- tree substrate: derived path index + chained op log (M10) --------
+
+   migrations 0005/0006.  Law (tuna.borg watch note): content-addressed
+   VALUES are the primitive (tree_values, dedup by sha256); tree_paths
+   is a DERIVED mutable index (path -> value_hash + version) and never
+   storage truth; tree_ops is the append-only effect log whose op_hash
+   chain makes rewind a pure fold.
+
+   Path range scans pin the C collation so the [prefix, prefix||chr(255))
+   bound and the list ordering are byte-wise regardless of the cluster
+   collation (validated paths are printable ASCII, so any extension of
+   a prefix is bytewise below prefix||U+00FF). *)
+
+let path_hash = Tuna.Hash.hex_of_string
+
+type path_entry = {
+  tp_path : string
+; tp_value_hash : string
+; tp_version : int64
+; tp_owner : string
+; tp_updated_at : string option
+}
+
+let path_entry_of_row r what =
+  { tp_path = text r 0 what
+  ; tp_value_hash = text r 1 what
+  ; tp_version = int64 r 2 what
+  ; tp_owner = text r 3 what
+  ; tp_updated_at = opt_text r 4 }
+
+let select_path_entry =
+  "SELECT path, value_hash, version, owner, updated_at::text FROM tree_paths \
+   WHERE path_hash = $1"
+
+(* value hash + version + owner; the caller fetches value bytes by hash
+   through value_fetch when it needs the tree itself *)
+let path_get p ~path =
+  Db.q ~params:[ p_str (path_hash path) ] p select_path_entry
+  >>= function
   | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (identity_of_row r))
-  | _ -> Lwt.return None)
+  | [ r ] -> Lwt.return (Some (path_entry_of_row r "tree_paths"))
+  | _ -> store_error "tree_paths: multiple rows for path %s" path
+
+(* -- the value side (content-addressed, migration 0006) --------------- *)
+
+let value_put p ~hash ~ternary =
+  Db.q_unit
+    ~params:[ p_str hash; p_str ternary ]
+    p
+    "INSERT INTO tree_values (hash, ternary) VALUES ($1, $2) \
+     ON CONFLICT (hash) DO NOTHING"
+
+let value_fetch p hash =
+  Db.q ~params:[ p_str hash ] p "SELECT ternary FROM tree_values WHERE hash = $1"
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] -> Lwt.return (Some (text r 0 "tree_values.ternary"))
+  | _ -> store_error "tree_values: multiple rows for hash %s" hash
+
+(* unconditional write: INSERT at version 1, or version+1 on the
+   existing row (tree/put prim).  Returns the new version. *)
+let path_put p ~path ~value_hash ~owner =
+  Db.q
+    ~params:[ p_str (path_hash path); p_str path; p_str value_hash; p_str owner ]
+    p
+    "INSERT INTO tree_paths (path, path_hash, value_hash, version, owner) \
+     VALUES ($2, $1, $3, 1, $4) \
+     ON CONFLICT (path_hash) DO UPDATE \
+       SET value_hash = EXCLUDED.value_hash, version = tree_paths.version + 1, \
+           owner = EXCLUDED.owner, updated_at = now() \
+     RETURNING version"
+  >>= fun rows ->
+  (match rows with
+   | [ r ] -> Lwt.return (int64 r 0 "tree_paths.version")
+   | n -> store_error "path_put: RETURNING gave %d rows" (List.length n))
+
+(* versioned CAS write (tree/cas):
+   - expected_version None (or 0) means CREATE: insert at version 1;
+     `Conflict if the path already exists.
+   - expected_version (Some n) updates only when the live row is at
+     version n (and, when expected_hash is given, still carries that
+     value hash); `Conflict on any mismatch, `Absent when the path has
+     no row at all.  409-style, as an answer variant - never an
+     exception at the boundary. *)
+let path_put_cas p ~path ~value_hash ~owner ~expected_version ~expected_hash =
+  let h = path_hash path in
+  let classify () =
+    path_get p ~path
+    >>= function
+    | None -> Lwt.return `Absent
+    | Some _ -> Lwt.return `Conflict
+  in
+  match expected_version with
+  | None | Some 0L ->
+      Db.q
+        ~params:[ p_str h; p_str path; p_str value_hash; p_str owner ]
+        p
+        "INSERT INTO tree_paths (path, path_hash, value_hash, version, owner) \
+         VALUES ($2, $1, $3, 1, $4) ON CONFLICT (path_hash) DO NOTHING \
+         RETURNING version"
+      >>= (function
+            | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
+            | [] -> classify ()
+            | n -> store_error "path_put_cas: RETURNING gave %d rows" (List.length n))
+  | Some n -> (
+      let sql =
+        match expected_hash with
+        | Some _ ->
+            "UPDATE tree_paths SET value_hash = $4, version = version + 1, \
+             owner = $5, updated_at = now() \
+             WHERE path_hash = $1 AND version = $2 AND value_hash = $3 \
+             RETURNING version"
+        | None ->
+            "UPDATE tree_paths SET value_hash = $3, version = version + 1, \
+             owner = $4, updated_at = now() \
+             WHERE path_hash = $1 AND version = $2 \
+             RETURNING version"
+      in
+      let params =
+        match expected_hash with
+        | Some eh -> [ p_str h; p_int64 n; p_str eh; p_str value_hash; p_str owner ]
+        | None -> [ p_str h; p_int64 n; p_str value_hash; p_str owner ]
+      in
+      Db.q ~params p sql
+      >>= (function
+            | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
+            | [] -> classify ()
+            | n -> store_error "path_put_cas: RETURNING gave %d rows" (List.length n)))
+
+(* prefix range scan: every path starting with [prefix], byte-wise
+   ordered.  [prefix] must be non-empty (the whole-namespace read is an
+   API concern, not a store invariant). *)
+let path_list p ?(limit = 1000) ~prefix () =
+  Db.q
+    ~params:[ p_str prefix; p_int limit ]
+    p
+    "SELECT path, value_hash, version, owner, updated_at::text FROM tree_paths \
+     WHERE path >= ($1 COLLATE \"C\") \
+       AND path < (($1 || chr(255)) COLLATE \"C\") \
+     ORDER BY path COLLATE \"C\" LIMIT $2"
+  >>= fun rows -> Lwt.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
+
+(* -- the op log (sha256-chained; rewind folds it) --------------------- *)
+
+type tree_op = {
+  o_seq : int64
+; o_path : string
+; o_op : string  (* get|put|cas|list|fork *)
+; o_value_hash : string option  (* NULL for get/list and non-effects *)
+; o_prev_version : int64 option
+; o_version : int64 option
+; o_actor : string
+; o_ts_unix : int64
+; o_op_hash : string
+}
+
+(* canonical op-row encoding hashed into op_hash (spec: seq:|path|op|
+   value_hash|prev_version|version|actor|ts-unix, '|' separated, empty
+   string for NULL fields, seq labeled with ':').  The chain is
+   op_hash = sha256(prev_op_hash ^ row_concat), genesis prev = 64*'0'. *)
+let op_concat ~seq ~path ~op ~value_hash ~prev_version ~version ~actor ~ts_unix
+    =
+  let s64 = Int64.to_string in
+  let opt f = function Some v -> f v | None -> "" in
+  Printf.sprintf "%Ld:%s|%s|%s|%s|%s|%s|%Ld" seq path op
+    (opt Fun.id value_hash) (opt s64 prev_version) (opt s64 version) actor
+    ts_unix
+
+let tree_op_concat (o : tree_op) =
+  op_concat ~seq:o.o_seq ~path:o.o_path ~op:o.o_op ~value_hash:o.o_value_hash
+    ~prev_version:o.o_prev_version ~version:o.o_version ~actor:o.o_actor
+    ~ts_unix:o.o_ts_unix
+
+let select_tree_ops =
+  "SELECT seq, path, op, value_hash, prev_version, version, actor, \
+   EXTRACT(epoch FROM ts)::bigint, op_hash FROM tree_ops"
+
+let tree_op_of_row r =
+  { o_seq = int64 r 0 "tree_ops.seq"
+  ; o_path = text r 1 "tree_ops.path"
+  ; o_op = text r 2 "tree_ops.op"
+  ; o_value_hash = opt_text r 3
+  ; o_prev_version = opt_int64 r 4
+  ; o_version = opt_int64 r 5
+  ; o_actor = text r 6 "tree_ops.actor"
+  ; o_ts_unix = int64 r 7 "tree_ops.ts"
+  ; o_op_hash = text r 8 "tree_ops.op_hash" }
+
+(* connection-level append (ns_fork journals inside its transaction);
+   same append discipline as the run journal: the head is read then the
+   row inserted, so a concurrent append collides on the PK and raises. *)
+let op_append_conn c ~op ~path ~value_hash ~prev_version ~version ~actor =
+  Db.q_conn c "SELECT seq, op_hash FROM tree_ops ORDER BY seq DESC LIMIT 1"
+  >>= fun last ->
+  let seq, prev_hash =
+    match last with
+    | [] -> (1L, genesis)
+    | [ r ] -> (Int64.succ (int64 r 0 "last.seq"), text r 1 "last.op_hash")
+    | _ -> store_error "tree_ops head: multiple rows"
+  in
+  let ts_unix = Int64.of_float (Unix.gettimeofday ()) in
+  let concat =
+    op_concat ~seq ~path ~op ~value_hash ~prev_version ~version ~actor ~ts_unix
+  in
+  let h = Tuna.Hash.hex_of_string (prev_hash ^ concat) in
+  Db.q_conn_unit
+    ~params:[ p_int64 seq
+            ; p_str path
+            ; p_str op
+            ; p_opt value_hash
+            ; (match prev_version with Some v -> p_int64 v | None -> None)
+            ; (match version with Some v -> p_int64 v | None -> None)
+            ; p_str actor
+            ; p_int64 ts_unix
+            ; p_str h ]
+    c
+    "INSERT INTO tree_ops (seq, path, op, value_hash, prev_version, version, \
+     actor, ts, op_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, \
+     to_timestamp($8::double precision), $9)"
+  >>= fun () -> Lwt.return (seq, h)
+
+(* pool-level append: one op row on the global log.  Returns (seq, op_hash). *)
+let op_append p ~op ~path ~value_hash ~prev_version ~version ~actor =
+  Db.with_pool p (fun c ->
+      op_append_conn c ~op ~path ~value_hash ~prev_version ~version ~actor)
+
+(* ops_fold: the replay/rewind surface.  Reads rows for [prefix] (None =
+   whole log) in [from_seq, to_seq], ascending.  [to_seq] None = head. *)
+let ops_fold p ?(prefix = None) ?(from_seq = 0L) ?(to_seq = None) () =
+  let sql =
+    select_tree_ops
+    ^ " WHERE seq >= $1 AND seq <= $2 \
+       AND ($3::text IS NULL OR (path >= ($3 COLLATE \"C\") \
+            AND path < (($3 || chr(255)) COLLATE \"C\"))) \
+       ORDER BY seq"
+  in
+  Db.q
+    ~params:[ p_int64 from_seq
+            ; (match to_seq with Some s -> p_int64 s | None -> p_int64 Int64.max_int)
+            ; p_opt prefix ]
+    p sql
+  >>= fun rows -> Lwt.return (List.map tree_op_of_row rows)
+
+(* chain walk over fetched rows: recompute each op_hash from its fields
+   + the previous row's STORED op_hash (the log stores no prev column,
+   so the linkage is proven by the recompute itself).  Expects rows in
+   ascending seq order; a contiguous run from any start verifies, and
+   any tampered field or hash breaks it. *)
+let verify_ops_chain (ops : tree_op list) : [ `Ok | `Bad of string ] =
+  match ops with
+  | [] -> `Ok
+  | first :: rest ->
+      let h0 = Tuna.Hash.hex_of_string (tree_op_concat first) in
+      if h0 <> first.o_op_hash then
+        `Bad (Printf.sprintf "seq %Ld: op_hash mismatch" first.o_seq)
+      else
+        let rec go prev = function
+          | [] -> `Ok
+          | o :: rest ->
+              let h = Tuna.Hash.hex_of_string (prev ^ tree_op_concat o) in
+              if h <> o.o_op_hash then
+                `Bad (Printf.sprintf "seq %Ld: op_hash mismatch" o.o_seq)
+              else go h rest
+        in
+        go first.o_op_hash rest
+
+(* namespace fork: copy the [src_prefix] index slice under [dst_prefix]
+   in ONE transaction (versions reset to 1, owner = forking actor) and
+   journal it: one 'fork' marker row, then one 'put' row per copied path
+   (the put rows carry value_hash/version so a pure rewind fold
+   reproduces the fork without consulting the live index). *)
+let ns_fork p ~src_prefix ~dst_prefix ~actor =
+  Db.with_tx p (fun c ->
+      Db.q_conn
+        ~params:[ p_str src_prefix ]
+        c
+        "SELECT path, value_hash FROM tree_paths \
+         WHERE path >= ($1 COLLATE \"C\") \
+           AND path < (($1 || chr(255)) COLLATE \"C\") \
+         ORDER BY path COLLATE \"C\""
+      >>= fun rows ->
+      let copies =
+        List.map
+          (fun r ->
+            let src_path = text r 0 "tree_paths.path" in
+            let vh = text r 1 "tree_paths.value_hash" in
+            let suffix =
+              String.sub src_path (String.length src_prefix)
+                (String.length src_path - String.length src_prefix)
+            in
+            (dst_prefix ^ suffix, vh))
+          rows
+      in
+      let rec insert_all n = function
+        | [] -> Lwt.return n
+        | (np, vh) :: rest ->
+            Db.q_conn_unit
+              ~params:[ p_str (path_hash np); p_str np; p_str vh; p_str actor ]
+              c
+              "INSERT INTO tree_paths (path, path_hash, value_hash, version, owner) \
+               VALUES ($2, $1, $3, 1, $4) ON CONFLICT (path_hash) DO NOTHING"
+            >>= fun () -> insert_all (n + 1) rest
+      in
+      insert_all 0 copies
+      >>= fun copied ->
+      op_append_conn c ~op:"fork" ~path:dst_prefix ~value_hash:None
+        ~prev_version:None ~version:None ~actor
+      >>= fun _fk ->
+      let rec log_copies = function
+        | [] -> Lwt.return copied
+        | (np, vh) :: rest ->
+            op_append_conn c ~op:"put" ~path:np ~value_hash:(Some vh)
+              ~prev_version:None ~version:(Some 1L) ~actor
+            >>= fun _ -> log_copies rest
+      in
+      log_copies copies)

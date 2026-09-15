@@ -117,3 +117,22 @@ let apply_migrations p ~dir =
     | f :: rest -> apply f >>= fun () -> loop rest
   in
   loop files
+
+(* Raw-connection queries for code that manages its own transaction
+   scope (Store.ns_fork via with_tx); the pooled q/q_unit would take a
+   SECOND connection and run outside the BEGIN/COMMIT. *)
+let q_conn ?params c sql = Pg.execute ?params c sql
+let q_conn_unit ?params c sql = Pg.execute_unit ?params c sql
+
+(* Transactional multi-statement execution: [f] runs on one pooled
+   connection inside BEGIN/COMMIT; any failure rolls back and re-raises. *)
+let with_tx p (f : Pg.t -> 'a Lwt.t) : 'a Lwt.t =
+  with_pool p (fun c ->
+      Pg.execute_unit c "BEGIN"
+      >>= fun () ->
+      Lwt.catch
+        (fun () ->
+          f c >>= fun r -> Pg.execute_unit c "COMMIT" >>= fun () -> Lwt.return r)
+        (fun e ->
+          Pg.execute_unit c "ROLLBACK"
+          >>= fun () -> Lwt.fail e))
