@@ -1,0 +1,4 @@
+; Exclude the vendored upstream OCaml implementation from our build:
+; it depends on core/ppx_expect which tuna does not vendor, and it is a
+; normative source reference, not a dependency.
+(ignored_subdirs (ocaml))

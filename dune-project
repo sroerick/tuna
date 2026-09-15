@@ -3,4 +3,3 @@
 
 (generate_opam_files false)
 
-(using alcotest 1.9)

@@ -1,0 +1,4 @@
+(library
+ (name tuna)
+ (modules tree canon hash)
+ (libraries digestif))

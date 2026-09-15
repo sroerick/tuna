@@ -1,0 +1,9 @@
+(executable
+ (name tuna_tests)
+ (libraries tuna alcotest))
+
+(rule
+ (alias runtest)
+ (deps tuna_tests.exe)
+ (action
+  (run %{exe:tuna_tests.exe})))
