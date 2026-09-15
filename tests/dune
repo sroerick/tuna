@@ -6,6 +6,10 @@
  (name compiler_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
+(executable
+ (name store_tests)
+ (libraries tuna tuna_store pgx alcotest-lwt lwt))
+
 (rule
  (alias runtest)
  (deps tuna_tests.exe)
@@ -17,6 +21,16 @@
  (deps compiler_tests.exe)
  (action
   (run %{exe:compiler_tests.exe})))
+
+; M5 store integration tests: require a live postgres (scripts/dev.sh
+; start-pg); skipped silently when it is down.  The migrations tree is
+; passed in so the test executable can bootstrap a fresh cluster.
+(rule
+ (alias runtest)
+ (deps store_tests.exe ../scripts/test-store.sh (source_tree ../migrations))
+ (action
+  (bash
+   "bash %{workspace_root}/scripts/test-store.sh %{exe:store_tests.exe} ../migrations")))
 
 ; M3 differential harness: three engines (instrumented upstream copy,
 ; CL reference twin, tuna CLI) must agree on every corpus entry.

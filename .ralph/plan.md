@@ -177,12 +177,12 @@ Ground rules:
   for the M5 store row; actual persistence lands with M5's schema.
 
 ## M5 — store layer
-- [ ] `store/lib/db.ml`: pgx_lwt pool over unix socket /tmp:5434 db tuna user tuna (env-configurable, matching dev.sh)
-- [ ] accessors: programs upsert(get-or-create by hash), fetch; runs insert/update; journals append (with hash chain) / fetch by run ordered; grants mint/fetch/revoke/deny-check
-- [ ] identities: bootstrap token handling at server boot; token verify (sha256 lookup)
-- [ ] migration runner re-used from dev.sh (server assumes schema exists)
-- [ ] integration tests gated behind env TUNA_TEST_PG=1 (skip silently otherwise)
-- [ ] commit
+- [x] `store/lib/db.ml`: pgx_lwt pool over unix socket /tmp:5434 db tuna user tuna (env-configurable, matching dev.sh)
+- [x] accessors: programs upsert(get-or-create by hash), fetch; runs insert/update; journals append (with hash chain) / fetch by run ordered; grants mint/fetch/revoke/deny-check
+- [x] identities: bootstrap token handling at server boot; token verify (sha256 lookup)
+- [x] migration runner re-used from dev.sh (server assumes schema exists)
+- [x] integration tests gated behind env TUNA_TEST_PG=1 (skip silently otherwise)
+- [x] commit
 
 ## M6 — HTTP API (JSON, agent surface)
 - [ ] `server/lib/api.ml` (Dream, Lwt): 
@@ -225,6 +225,41 @@ Ground rules:
 - [ ] README.md: quickstart + API reference
 - [ ] borge: statuses flipped for implemented stanzas (make pass), agent notes appended to each chapter with evidence lines
 - [ ] full run: dev.sh start + smoke + all verify scripts green; commit
+
+## M5 notes (loop #12)
+
+- Layout: `store/lib/{pgx_io,db,store}.ml` (library `tuna_store`),
+  tests in `tests/store_tests.ml` (6 alcotest-lwt suites) gated by
+  `scripts/test-store.sh` (skips silently when PG is down — dev.sh
+  start-pg to enable), wired into `dune runtest` via tests/dune.
+- **Deadlock #1 (pre-spin)**: the first draft filled the pool eagerly
+  with `Lwt_mvar.put` — a second put on a full mvar BLOCKS until a
+  consumer takes, so `Db.init` never returned (nobody had taken conn #1
+  yet). Fix: connections are created lazily in `take_conn` (mvar first
+  via `take_available`, else connect while `created < size`, else block
+  on the mvar). `created` is an int ref — Lwt's cooperative scheduling
+  makes check+incr atomic up to the first await.
+- **Deadlock #2 (put-blocking)**: even with lazy creation, a naive
+  `created < size` take never consults the mvar, so returned conns pile
+  up and `with_pool`'s finalize `put` blocks forever on the second
+  call. The `take_available`-first rule fixes both.
+- pgx 2.2 protocol facts: `connect ~host:"/tmp"` routes '/'-prefixed
+  hosts to `<dir>/.s.PGSQL.<port>` in our pgx_io Thread module (libpq
+  convention); `simple_query` handles multi-statement SQL incl.
+  BEGIN/DDL/COMMIT fine (used by apply_migrations); jsonb round-trips
+  with server-defined spacing — compare parsed (Yojson), never text.
+- Bug fixed: `insert_run` omitted `status` (not-null violation) — now
+  inserts 'running' explicitly. 0001-init.sql is already applied, so
+  schema stays untouched; store-side default.
+- borge: grant-token/revocation (grants.borg) and row-schema
+  (journal.borg) flipped to `partial` with project-level agent notes;
+  lint clean, report shows 3 stanzas out of planned (partial isn't a
+  report column — same as M4's call-sites.provenance).
+- Housekeeping: `reference/tree-calculus/implementation/dune` now uses
+  `data_only_dirs (ocaml)` (no-arg-list form) — the recurring
+  `ignored_subdirs` deprecation warning from loops 1–11 is gone.
+- Tests now: 35 unit + 26 compiler + 24 differential + 6 store = 91
+  green.
 
 ## M3 notes (loop #6)
 

@@ -1,4 +1,17 @@
 (project tuna-grants
+   (* agent note (|M5 (store loop): the STORE half of this chapter is
+      implemented and tested (store/lib/store.ml, tests/store_tests.ml:
+      grants suite). Grant rows are stored and queried exactly per
+      grant-token's schema; mint_grant returns the fetched row,
+      check_grant implements the live boundary check as a pure
+      result (`Ok | `Revoked | `Wrong_caller | `Unknown — deny is a
+      data result, never an exception), revoke_grant is an immediate
+      forward-only row update, and the minted_by lineage field is
+      carried. NOT yet wired: the M6/M7 run-submission surface that
+      injects grant trees as run arguments and the attenuation
+      predicate interpretation (args_attenuation is stored, not yet
+      interpreted). Status: grant-token + revocation partial until
+      then.|) *)
  (doc "Tuna book chapter: grants — the capability model. Nothing inside the calculus is resolvable by name; a run touches the world only through grant tokens physically passed to it as tree arguments.")
  (status planned)
  (convention ocaml-dune)
@@ -7,7 +20,7 @@
 
   (subsection grant-token
    (doc "Shape of a grant: an opaque row the evaluator never interprets")
-   (status planned)
+   (status partial)
    (details
     (doc (|
          A grant is a store row:
@@ -67,7 +80,7 @@
 
   (subsection revocation
    (doc "Revocation semantics: immediate, forward-only")
-   (status planned)
+   (status partial)
    (details
     (doc (|
          Revocation is a row update setting revoked_at. Effects:

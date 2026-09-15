@@ -1,0 +1,4 @@
+(library
+ (name tuna_store)
+ (modules pgx_io db store)
+ (libraries tuna unix lwt lwt.unix pgx pgx_lwt yojson))
