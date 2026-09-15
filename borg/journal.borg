@@ -1,0 +1,129 @@
+(project tuna-journal
+ (doc "Tuna book chapter: journal — the effect record. Every boundary event is journaled; the journal is the recorded environment and the only non-derivable artifact in the system.")
+ (status planned)
+ (convention ocaml-dune)
+ (section journal
+  (doc "The journal: append rows per run at each prim boundary event. Everything else in the system is derivable from hashes plus semantics; the journal is what the world actually answered.")
+
+  (subsection row-schema
+   (doc "Journal row shape and storage")
+   (status planned)
+   (details
+    (doc (|
+         One row per boundary event, within-run sequence numbered:
+
+           journal (run_id uuid FK -> runs,
+                    seq int,                  -- order within the run
+                    callsite_path text,       -- path into program tree (call-sites)
+                    prim text,                -- primitive name
+                    prim_contract text,       -- contract version of the prim (replay.prim-versioning)
+                    grant_id uuid NULL,       -- grant spent, if any (grants.audit)
+                    args_hash text,           -- hash of argument tree
+                    args_inline jsonb NULL,   -- args payload if small; else blob ref
+                    result_hash text NULL,    -- hash of result tree (NULL on error)
+                    result_inline jsonb NULL,
+                    error text NULL,          -- structured error, incl. grant denial
+                    wall_ms int,              -- host-side wall time of the call
+                    host_build text,          -- host build/version answering
+                    prev_hash text,           -- hash-chained to previous row of run
+                    PRIMARY KEY (run_id, seq))
+
+         Hashes are of the canonical serialization (SPEC.md §9 open
+         question; pinned by v0 when the serializer lands). The hash
+         chain makes journal rows tamper-evident without requiring trust
+         in the store operator's logs; verifying a run journal is a
+         cheap chain walk plus replay.
+
+         Open question: whether journal rows budget against the run's
+         size cap (a run could journal gigantic payloads and DoS the
+         store while the calculus stays in-bounds). Leaning: payload
+         bytes above a threshold spill to the blob side of the store and
+         count a per-run journal-byte budget, exhaustion journaled as a
+         normal error.
+    |))
+   )
+  )
+
+  (subsection recorded-environment
+   (doc "The journal IS the environment: replay needs nothing live")
+   (status planned)
+   (details
+    (doc (|
+         The semantics that make the thesis work: a faithful replay
+         executes program hash + input hashes with prim calls answered
+         SEQUENTIALLY from the journal rows of the original run. The
+         host, network, clock, and Postgres state need not exist —
+         could be on fire — because every answer the run ever received
+         is captured inline. The journal is not a trace OF the system;
+         it is the effectful slice OF the system, promoted to
+         first-class data, with the pure core always re-derivable.
+
+         Consequence: "system state" decomposes cleanly. Programs and
+         inputs are content-addressed and shared; runs are rows;
+         journals are rows. There is no hidden ambient state anywhere in
+         the execution model. State that is not journaled does not
+         exist as far as a run is concerned — which is exactly the
+         discipline that makes determinism testable rather than hopeful
+         (SPEC.md §2).
+    |))
+   )
+  )
+
+  (subsection counterfactual-edits
+   (doc "Editing journals: counterfactual replay and mocks without infrastructure")
+   (status planned)
+   (details
+    (doc (|
+         Journals are data, so they can be edited: copy a journal,
+         replace the HTTP result, shift the clock, deny the grant —
+         then replay against the derived journal. This is effect-path
+         testing with zero mock infrastructure: the mock IS the recorded
+         answer, and the "what would this run have done" question is
+         executable.
+
+         Discipline: journal edits NEVER mutate history. An edit mints
+         a derived journal row set with an explicit
+         parent_journal_hash provenance link; the original hash chain
+         stands untouched. Derived journals chain into their own hash
+         chain rooted at the parent's hash, so provenance is itself
+         tamper-evident. The store API exposes fork-journal as a
+         first-class operation; ad-hoc SQL surgery on journal rows is
+         drift and the schema should make it awkward (append-only
+         table + derived-journal linkage).
+    |))
+   )
+  )
+
+  (subsection retention-gc
+   (doc "Retention, garbage collection, and PII")
+   (status planned)
+   (details
+    (doc (|
+         Three pressures priced up front:
+
+           - GROWTH. Journals are unbounded by semantics. Retention is a
+             policy knob per caller/identity ("keep run classes X for Y
+             days", "keep failures forever"). GC of a journal severs
+             replayability, so GC MUST leave a tombstone row in the run
+             record (journal_gced_at, retention policy cited) — never a
+             silent delete that later reads as successful verification.
+
+           - PII. Journals inline whatever flowed through the boundary
+             — including secrets and personal data. Redaction is an
+             explicit hash-chain BREAK: the row is replaced by a
+             redacted-tombstone citing a policy; the break is visible to
+             verifiers, which treat redacted rows as "answer unknown"
+             rather than "answer trusted". Verifiable-privacy (proving
+             effects while hiding payloads) is out of scope.
+
+           - TRUST READING. Replay proves interpreter determinism and
+             journal fidelity. It does NOT prove the host behaved
+             correctly in the past — a journal pins what the host
+             Returned, not what it Should have returned. Docs and the
+             verification surface must say so in those words
+             (SPEC.md §7 discipline).
+    |))
+   )
+  )
+ )
+)

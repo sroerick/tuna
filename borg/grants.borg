@@ -1,0 +1,129 @@
+(project tuna-grants
+ (doc "Tuna book chapter: grants — the capability model. Nothing inside the calculus is resolvable by name; a run touches the world only through grant tokens physically passed to it as tree arguments.")
+ (status planned)
+ (convention ocaml-dune)
+ (section grants
+  (doc "Capability grants as the security model: grants are arguments, the evaluator guarantees reachability, the host defines policy.")
+
+  (subsection grant-token
+   (doc "Shape of a grant: an opaque row the evaluator never interprets")
+   (status planned)
+   (details
+    (doc (|
+         A grant is a store row:
+
+           grants (id uuid PK,
+                   prim text,               -- which primitive it unlocks
+                   args_attenuation jsonb,  -- host-interpreted narrowing predicate
+                   caller text,             -- identity the grant is attributable to
+                   minted_by uuid NULL,     -- parent grant for derived grants
+                   created_at timestamptz,
+                   revoked_at timestamptz NULL)
+
+         To the calculus a grant is inert tree data — an opaque node
+         passed as a run argument. The evaluator never resolves a name,
+         never reads the store, never interprets the predicate. Its one
+         guarantee is reachability: a run can reference exactly what is
+         physically passed to it, nothing else. How args_attenuation is
+         scoped and whether scoping is CORRECT is host policy and stays
+         a review matter; this is a hard non-goal of the evaluator
+         (SPEC.md §7) and the docs must not claim otherwise.
+
+         Open decision (v0's questions, carried): bearer-style token vs
+         row id. v1 chooses ROW IDs: the row is inspectable, revocable,
+         and attributable; the bearer trade (tamper-proof standalone
+         tokens) buys nothing inside a daemon that always checks the row
+         anyway.
+    |))
+   )
+  )
+
+  (subsection invocation
+   (doc "How a run spends a grant at the boundary")
+   (status planned)
+   (details
+    (doc (|
+         Run submission carries: program hash, input tree hashes, fuel,
+         size cap, and a list of grant ids. The host injects the grant
+         trees as arguments; the program's prim-call nodes reference
+         them structurally.
+
+         At each boundary event (journal.row-schema) the host checks the
+         grant row LIVE: exists, not revoked, attenuation admits the
+         call args. Denied calls are journaled as error results with a
+         denial reason and the run continues per program semantics —
+         denial is data, never an ambient exception escaping the
+         calculus. Fuel accounting is unaffected: a denied call is a
+         normal boundary event.
+
+         Grant check results are NOT journaled as replay inputs — during
+         faithful replay the journal answers prim calls (replay.faithful)
+         and no live check runs. Revocation therefore cannot retroactively
+         alter history, and replay correctness never depends on grant
+         lifecycle state.
+    |))
+   )
+  )
+
+  (subsection revocation
+   (doc "Revocation semantics: immediate, forward-only")
+   (status planned)
+   (details
+    (doc (|
+         Revocation is a row update setting revoked_at. Effects:
+
+           - Next live boundary check fails; in-flight runs observe the
+             denial at their next prim call. No pre-emptive abort: the
+             program decides how to handle the journaled denial.
+           - Recorded runs are immutable history; revocation never
+             mutates journals or run rows.
+           - Faithful replay is unaffected (journal answers, not grants).
+
+         Open question: whether long-running runs should receive a
+         revocation NOTIFICATION prim (host pushes an event the run can
+         poll) or remain purely pull-based. Pull-only is simpler and
+         journal-clean; v1 stays pull-only unless a use case forces it.
+    |))
+   )
+  )
+
+  (subsection delegation-attenuation
+   (doc "Minting narrower grants from broader ones")
+   (status planned)
+   (details
+    (doc (|
+         Delegation is structural: a grant tree is data and may be passed
+         downward to any subprogram as a normal argument. Attenuation is
+         HOST-side: deriving a narrower grant requires a mint-grant call
+         by a caller whose own grant admits it; the derived row records
+         minted_by, so grant lineage is queryable.
+
+         v1 explicitly excludes: granting capabilities FROM INSIDE the
+         calculus (no prim-call that mints; minting is a host API
+         operation only) and object-capability style sealers/unsealers.
+         Both are expressible later as ordinary prim design, not calculus
+         changes — that layering claim is part of what the project tests.
+    |))
+   )
+  )
+
+  (subsection audit
+   (doc "Grant usage as a SQL query — the audit demo")
+   (status planned)
+   (details
+    (doc (|
+         Because every journal row carries grant id, prim, callsite
+         path, and caller, "which runs touched grant g" (and "what did
+         grant g's lineage do, ever") is a plain SQL query over journals
+         joined to run rows. No audit log reconciliation, no side
+         channel: the effect record IS the audit record.
+
+         This is the chapter's headline acceptance demo and the concrete
+         answer to "why structure over text": in a text-seam system this
+         query is a log-grep heuristic; here it is indexed relational
+         data produced as a byproduct of running.
+    |))
+   )
+  )
+ )
+)

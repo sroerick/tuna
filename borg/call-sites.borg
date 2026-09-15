@@ -1,0 +1,82 @@
+(project tuna-call-sites
+ (doc "Tuna book chapter: call-sites — path-tagged boundary calls. Every prim call in a compiled program carries its canonical path in the program tree; diagnostics address trees, source spans are a courtesy on top.")
+ (status planned)
+ (convention ocaml-dune)
+ (section call-sites
+  (doc "The seam between compiled trees and human comprehension: canonical program paths as the primary coordinate system, with IR provenance retained so diagnostics can talk about source.")
+
+  (subsection tagging
+   (doc "Callsite paths assigned at compile time")
+   (status planned)
+   (details
+    (doc (|
+         During compilation (surface IR -> tree via bracket abstraction,
+         SPEC.md §5), every prim-call node is annotated with its
+         canonical path in the compiled program tree: the sequence of
+         constructor-descent choices from the root. Because programs are
+         content-hash-addressed and immutable, the pair
+         (program_hash, path) globally identifies a callsite. Journal
+         rows reference callsites by exactly this pair
+         (journal.row-schema).
+
+         Trees are illegible to humans and the spec does not pretend
+         otherwise (SPEC.md §5 exists precisely to compensate); the path
+         IS the coordinate system every downstream surface
+         (replay.divergence-surface, grants.audit, the REPL's
+         structural debugger) agrees on. Tooling argument: paths are
+         grep-able, indexable, diff-able — addressing beats reading.
+    |))
+   )
+  )
+
+  (subsection stability
+   (doc "Path stability across patching and recompilation")
+   (status planned)
+   (details
+    (doc (|
+         Accepted truth: patches invalidate paths below the edit point —
+         a structural patch renames everything beneath it, and queued
+         patches referencing old paths go stale (SPEC.md §4.5 CAS makes
+         the staleness explicit rather than silent). v1 rules:
+
+           - A callsite path is ONLY meaningful paired with the program
+             hash it was compiled under. Surfaces always print the pair.
+           - Recompilation of unchanged source MUST produce the same
+             program hash AND the same callsite paths for unchanged
+             subtrees (compiler determinism is part of SPEC.md §2's
+             tested determinism).
+           - Path-forwarding ("old path -> new path after patch") is NOT
+             attempted in v1. The first-diff between program versions
+             (SPEC.md §4.5) plus provenance maps give enough to relocate
+             by hand; a relocation tool is a v2 candidate, not assumed.
+    |))
+   )
+  )
+
+  (subsection provenance
+   (doc "Mapping tree paths back to source spans: the UX-bearing invariant")
+   (status planned)
+   (details
+    (doc (|
+         The compiler retains, per compiled artifact, a provenance map:
+         callsite tree path -> IR path -> source span (SPEC.md §5:
+         "diagnostics address programs by tree path; source spans are a
+         human courtesy only"). Bracket abstraction decorrelates tree
+         shape from source shape — this decorrelation is exactly where
+         debugging UX lives or dies.
+
+         Rules: every diagnostic (denial, divergence, fuel exhaustion)
+         carries the callsite pair AND, when the provenance map is
+         available, the source span; a diagnostic that cannot say where
+         it came from is a bug report against the compiler, not against
+         the user. Optimizations that fold/duplicate callsites must
+         maintain the map through the transform or be gated off by
+         default — same engine-split discipline as replay.faithful's
+         step-count ruling. This subsection is the spec location of the
+         "debugging the compiled tree by hand = v1 failed the UX bar"
+         failure definition (acceptance.failure-definitions).
+    |))
+   )
+  )
+ )
+)

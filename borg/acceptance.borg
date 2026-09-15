@@ -1,0 +1,87 @@
+(project tuna-acceptance
+ (doc "Tuna book chapter: acceptance — validation criteria and pre-registered failure definitions for v1. This is a research project: define what failure looks like before building, so ambiguity cannot keep it alive.")
+ (status planned)
+ (convention ocaml-dune)
+ (section acceptance
+  (doc "How we will know v1 worked, and — because this is research — how we will know it failed. Failures are findings only if they are named in advance.")
+
+  (subsection criteria
+   (doc "v1 acceptance tests (extends SPEC.md §6 criteria 4-5)")
+   (status planned)
+   (details
+    (doc (|
+         v1 is done when ALL hold, scripted over the v0 corpus:
+
+           1. GRANT DENIAL JOURNALED. A run exercising a revoked grant
+              journals the denial (prim, callsite, reason) as a normal
+              boundary error (grants.invocation); fuel accounting
+              unchanged; run continues per program semantics.
+           2. PATH-TAGGED CALLSITES. Every journal row's callsite
+              (program_hash, path) resolves through the retained
+              provenance map to a source span on the full v0 corpus
+              (call-sites.provenance); zero un-attributable diagnostics.
+           3. REPLAY IDENTITY. Faithful replay of every stored corpus
+              run reproduces result hash AND step count; a store-side
+              sweeper re-verifies on schedule and failures open drift,
+              not silence (replay.faithful).
+           4. JOURNAL COMPLETENESS. For the effectful sample program,
+              replaying the pure core over the recorded journal
+              reproduces the effects exactly (SPEC.md §6.5) — and the
+              counterfactual variant holds: replacing one journal answer
+              changes precisely the downstream journal suffix the edited
+              answer reaches (journal.counterfactual-edits).
+           5. DIVERGENCE HAND-CHECKED. On a fixed divergence corpus,
+              the computed first_diff_path and divergence_seq match
+              hand-derived expectations (replay.divergence-surface).
+           6. AUDIT QUERY. "Which runs touched grant g" over the corpus
+              answers exactly from journal+run rows, no log grep
+              (grants.audit).
+           7. GC TOMBSTONES. GC'ing journals leaves cited tombstones;
+              verifiers report GONE, never VERIFIED
+              (journal.retention-gc). Redacted rows report
+              ANSWER-UNKNOWN with the chain break visible.
+    |))
+   )
+  )
+
+  (subsection failure-definitions
+   (doc "Pre-registered failure modes — each is a finding, not a bug to hide")
+   (status planned)
+   (details
+    (doc (|
+           F1 STEP COUNT DOES NOT SURVIVE OPTIMIZATION. If the first
+              real optimization (hash-consing / memoization) cannot
+              reproduce the canonical step count, record the engine
+              split (canonical-verifiable vs optimized-unverifiable)
+              and what it costs: replay identity becomes a statement
+              about the slow engine only. Thesis survives weakened.
+
+           F2 PATH PATCHING UNUSABLE UNDER CHURN. If live multi-user
+              editing collapses into rebase-mania — every patch
+              invalidating queued patches — record it: CAS is a
+              correctness tool, not a collaboration tool. The habitat
+              use-case over tuna is priced out.
+
+           F3 THESIS INVERSION. If, after v1, ~90% of useful work lives
+              in host prims and the tree layer is ceremony, record the
+              inversion: the boundary bought auditability, not a
+              computing platform; the security properties came from prim
+              discipline (replay.prim-versioning) all along. PP gains a
+              tier, tuna stays a boundary experiment.
+
+           F4 UNREADABLE IN PRACTICE. If producing a ~100-line useful
+              program requires debugging the compiled tree by hand even
+              WITH the provenance map, declare the UX bar failed
+              (call-sites.provenance). Trees stay machine-shaped; the
+              habitat vision does not port.
+
+         None of F1-F4 blocks shipping v1 acceptance.criteria. Each is
+         a named, publishable answer to "does the structural seam pay
+         for itself?" The project's failure condition is ambiguity —
+         limping forever in half-working state — and this subsection
+         exists to foreclose it.
+    |))
+   )
+  )
+ )
+)

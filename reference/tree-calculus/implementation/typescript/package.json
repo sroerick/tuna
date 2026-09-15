@@ -1,0 +1,20 @@
+{
+  "name": "tree-calculus-reference-implementation",
+  "version": "1.0.0",
+  "description": "Tree Calculus Reference Implementation",
+  "homepage": "https://github.com/lambada-llc/tree-calculus/tree/main/implementation/typescript",
+  "scripts": {
+    "bundle": "esbuild src/main.mjs --bundle --platform=node --outfile=main.js",
+    "build": "tsc --project src",
+    "test": "node src/test.mjs",
+    "start": "node src/main.mjs",
+    "debug": "node --inspect-brk src/main.mjs  # attach from Chrome via about:inspect"
+  },
+  "author": "Johannes Bader",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.13.11",
+    "esbuild": "^0.25.1",
+    "typescript": "^5.7.3"
+  }
+}

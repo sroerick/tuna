@@ -1,0 +1,51 @@
+(project tuna
+ (doc (|
+      Tuna is a standalone evaluator for tree calculus (Barry Jay /
+      Johannes Bader): a store-backed daemon where the unit of
+      execution is a content-hash-addressed tree, executed by five
+      rewrite rules under a fuel and size budget, with all effects at
+      a journaled, capability-gated boundary.
+
+      This book specs v1 — the effects release: capability grants,
+      the effect journal, replay verification, and path-tagged call
+      sites. The v0 handoff spec (interpreter, store, hash/patch/run
+      API, REPL, differential harness) lives in ./SPEC.md, pulled from
+      the pricklypear note spec_tuna; when tuna gets code, SPEC.md is
+      replaced by chapters here and v0's acceptance criteria move into
+      borg/acceptance.borg.
+
+      Framing: tuna is an academic project. The research question is
+      "does the structural seam pay for itself — programs as trees
+      addressed by hash, effects as journaled boundary events?" The
+      expected findings are failures, and borg/acceptance.borg defines
+      failure in advance so the project cannot limp forever in
+      ambiguous half-working state.
+
+      v1 thesis, stated so it can be refuted: in this design the
+      journal IS the system. The pure core is derivable — a run's pure
+      part can always be re-executed — while the journal is the only
+      non-reproducible artifact, the recorded environment. Replay is
+      not a debugging feature bolted on after the fact; it is a
+      consistency proof between those two halves.
+    |))
+ (status planned)
+ (* agent note (|2026-09-15 chapter created. Provenance: pp-eval against pricklypear.rocks pulled note "Tuna: standalone tree evaluator - spec v0" (slug spec_tuna) into SPEC.md. Design discussion before authoring settled: (1) seam-of-structure vs seam-of-text is the honest frame — PP's /api/eval parses hostile strings, tuna's eval path has no parser; (2) "everything else becomes a side effect" inverts into "the journal is the recorded environment = replay sandbox, replay needs nothing live"; (3) the debugging surface target is DIFFABLE not readable — agents grep structure; first-divergence paths and per-program-path subtree hashes beat human-prose logs; (4) counterfactual replay (edit the journal, re-run: the mock IS the recorded answer) falls out of journal-as-data and is priced as a headline demo; (5) caveats priced up front: journal growth/GC tombstones, PII capture, prim contract versioning. v1 chapters: grants, journal, replay, call-sites, acceptance.|) *)
+ (convention ocaml-dune)
+ (no-inline)
+ (untracked "SPEC.md" "v0 handoff spec (pulled from pricklypear note spec_tuna); superseded by chapters as code lands")
+ (inline
+  "borg/grants.borg"
+ )
+ (inline
+  "borg/journal.borg"
+ )
+ (inline
+  "borg/replay.borg"
+ )
+ (inline
+  "borg/call-sites.borg"
+ )
+ (inline
+  "borg/acceptance.borg"
+ )
+)

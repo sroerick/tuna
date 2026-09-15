@@ -1,0 +1,128 @@
+(project tuna-replay
+ (doc "Tuna book chapter: replay — verification, divergence detection, and the debugging surface. Replay is a consistency proof between the pure core and the journal, not a debugging afterthought.")
+ (status planned)
+ (convention ocaml-dune)
+ (section replay
+  (doc "Re-executing recorded runs: faithful replay for verification, live replay for debugging, counterfactual replay for exploration; divergence reported as structural diffs designed for agents.")
+
+  (subsection faithful
+   (doc "Faithful replay — the verification primitive")
+   (status planned)
+   (details
+    (doc (|
+         Faithful replay of a run: load program hash + input hashes,
+         execute under the canonical strategy, answer every prim call
+         SEQUENTIALLY from the run's journal (journal.recorded-
+         environment), and compare against the run row:
+
+           1. result tree hash equality
+           2. step count equality      (SPEC.md §6.2 — replay identity)
+           3. per-seq journal result hashes equality (accepted answers
+              consumed in order; mismatch = divergence point)
+           4. journal hash chain intact
+
+         A run verifies iff all four hold. Verification is therefore a
+         free integrity check on BOTH interpreter and data: a bit flip
+         in stored programs, a corrupted journal, an interpreter
+         regression, and host tampering all surface as verification
+         failures, distinguished by which invariant broke.
+
+         Step-count equality is load-bearing AND contested: any
+         optimization of the evaluator (hash-consing, memoized
+         reduction, sharing) changes the step accounting unless the
+         canonical strategy defines the count. v1 carries the ruling:
+         the count reported and verified is defined by the canonical
+         interpreter; optimized engines must either reproduce it
+         exactly or run under an explicit "optimized" flag whose runs
+         are marked non-verifiable. Choosing the optimized flag often
+         is the acceptance.failure-definitions trigger for the research
+         finding "step counts did not survive optimization".
+    |))
+   )
+  )
+
+  (subsection live
+   (doc "Live replay — a debugging mode, not verification")
+   (status planned)
+   (details
+    (doc (|
+         Live replay re-executes against the CURRENT world (prim calls
+         go to the live host under fresh grants). It answers "would
+         this run still work today" — regression detection across host
+         upgrades — and never writes verification state. Live replays
+         mint their own run rows + journals (provenance link to the
+         parent run), so the world-diff between original and live journal
+         is itself diffable: "what changed since this run" becomes a
+         journal-versus-journal structural diff, the operations analog
+         of program first-diff.
+
+         Live replay is explicitly NOT replay-verification: under live
+         replay neither step counts nor result hashes are invariants,
+         only diagnostics are.
+    |))
+   )
+  )
+
+  (subsection divergence-surface
+   (doc "First-divergence reporting: diffable, not readable")
+   (status planned)
+   (details
+    (doc (|
+         Design target: the debugging surface is indexed structure for
+         agents, not prose for humans. Agents do not read transcripts;
+         they grep structure. Every verification failure reports JSON:
+
+           { "run": <id>,
+             "divergence_seq": <journal seq of first mismatch>,
+             "callsite_path": <program tree path at that seq>,
+             "prim": ..., "recorded_result_hash": ...,
+             "replayed_result_hash": ...,
+             "first_diff_path": <path into the differing trees>,
+             "tree_path_span": {...call-sites.provenance map entry...} }
+
+         first_diff_path is a structural tree walk (per-path subtree
+         hashes make it cheap: descend where child hashes disagree, stop
+         at first), and callsite_path routes through call-sites.
+         provenance to the source span as a human courtesy. The stack-
+         trace analogue here is not a wall of text — it is an addressed
+         diff. Acceptance requires the computed first_diff_path to match
+         a hand-derived path on a fixed corpus (acceptance.criteria),
+         because a divergence detector nobody has hand-checked is
+         decoration.
+    |))
+   )
+  )
+
+  (subsection prim-versioning
+   (doc "Pinning the prim contract: what a journal does and does not pin")
+   (status planned)
+   (details
+    (doc (|
+         A journal pins what the host RETURNED, under prim_contract and
+         host_build recorded per row (journal.row-schema) — never what a
+         prim SHOULD have returned. Consequences:
+
+           - Faithful replay is unconditional: the recorded answers are
+             data; replaying against them never depends on current host
+             behavior. Verification CANNOT rot as the host evolves.
+           - Live replay and counterfactual interpretation DO depend on
+             the current contract; the divergence surface reports
+             contract mismatches as first-class fields
+             ("recorded under prim X v2, current v3") so an upgrade is
+             distinguishable from a regression.
+           - Silent semantic drift is the enemy: prims that change
+             behavior without a contract bump are definitionally
+             cheating. The prim layer needs a discipline as strict as
+             the calculus side: contract bump or it did not change.
+
+         Boundary creep watch (research lens): if, after v1, ~all
+         meaningful work lives in prims and the tree layer is thin
+         ceremony, that is the acceptance.failure-definitions "thesis
+         inversion" finding — the security came from the prim layer
+         all along. The versioning discipline is what makes that finding
+         MEASURABLE rather than anecdotal.
+    |))
+   )
+  )
+ )
+)

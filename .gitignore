@@ -1,0 +1,13 @@
+_build/
+.merlin
+.dune/
+*.install
+_config.yml
+node_modules/
+/tmp/
+.opam/
+*.swp
+.DS_Store
+/.borge.lock/
+.borge/
+__pycache__/
