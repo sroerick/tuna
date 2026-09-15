@@ -36,6 +36,12 @@ have_opam_env=0
 opam_env() {
   if [ "$have_opam_env" -eq 0 ]; then
     eval "$(opam env --switch=$OPAMSwitch --set-switch)"
+    # the no-root bootstrap put libev in ~/.local/lib — make sure the
+    # linker resolves -lev regardless of the caller's shell env
+    LIBEV_DIR="${TUNA_LIBEV_DIR:-$HOME/.local/lib}"
+    if [ -d "$LIBEV_DIR" ]; then
+      export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$LIBEV_DIR"
+    fi
     have_opam_env=1
   fi
 }
