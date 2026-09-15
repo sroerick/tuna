@@ -29,11 +29,29 @@ Ground rules:
 - [x] dune-project, AGENTS.md, borge book validated
 
 ## M1 — common: trees, ternary, hashes
-- [ ] `common/lib/tree.ml`: `type t = Leaf | Stem of t | Fork of t * t`, size, fsize helpers
-- [ ] `common/lib/canon.ml`: ternary encode/decode (`0`/`1`+child/`2`+left+right), strict parse errors with offset
-- [ ] `common/lib/hash.ml`: sha256 lowercase hex over ternary string (digestif)
-- [ ] alcotest suite: roundtrip, size(not)=8, canonical form is unique (hand-check `not`)
-- [ ] commit
+- [x] `common/lib/tree.ml`: `type t = Leaf | Stem of t | Fork of t * t`, size, fsize helpers
+- [x] `common/lib/canon.ml`: ternary encode/decode (`0`/`1`+child/`2`+left+right), strict parse errors with offset
+- [x] `common/lib/hash.ml`: sha256 lowercase hex over ternary string (digestif)
+- [x] alcotest suite: roundtrip, size(not)=8, canonical form is unique (hand-check `not`)
+- [x] commit
+
+## M1 notes (loop #1)
+
+- Canonical `not` = `22102000` (verified against the python reference:
+  `apply(not, false) = true`, `apply(not, true) = false`). The earlier
+  guess `211011101110110` was a bad literal; hand-check done against
+  upstream this time.
+- Vendored upstream OCaml implementation is EXCLUDED from our dune
+  build (`reference/tree-calculus/implementation/dune` uses
+  `ignored_subdirs`): it needs `core`/`ppx_expect` which we do not
+  vendor. It stays as normative source. If M3 wants an instrumented
+  OCaml twin, port the counting apply into a buildable dir instead.
+- Removed `(using alcotest 1.9)` from dune-project (unsupported
+  extension with installed packages); tests are a plain executable
+  under `tests/` wired to the `runtest` alias.
+- dune-project `lang dune 3.16`, dune 3.23.1; tests/dune has a stale
+  deprecation warning about `ignored_subdirs` — harmless, revisit if
+  dune complains harder.
 
 ## M2 — interpreter: apply + bounded stepper
 - [ ] `interpreter/lib/eval.ml`: port upstream `apply` verbatim (M1 tree type)
