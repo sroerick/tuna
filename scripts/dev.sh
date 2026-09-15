@@ -121,6 +121,7 @@ start_server() {
   echo "[dev] boot token: ${BOOT_TOKEN:+known}${BOOT_TOKEN:-none (first boot)}"
   env TUNA_DB_HOST="$SOCKET_DIR" TUNA_DB_PORT="$DB_PORT" TUNA_DB_NAME="$DB_NAME" \
     TUNA_DB_USER="$DB_USER" TUNA_HTTP_PORT="$HTTP_PORT" \
+    TUNA_STATIC_DIR="$ROOT/server/static" \
     $( [ -n "$BOOT_TOKEN" ] && printf 'TUNA_BOOTSTRAP_TOKEN=%s' "$BOOT_TOKEN" ) \
     nohup "$ROOT/_build/default/server/bin/main.exe" >"$DEV_DIR/server.log" 2>&1 &
   sleep 0.3

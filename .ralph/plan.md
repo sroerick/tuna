@@ -259,11 +259,75 @@ Ground rules:
 - [x] commit
 
 ## M8 — htmx UI (PP-style server-rendered)
-- [ ] `server/lib/pages/`: dashboard (runs table: status/verify badges, program links), program page (ternary + pretty tree render + provenance + patch form), run page (journal table + replay button + divergence view), grants admin (mint/revoke), REPL page
-- [ ] auth: session cookie for humans (login with identity token), same bearer tokens accepted — keep ONE credential store, PP-style
-- [ ] htmx fragments for: run list refresh, journal tick, REPL round-trip, verify button
-- [ ] UI must degrade to pure HTML (no-JS navigable)
-- [ ] commit
+- [x] `server/lib/pages/`: dashboard (runs table: status/verify badges, program links), program page (ternary + pretty tree render + provenance + patch form), run page (journal table + replay button + divergence view), grants admin (mint/revoke), REPL page
+- [x] auth: session cookie for humans (login with identity token), same bearer tokens accepted — keep ONE credential store, PP-style
+- [x] htmx fragments for: run list refresh, journal tick, REPL round-trip, verify button
+- [x] UI must degrade to pure HTML (no-JS navigable)
+- [x] commit
+
+## M8 notes (loop #16)
+
+- Layout: `server/lib/pages.ml` (routes) + `server/lib/pages/{layout,auth,
+  dashboard,program,run_page,grants,repl}.ml`. `include_subdirs unqualified`
+  in server/lib/dune. All handlers session-auth'd except /login /logout
+  (open). Static: `Dream.get "/static/**" (Dream.static dir)` with dir
+  from TUNA_STATIC_DIR (dev.sh exports $ROOT/server/static) — htmx.min.js
+  vendored since M0.
+- Session auth over the ONE credential store: cookie `tuna_session`
+  carries the identity's own token; `Auth.identity_of_req` verifies it
+  via the SAME `Store.verify_token` used for bearer. No session table,
+  no second secret class (v0 stance; upgrade path = keyed/signed
+  cookies). Login POST = form token -> verify -> 303 + Set-Cookie
+  (HttpOnly, SameSite=Lax, path=/); logout drops it.
+- **Dream cookie gotchas (cost ~30min):** (1) `Dream.cookie` defaults
+  `~decrypt:true` — a plain (non-encrypted) cookie silently reads as
+  None; must pass `~decrypt:false` on the read side since we set
+  `~encrypt:false`. (2) `Dream.set_cookie` takes a RESPONSE (not a
+  promise), so cookie-setting handlers do `redirect >>= fun resp ->
+  set_cookie resp req ...`.
+- htmx pattern: every interactive control is a PLAIN FORM working
+  without JS (POST -> 303 redirect back). With `HX-Request: true` the
+  same URL returns a FRAGMENT: dashboard runs-table tick
+  (`/frag/runs`, every 5s), journal tick (`/runs/:id/journal`, every
+  2s — the tick STOPS by dropping its own poll attribute once the run
+  is finished), verify button (`POST /runs/:id/verify` swaps the badge
+  + divergence table in place), patch/run/repl/grant fragments.
+  `<noscript>` fallback links on ticked sections.
+- Run page: auto-verifies an unverified finished run on fetch (same
+  rule as GET /api/runs/:id); failed runs get a re-verify button; the
+  divergence view renders Replay.verdict as addressed structure (seq /
+  callsite path / prim / first_diff_path / recorded vs replayed hash).
+- Refactor: run execution shared by API + UI via
+  `Run.execute_run` (lives in Run, NOT Api, to avoid the module cycle
+  Api -> Pages -> Program -> Api): up-front grant validation
+  (Store.check_grant per id), program fetch, boundary execution;
+  returns `(row, journals) | (code, msg) result`. **BUG FIXED en
+  route:** api post_run used to insert a run row AND call Run.execute
+  (which inserts its own) — an orphan 'running' row per API run;
+  removed the duplicate insert.
+- Program page: canonical ternary, box-drawing tree outline
+  (`Layout.tree_outline`), provenance table from the ir column's tags
+  (tree path -> IR node id -> span), CAS patch form (path /
+  expected_old_hash pre-filled with the program hash / new_ternary),
+  and a run-it form (inputs one-per-line, fuel/cap, grant ids). htmx
+  error fragments for bad path / CAS conflict; no-JS variants answer
+  404/409 error pages.
+- REPL page (M8 slice): compile+eval round-trip over the pure engine
+  (same engine as the differential harness; compile IS reduction).
+  Dictionary/defines/journaled transcripts + POST /api/repl are M9.
+  A `(prim ...)` fired at compile time correctly surfaces as a compile
+  error (not an effect) even from the UI.
+- New smoke: `scripts/smoke-ui.sh` — 16 sections, exit 0: health+static,
+  anon redirects, login (bad 401 / good + cookie), dashboard + htmx tick
+  + noscript, frag/runs both modes, program page sections, lookup
+  redirect, run page + auto-verify, journal tick both modes, patch
+  (apply / no-JS 303 / bad path fragment+404 / conflict fragment+409),
+  run form (fragment + no-JS 303), repl (round-trip / no-JS page /
+  compile error / page), grants (page / mint / revoke / unknown prim
+  400), out-of-band journal tamper -> verify button shows 'verify
+  failed' while the run row keeps its recorded status, logout.
+- Tests now: 36 unit + 26 compiler + 12 prim + 11 store = 85, plus
+  differential 24/24, smoke-api 13/13, smoke-ui 16/16.
 
 ## M9 — REPL
 - [ ] name→tree dictionary per identity; REPL round = compile+eval a term against dictionary; defines update dictionary rows (new table in migration 0002)
@@ -362,6 +426,14 @@ Ground rules:
 
 ## Deviations (append as they occur)
 
+- M8: the REPL page is the M8 SLICE (pure compile+eval round-trip);
+  the plan's M9 items (name->tree dictionary per identity, defines,
+  journaled REPL transcripts as run rows, POST /api/repl) remain open
+  and are the next milestone.
+- M8: session-cookie auth carries the identity token itself (v0; ONE
+  credential store, no session table) — upgrade path noted in M8
+  notes. Also: plan's "pretty tree render" is a box-drawing ASCII
+  outline, no dependency added.
 - M7 notes (loop #15, continued into #16 — loop #15 died on a dead PG
   cluster; this loop finished + verified + committed):
 

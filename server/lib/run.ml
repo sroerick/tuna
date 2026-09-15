@@ -223,3 +223,48 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
   >>= function
   | None -> Lwt.fail (Failure "run row vanished")
   | Some row -> S.fetch_journals pool run_id >>= fun js -> Lwt.return (row, js)
+
+(* Shared synchronous execution: up-front grant validation, program
+   fetch, run row + boundary execution.  Lives in Run (not Api) so the
+   page layer can use it without a module cycle (Program -> Run, while
+   Api -> Pages -> Program).  Used by post_run and the M8 run form. *)
+let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel ~size_cap () :
+    (S.run * S.journal list, int * string) result Lwt.t =
+  if fuel < 1 || size_cap < 1 then
+    Lwt.return (Error (400, "fuel and size_cap must be >= 1"))
+  else
+    let rec check gs =
+      match gs with
+      | [] -> Lwt.return None
+      | gid :: rest -> (
+          S.check_grant pool ~id:gid ~caller
+          >>= function
+          | `Ok -> check rest
+          | `Revoked -> Lwt.return (Some (Printf.sprintf "grant %s is revoked" gid))
+          | `Wrong_caller ->
+              Lwt.return
+                (Some (Printf.sprintf "grant %s does not belong to caller" gid))
+          | `Unknown -> Lwt.return (Some (Printf.sprintf "grant %s not found" gid)))
+    in
+    check grant_ids
+    >>= (function
+          | Some msg -> Lwt.return (Error (403, msg))
+          | None -> (
+              S.fetch_program pool program_hash
+              >>= (function
+                    | None -> Lwt.return (Error (404, "unknown program hash"))
+                    | Some prog -> (
+                        match Tuna.Canon.of_string prog.S.p_ternary with
+                        | Error (off, msg) ->
+                            Lwt.return
+                              (Error
+                                 ( 500,
+                                   Printf.sprintf
+                                     "stored program unparseable (offset %d: %s)"
+                                     off msg ))
+                        | Ok program ->
+                            execute pool ~caller ~grant_ids ~program_hash
+                              ~program ~ir_json:prog.S.p_ir ~inputs:input_trees
+                              ~fuel ~size_cap ()
+                            >>= fun (row, js) -> Lwt.return (Ok (row, js))))))
+

@@ -329,21 +329,8 @@ let patch_program pool auth req =
 
 (* -- runs ------------------------------------------------------------ *)
 
-let check_grants pool caller grant_ids =
-  let rec go = function
-    | [] -> Lwt.return None
-    | gid :: rest -> (
-        Store.check_grant pool ~id:gid ~caller
-        >>= function
-        | `Ok -> go rest
-        | `Revoked -> Lwt.return (Some (Printf.sprintf "grant %s is revoked" gid))
-        | `Wrong_caller ->
-            Lwt.return
-              (Some (Printf.sprintf "grant %s does not belong to caller" gid))
-        | `Unknown -> Lwt.return (Some (Printf.sprintf "grant %s not found" gid)))
-  in
-  go grant_ids
-
+(* Up-front grant validation now lives in Run.execute_run (it re-uses
+   Store.check_grant the same way); this module calls it directly. *)
 let post_run pool auth req =
   body_json req >>= function
   | Error msg ->  (j_err msg)
@@ -352,62 +339,32 @@ let post_run pool auth req =
       let size_cap = Option.value (get_int_opt j "size_cap") ~default:10_000 in
       match get_string_opt j "program_hash" with
       | None ->  (j_err "missing \"program_hash\"")
-      | Some program_hash ->
-          if fuel < 1 || size_cap < 1 then
-             (j_err "fuel and size_cap must be >= 1")
-          else
-            let inputs_rev =
-              List.fold_left
-                (fun acc t ->
-                  match (acc, parse_ternary t) with
-                  | Ok acc, Ok t -> Ok (t :: acc)
-                  | Error e, _ | _, Error e -> Error e)
-                (Ok [])
-                (strings_of j "inputs")
-            in
-            match inputs_rev with
-            | Error msg ->  (j_err msg)
-            | Ok rev ->
-                let input_trees = List.rev rev in
-                check_grants pool auth.auth_id (strings_of j "grants")
-                >>= function
-                | Some msg ->  (j_err ~code:403 msg)
-                | None ->
-                    Store.fetch_program pool program_hash
-                    >>= function
-                    | None ->
-                         (j_err ~code:404 "unknown program hash")
-                    | Some prog -> (
-                        match parse_ternary prog.p_ternary with
-                        | Error msg ->
-                            
-                              (j_err ~code:500
-                                 ("stored program unparseable: " ^ msg))
-                        | Ok program ->
-                            let input_hashes =
-                              List.map Tuna.Hash.hex_of_tree input_trees
-                            in
-                            Store.insert_run pool ~program_hash
-                              ~inputs:input_hashes
-                              ~caller:(Some auth.auth_id) ~fuel ~size_cap ()
-                            >>= fun _seed ->
-                            (* M7 boundary: synchronous execution with the
-                               prim host (grant checks + journaling).
-                               Input trees are content-addressed into the
-                               programs table by the boundary so replay can
-                               recover them from their hashes. *)
-                            Run.execute pool ~caller:auth.auth_id
-                              ~grant_ids:(strings_of j "grants")
-                              ~program_hash ~program ~ir_json:prog.p_ir
-                              ~inputs:input_trees ~fuel ~size_cap ()
-                            >>= fun (row, js) ->
-                            
-                                  (j_ok ~code:201
-                                     (`Assoc
-                                       [ ("run", run_json row)
-                                       ; ( "journal"
-                                         , `List (List.map journal_json js) )
-                                       ])))
+      | Some program_hash -> (
+          let inputs_rev =
+            List.fold_left
+              (fun acc t ->
+                match (acc, parse_ternary t) with
+                | Ok acc, Ok t -> Ok (t :: acc)
+                | Error e, _ | _, Error e -> Error e)
+              (Ok [])
+              (strings_of j "inputs")
+          in
+          match inputs_rev with
+          | Error msg ->  (j_err msg)
+          | Ok rev ->
+              let input_trees = List.rev rev in
+              Run.execute_run pool ~caller:auth.auth_id ~program_hash
+                ~input_trees ~grant_ids:(strings_of j "grants") ~fuel
+                ~size_cap ()
+              >>= (function
+                    | Error (code, msg) -> j_err ~code msg
+                    | Ok (row, js) ->
+                        (j_ok ~code:201
+                           (`Assoc
+                             [ ("run", run_json row)
+                             ; ( "journal"
+                               , `List (List.map journal_json js) )
+                             ]))))
 
 (* run-row level verify response; the divergence is addressed structure,
    not prose (replay.divergence-surface) *)
@@ -676,10 +633,9 @@ let revoke_grant pool auth req =
 
 (* -- router / server ------------------------------------------------- *)
 
-let router pool =
-  Dream.router
-    [ Dream.get "/health" (health pool)
-    ; Dream.post "/api/programs" (with_auth pool (post_program pool))
+(* route list, mounted alongside the M8 page routes by bin/main.ml *)
+let api_routes pool =
+  [ Dream.post "/api/programs" (with_auth pool (post_program pool))
     ; Dream.get "/api/programs/:hash" (with_auth pool (get_program pool))
     ; Dream.post "/api/programs/:hash/patch"
         (with_auth pool (patch_program pool))
@@ -692,6 +648,15 @@ let router pool =
         (with_auth pool (fork_journal pool))
     ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
     ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool)) ]
+
+(* assemble the full router: health + JSON API + human pages + static *)
+let router ?(static_dir = "server/static") pool =
+  Dream.router
+    (Dream.get "/health" (health pool)
+    :: api_routes pool
+    @ Pages.open_routes pool
+    @ Pages.routes pool
+    @ [ Dream.get "/static/**" (Dream.static static_dir) ])
 
 (* Called by bin/main.ml inside its own Lwt_main.run: bootstraps the
    root identity, then serves without spawning another event loop. *)
@@ -725,4 +690,8 @@ let serve ~port ~bootstrap_token =
   in
   boot >>= fun pool ->
   Dream.log "boot: identity bootstrap ok";
-  Dream.serve ~interface:"127.0.0.1" ~port (Dream.logger @@ router pool)
+  Dream.serve ~interface:"127.0.0.1" ~port
+    (Dream.logger
+    @@ router ~static_dir:
+         (Option.value (Sys.getenv_opt "TUNA_STATIC_DIR") ~default:"server/static")
+         pool)

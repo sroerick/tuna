@@ -10,10 +10,7 @@
  (name prim_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
-(executable
- (name dbg)
- (libraries tuna tuna_interp tuna_compiler))
-
+; (dropped: a stale dbg debug executable left over from an earlier loop)
 (executable
  (name store_tests)
  (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest-lwt

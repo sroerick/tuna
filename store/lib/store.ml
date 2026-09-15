@@ -433,6 +433,13 @@ let mint_grant p ~prim ~args_attenuation ~caller ?(minted_by = None) () =
                 )
   | n -> store_error "mint_grant: RETURNING gave %d rows" (List.length n) )
 
+(* newest-first listing for the UI admin page (M8) *)
+let list_grants p ?(limit = 100) () =
+  Db.q ~params:[ p_int limit ] p
+    ("SELECT id::text, prim, args_attenuation::text, caller::text, minted_by::text, \
+      revoked_at::text FROM grants ORDER BY created_at DESC LIMIT $1")
+  >>= fun rows -> Lwt.return (List.map grant_of_row rows)
+
 let fetch_grant p id =
   Db.q ~params:[ p_str id ] p select_grant_by_id
   >>= fun rows ->
