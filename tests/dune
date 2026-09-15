@@ -7,3 +7,15 @@
  (deps tuna_tests.exe)
  (action
   (run %{exe:tuna_tests.exe})))
+
+; M3 differential harness: three engines (instrumented upstream copy,
+; CL reference twin, tuna CLI) must agree on every corpus entry.
+; Skipped silently when sbcl is not installed.
+(rule
+ (alias runtest)
+ (deps
+  ../scripts/verify-differential.sh
+  ../reference/tree-calc.lisp
+  (source_tree ../scripts/diff-corpus))
+ (action
+  (bash "command -v sbcl >/dev/null 2>&1 && bash %{workspace_root}/scripts/verify-differential.sh || echo 'sbcl missing: differential harness skipped'")))

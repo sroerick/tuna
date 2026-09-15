@@ -1,0 +1,10 @@
+name grower_cap8
+program 2100
+arg 2100
+arg 2100
+fuel 1000
+size_cap 8
+
+expect_status size_exhausted
+expect_result -
+expect_steps 1

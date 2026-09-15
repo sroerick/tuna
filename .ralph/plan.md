@@ -101,12 +101,12 @@ Ground rules:
 - [x] commit
 
 ## M3 — differential harness (reference twin)
-- [ ] `reference/tree-calc.lisp`: faithful CL port of the triage rules + step counter (same counting rule); documented header
-- [ ] `scripts/diff-corpus/`: corpus files (ternary program + inputs + expected result + expected steps) for: not, id, K, S-flavored compositions, bool ops, nat encoding arithmetic (succ/add/mul), self-apply omega, Y-combinator fixed point, published upstream values
-- [ ] generate expected steps from upstream OCaml apply (instrumented) once, checked in
-- [ ] `scripts/verify-differential.sh`: runs sbcl CL reference + tuna CLI evaluator over corpus, compares result hash + step count; exit 0
-- [ ] `cli/bin/main.exe` needs a subcommand: `tuna eval <ternary-file>` (program + args, fuel, prints ternary + steps + status) — build this
-- [ ] commit
+- [x] `reference/tree-calc.lisp`: faithful CL port of the triage rules + step counter (same counting rule); documented header
+- [x] `scripts/diff-corpus/`: corpus files (ternary program + inputs + expected result + expected steps) for: not, id, K, S-flavored compositions, bool ops, nat encoding arithmetic (succ/add/mul), self-apply omega, Y-combinator fixed point, published upstream values
+- [x] generate expected steps from upstream OCaml apply (instrumented) once, checked in
+- [x] `scripts/verify-differential.sh`: runs sbcl CL reference + tuna CLI evaluator over corpus, compares result hash + step count; exit 0
+- [x] `cli/bin/main.exe` needs a subcommand: `tuna eval <ternary-file>` (program + args, fuel, prints ternary + steps + status) — build this
+- [x] commit
 
 ## M4 — compiler: surface language + bracket abstraction
 - [ ] `compiler/lib/sexp.ml`: surface s-expr reader: `(lambda (x) e)`, application, leaf 0, define-free (REPL adds defines later), `%/hash` literal tree refs
@@ -167,6 +167,52 @@ Ground rules:
 - [ ] borge: statuses flipped for implemented stanzas (make pass), agent notes appended to each chapter with evidence lines
 - [ ] full run: dev.sh start + smoke + all verify scripts green; commit
 
+## M3 notes (loop #6)
+
+- Previous loop (#5) died mid-write: the .corpus files contained ONLY
+  the expect lines (no program/arg/fuel/size_cap). Loop #6 rebuilt the
+  corpus via a checked-in generator, `scripts/diff-corpus/regen.sh`:
+  it writes each entry, generates expects with `tools/gen refeval`
+  (instrumented verbatim copy of upstream apply — the independent
+  generator the plan wanted), and fails if the CL twin disagrees.
+  Re-run it after changing any corpus definition.
+- Corpus = 24 entries: not_true/false/not_not_true, id_not, k_xy,
+  s_k_k_id, and/or all 4 arg combos, omega_4self (fuel 17, 4 steps),
+  grower_cap8/10 (same run, cap 8 trips / cap 10 completes), fix_fuel
+  (Y(identity) fuel-exhausts at exactly 500), succ_dag_7 (upstream DAG
+  succ on nat encoding: nat 7 -> nat 8, 98 steps — reproduces the
+  previous loop's recorded value), succ_zero/five (church succ,
+  observable via not/false), add_ch_2_3 / mul_ch_2_3 /
+  church3_succ_zero (church arithmetic observable via not/false:
+  not^(m+n) false etc.).
+- `tools/gen` gained a `TCase` term constructor: the old
+  `App(App(N, App(f0,f1)), f2)` tcase was WRONG — `App` marshals by
+  eager application, which corrupts the T{f0,f1,f2} dispatch tree.
+  TCase marshals structurally to Fork(Fork(f0',f1'),f2').
+- Bracket-abstraction gotchas discovered while building bool ops:
+  - raw-variable triage branches (λu.b, or bare V b) do NOT survive
+    SK elimination as pointwise functions — `or` is therefore defined
+    as not(and(not a)(not b)) from the verified and/not;
+  - identity tree 21100 (upstream's id_ternary) is identity only on
+    function-trees: id x reduces to apply x x, so id Leaf = Stem Leaf,
+    id StemLeaf = Fork(Leaf,StemLeaf). Do not use it as a pointwise
+    identity in corpus programs (that silently broke or_ff/ft once).
+  - Correct and: T{λu.false, λu.λv.b, λx.λy.λz.b} a b — branch arity
+    matters: dispatch gives f0 NO consumed arg, f1 gets u, f2 gets u v,
+    and each branch then receives the remaining and-arg.
+- All bool entries verified semantically: and T=10/else 0,
+  or F=0/else 10 (only Leaf is false in tree calculus).
+- `scripts/verify-differential.sh` compares checked-in expects against
+  all three engines (refeval / sbcl CL twin / tuna CLI); wired into
+  `dune runtest` (tests/dune rule, skipped silently if sbcl absent).
+  24/24 agree.
+- Deviation: plan's `tuna eval <ternary-file>` is implemented as
+  `tuna eval <corpus-file>` — the corpus format carries program+args+
+  fuel+cap together, which is what the differential harness needs;
+  a bare-ternary subcommand can come with the M4 compiler.
+- tools/search: brute-force hunt tool for an intensional (chain-nat)
+  add; exploratory, kept for reference, not part of the corpus.
+
 ## Deviations (append as they occur)
 
 - M2: result-variant naming is `Fuel_exhausted`/`Size_exhausted`
@@ -176,5 +222,7 @@ Ground rules:
   not-true labels the fired rules inconsistently with its own rule list
   (actual: fork(fork,_) then fork(leaf,_)). Step count 2 confirmed.
   Recorded, AGENTS.md untouched.
+- M3: CLI subcommand is `tuna eval <corpus-file>` (not bare ternary);
+  corpus files bundle program+args+fuel+cap+expects (see notes).
 
 ## Open Questions (blocking notes)

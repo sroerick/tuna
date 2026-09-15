@@ -1,0 +1,12 @@
+name omega_4self
+program 221000
+arg 221000
+arg 221000
+arg 221000
+arg 221000
+fuel 17
+size_cap 1000
+
+expect_status normal
+expect_result 221000
+expect_steps 4

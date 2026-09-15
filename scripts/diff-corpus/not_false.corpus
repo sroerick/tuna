@@ -1,0 +1,9 @@
+name not_false
+program 22102000
+arg 0
+fuel 1000
+size_cap 1000
+
+expect_status normal
+expect_result 10
+expect_steps 1

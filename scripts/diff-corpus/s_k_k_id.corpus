@@ -1,0 +1,9 @@
+name s_k_k_id
+program 21212021212002002110021100212021212002002110021100
+arg 22102000
+fuel 1000
+size_cap 1000
+
+expect_status normal
+expect_result 22102000
+expect_steps 22

@@ -1,0 +1,10 @@
+name k_xy
+program 212120020021100
+arg 22102000
+arg 10
+fuel 1000
+size_cap 1000
+
+expect_status normal
+expect_result 22102000
+expect_steps 7
