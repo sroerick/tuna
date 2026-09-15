@@ -70,6 +70,28 @@
  (inline
   "borg/call-sites.borg"
  )
+ (* agent note (|2026-09-15 STORAGE SUBSTRATE WATCH (operator review
+      session, PP archaeology). Pricklypear's one-tree substrate
+      autopsy, tl;dr: its "everything is a tree" storage bet froze at
+      HALF-migrated (P3 read-flip done, P4 write-truth never retired
+      the relational tables) and that intermediate dual-run state is
+      precisely where weeks of vibecoding got spent: user-owned
+      mutable path hierarchies force a path grammar, a label codec,
+      branch-override walks, version shadows, sibling order, retention
+      policies, and generations — seven subsystems, all paid for and
+      none of them load-bearing for the calculus. LESSON, to be kept
+      standing law for tuna1 AND tuna2: content-addressed VALUES are
+      the primitive; mutable tree HIERARCHIES in PG storage are the
+      vibecoding trap. tuna1's store (0001 flat tables) is clean; keep
+      it so — every new table that prefers a path or a parent pointer
+      over a hash should be questioned in review. Explored nightly
+      drafts for v2 (D7: canonical-hash preimage off ternary text onto
+      packed bitstream, plus post-GC temporal KV, Model-B
+      merkelized-node materialization on demand) live outside this
+      repo at ~/dev/wyo.tech/tuna2/spec-draft-v0.md and are NOT M9/M10
+      scope; the jam is documenting intent so neither the next loop
+      HERE nor the next ten conversation partners relitigate the PP
+      substrate on fresh foot.|) *)
  (inline
   "borg/acceptance.borg"
  )
