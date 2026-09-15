@@ -92,6 +92,23 @@
       scope; the jam is documenting intent so neither the next loop
       HERE nor the next ten conversation partners relitigate the PP
       substrate on fresh foot.|) *)
+ (* agent note (|2026-09-15 OPERATOR DECISION - CLUB REPURPOSE + M10
+      SUBSTRATE SLICE (relayed live by gregor; supersedes the
+      "v2 exploration deferred" clause of the STORAGE SUBSTRATE WATCH
+      for this slice only - the values-law itself stands and binds this
+      slice). roerick repurposes the pricklypear.club instance: tuna
+      becomes the club runtime tonight (relayd flip to tuna; PP kept
+      dark on :18080 with its data preserved in place). Shipping now on
+      top of the v1 store: (1) paths are DERIVED - a path->value-hash
+      index over content-addressed values; no path or parent pointer is
+      ever storage truth; (2) writes are versioned CAS on value hash;
+      every op lands in a sha256-chained effect log; (3) grants name
+      path prefixes (garden shape); (4) prims tree/get, tree/put,
+      tree/cas, tree/list, ns/fork; rewind = fold of the effect log at
+      a seq; (5) the calculus sees none of it - paths arrive only as
+      granted arguments (SPEC 4.4 ambient-authority ban stands).
+      M9 REPL untouched. Gate before push: build, runtest,
+      differential, smoke.|) *)
  (inline
   "borg/acceptance.borg"
  )
