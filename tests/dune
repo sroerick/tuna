@@ -2,11 +2,21 @@
  (name tuna_tests)
  (libraries tuna tuna_interp alcotest))
 
+(executable
+ (name compiler_tests)
+ (libraries tuna tuna_interp tuna_compiler alcotest))
+
 (rule
  (alias runtest)
  (deps tuna_tests.exe)
  (action
   (run %{exe:tuna_tests.exe})))
+
+(rule
+ (alias runtest)
+ (deps compiler_tests.exe)
+ (action
+  (run %{exe:compiler_tests.exe})))
 
 ; M3 differential harness: three engines (instrumented upstream copy,
 ; CL reference twin, tuna CLI) must agree on every corpus entry.
