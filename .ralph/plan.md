@@ -185,16 +185,69 @@ Ground rules:
 - [x] commit
 
 ## M6 — HTTP API (JSON, agent surface)
-- [ ] `server/lib/api.ml` (Dream, Lwt): 
+- [x] `server/lib/api.ml` (Dream, Lwt): 
   - POST /api/programs (ternary or source; returns hash), GET /api/programs/:hash
   - POST /api/programs/:hash/patch {path, expected_old_hash, new_ternary} → CAS apply or 409 with first-diff
   - POST /api/runs {program_hash, inputs[], fuel, size_cap, grants[]} → run row (executes synchronously v0-style, journals every prim event)
   - GET /api/runs/:id (row + journal), GET /api/runs?caller=&program=
   - GET /api/journals/:run_id; POST /api/journals/:run_id/fork {edits} → derived journal run
-- [ ] auth: Authorization: Bearer <token>; 401 otherwise; grant checks via grants table
-- [ ] /health (live + db ping), no auth
-- [ ] curl smoke script `scripts/smoke-api.sh` exercising the whole chain
-- [ ] commit
+- [x] auth: Authorization: Bearer <token>; 401 otherwise; grant checks via grants table
+- [x] /health (live + db ping), no auth
+- [x] curl smoke script `scripts/smoke-api.sh` exercising the whole chain
+- [x] commit
+
+## M6 notes (loop #14)
+
+- Layout: `server/lib/{api,patch}.ml` (library `tuna_server`) +
+  `server/bin/main.ml` (entry: TUNA_HTTP_PORT default 18090; PP_BOOTSTRAP
+  identity bootstrap — TUNA_BOOTSTRAP_TOKEN or generated-and-printed-once,
+  sha256 stored via Store.bootstrap_identity name "root"; re-boots with a
+  DIFFERENT token against an existing root are a hard boot error, never a
+  silent new credential).
+- Patch engine (`server/lib/patch.ml`): structural CAS per SPEC §4 — path
+  digits match ternary/provenance convention (0=stem-child 1=fork-left
+  2=fork-right, leading '/' tolerated, ""=root); Atomic outcome type
+  Applied{ternary;hash} / Conflict{expected,actual,first_diff} /
+  Bad_path. Successful patches create a NEW program row (old row immutable
+  history); CAS conflicts 409 with the two subtree hashes, and — when the
+  caller supplies old_ternary consistent with its pinned hash — a
+  first-diff path walk between believed vs stored subtree. Smoke [5]
+  covers apply, idempotent-repeat-conflict, first_diff="" (root shape
+  mismatch), and bad-path 404.
+- Run semantics (v0, pre-prim): POST /api/runs inserts the run row, then
+  evaluates synchronously with the M2 stepper, then updates status /
+  result_ternary / step_count. Pure tree programs journal nothing (the
+  prim boundary + journaling is M7's boundary). grants[] validated
+  UP-FRONT against the grants table (exists, unrevoked, belongs to
+  caller → 403 on failure) — the M7 prim boundary will do per-call checks
+  using the same Store.check_grant primitive.
+- Journal fork (data-plane counterfactual, journal.counterfactual-edits):
+  POST /api/journals/:run_id/fork validates edit seqs against the parent
+  journal (edit beyond known seq → 400), copies rows through
+  append_journal so the hash chain REBUILDS over the new run id (row
+  fingerprints include run_id, so every row_hash changes — expected),
+  applies edits (result_ternary / error / clear), records
+  derived_journals (run_id, parent_run_id), and snapshots the parent's
+  status/result. RE-EXECUTION of the edited suffix is M7's replay engine
+  — fork currently produces a derived DATA row, not a re-run.
+- API JSON facts: program rows carry the ir column (provenance-lite:
+  tree-path → IR-node-id tags) when compiled from source; ternary-only
+  programs have ir:null. Error convention: 400 malformed input / compile
+  error, 401 no/bad bearer, 403 grant denial, 404 unknown hash|run|path,
+  409 CAS conflict, 500 store/structural faults. All /api/* requires
+  auth; /health is open and reports db ping status without raising.
+- Smoke script (scripts/smoke-api.sh, 9 sections, exit 0): health, 401s,
+  program post (ternary+source+compile-error), get, patch chain,
+  runs (not-true 2-step exact, omega fuel-exact at 5, unknown-grant 403),
+  run list / journal fetch / unknown-id 404s, fork (empty-edit +
+  out-of-range edit + derived_journals row). Token default: pulled from
+  TUNA_BOOTSTRAP_TOKEN line in /tmp/tuna-dev/server.log.
+- borge: grants.borg agent note updated (M6 wired the VALIDATION half of
+  the run-submission surface; prim-boundary per-call checks + attenuation
+  interpretation remain M7). lint clean; report still 0-implemented /
+  20-planned (statuses flip in M10 per plan).
+- Test counts: 35 unit + 26 compiler + 24 differential + 6 store = 91
+  green, plus smoke-api.sh 9/9 sections against a live dev.sh server.
 
 ## M7 — prims, journal, replay engine
 - [ ] `server/lib/prims.ml`: prim registry. v1 set: `echo` (return args tree), `now` (wall clock), `uuid`, `store/get`+`store/put` (kv table), `http/get` (egress against an allowlist env var). Each: contract version const "1", runs at boundary under grant check/journaling
