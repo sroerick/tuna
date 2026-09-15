@@ -27,6 +27,31 @@
       non-reproducible artifact, the recorded environment. Replay is
       not a debugging feature bolted on after the fact; it is a
       consistency proof between those two halves.
+
+      RUNTIME PURITY THESIS (operator, 2026-09-15 — spec-level stance,
+      binds all future code): tunacore admits no scheduler. The
+      evaluation core's end state is a PURE STEP — a value->value
+      state transition, no monad parameter, no scheduler coupling, no
+      Lwt/async types anywhere under common/, interpreter/, compiler/.
+      Concretely: `Prim_eval.Make(Lwt)` in server/lib is a MIGRATION
+      stage, not the end state. In an impure language like OCaml a
+      monad in the core is either ceremony (identity) or a concealed
+      scheduler (a promise runtime) — both are excluded here; the
+      non-negotiable invariants (verbatim triage rules, exact,
+      strategy-ordered step counts, fuel/size exhaustion as values)
+      are what the M3 corpus referees, and they must survive any core
+      re-shape bit-for-bit. The host, and only the host, owns the
+      runtime: its loop may bind Lwt, eio, or OCaml 5 effects — run
+      suspension/stepping (journal.borg, replay) is a GOAL the pure
+      step function makes natural, and the M10+ effects experiment
+      (see .ralph/plan.md Open Questions) is the designated bridge.
+      Failure definition: if a core re-shape cannot reproduce corpus
+      step counts identical to the verbatim-port reference, that is a
+      spec violation (corpus red), not a design variant; if a real
+      workload exposes an F-class failure of the thesis itself (the
+      journal boundary cannot drive a pure-step core without leaking
+      scheduler state back into the core), record it in FINDINGS.md
+      under the acceptance.borg failure regime with evidence.
     |))
  (status planned)
  (* agent note (|2026-09-15 chapter created. Provenance: pp-eval against pricklypear.rocks pulled note "Tuna: standalone tree evaluator - spec v0" (slug spec_tuna) into SPEC.md. Design discussion before authoring settled: (1) seam-of-structure vs seam-of-text is the honest frame — PP's /api/eval parses hostile strings, tuna's eval path has no parser; (2) "everything else becomes a side effect" inverts into "the journal is the recorded environment = replay sandbox, replay needs nothing live"; (3) the debugging surface target is DIFFABLE not readable — agents grep structure; first-divergence paths and per-program-path subtree hashes beat human-prose logs; (4) counterfactual replay (edit the journal, re-run: the mock IS the recorded answer) falls out of journal-as-data and is priced as a headline demo; (5) caveats priced up front: journal growth/GC tombstones, PII capture, prim contract versioning. v1 chapters: grants, journal, replay, call-sites, acceptance.|) *)

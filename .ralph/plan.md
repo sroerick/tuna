@@ -380,3 +380,25 @@ Ground rules:
   done, run-time diagnostic wiring lands with M7).
 
 ## Open Questions (blocking notes)
+
+- OPERATOR THESIS (roerick, 2026-09-15 — canonical statement now in
+  tuna.borg docstring "RUNTIME PURITY THESIS"; binding spec-level:
+  tunacore admits no scheduler, end state is a PURE STEP value->value
+  core. `Prim_eval.Make(Lwt)` in server/lib is a migration stage.)
+  M10+ experiment (NOT blocking M7/M8): effects/flat-machine bridge.
+    - Shape (2) is the headline: explicit-stack (CEK-style) evaluator,
+      pure `step : state -> state`, perform from the flat loop O(1);
+      run suspension = a state VALUE (serializable/steppable) — a
+      feature the monad/callback cannot offer without becoming it.
+    - Shape (1) local handlers is the control group (answer-in-place,
+      O(1) transport; proves the O(depth) tax was rim-design, not
+      effects-physics).
+    - Known cost asymmetry to measure, not pre-judge: rim-handler
+      effects pay O(depth) per capture (prim-heavy adversarial
+      programs), monad(Lwt)/flat pay small-per-step constant or zero;
+      criterion is MEASURED cost on small-prim + prim-heavy workloads
+      with step counts identical, nothing aesthetic.
+    - Either outcome is a finding for FINDINGS.md, equal validity.
+    - Do not de-color the core before M8 ships; do it as one corpus-
+      refereed commit once the journal tests have pinned semantics.
+
