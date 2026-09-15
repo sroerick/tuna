@@ -53,12 +53,52 @@ Ground rules:
   deprecation warning about `ignored_subdirs` — harmless, revisit if
   dune complains harder.
 
+## M2 notes (loop #2)
+
+- Module: `Tuna_interp.Eval` (library `tuna_interp`, dir
+  `interpreter/lib`). API: `eval ~fuel ~size_cap ~program args : result`;
+  result = `Normal of t * int | Fuel_exhausted of int | Size_exhausted of
+  int` (snake_case, OCaml style — plan's CamelCase naming adjusted).
+  `apply` is a verbatim instrumented port of upstream `apply` (same match
+  arms, same evaluation order); steps counted only on triage-rule
+  firings; wrapper applications free. Exceptions `Fuel_out`/`Size_out`
+  are internal, caught in `eval` — they never escape the API.
+- **CRITICAL OCaml gotcha (cost the loop ~an hour):** native OCaml
+  evaluates constructor/function arguments RIGHT-TO-LEFT. Writing
+  `Normal (go program args, b.steps)` snapshot `b.steps` BEFORE the run,
+  producing "correct tree, 0 steps". Fix: bind `let t = go program args`
+  first, then `Normal (t, b.steps)`. Same gotcha bit printf-style probes.
+  Any future code mixing effects with constructor arguments must bind
+  first. Also: trace/probe stderr disappears under `2>/dev/null` —
+  capture `2>&1` when debugging.
+- Corpus facts (all cross-checked against the vendored python reference,
+  `reference/tree-calculus/implementation/python/tree-calculus.py`):
+  - not = `22102000`; not true = leaf in 2 steps; not false = true in
+    1 step; not(not(true)) = leaf in 3 steps.
+  - omega (self-application fixed point) = `221000` =
+    `Fork (Fork (Stem Leaf, Leaf), Leaf)`: f f = f upstream-verified,
+    exactly 1 triage firing per application. Run of f against a long
+    arg list of f's halts with Fuel_exhausted at exactly fuel (tests at
+    0/1/2/17). The first omega attempt (`2100`, Fork(Stem Leaf, Leaf))
+    was wrong: it is a GROWER (apply g r = Fork(r, Stem r)), now used
+    for the mid-run size_cap test (cap 8 trips after 4 steps; cap 10
+    completes in the same 4 steps).
+  - identity discovered en route: `21100` (`Fork (Stem (Stem Leaf),
+    Leaf)`) satisfies id x = x in 2 steps — candidate corpus entry for
+    M3's differential harness.
+- Note on AGENTS.md rule 4: "not true -> leaf in 2 steps (rule 3b, then
+  3a)" — the count 2 is correct, but the fired rules are
+  fork(fork,_) then fork(leaf,_) (per the rule list in the same
+  sentence). Labels appear swapped in the note; step-count invariant
+  unaffected. Recorded here rather than editing AGENTS.md.
+- Tests now 35/35 green (17 M1 + 18 eval).
+
 ## M2 — interpreter: apply + bounded stepper
-- [ ] `interpreter/lib/eval.ml`: port upstream `apply` verbatim (M1 tree type)
-- [ ] step counting per AGENTS.md rule 4; fuel; live-tree size check against size_cap
-- [ ] result type: `Normal of tree * steps | FuelExhausted of steps | SizeExhausted of steps`; step budget is exact (omega halts at exactly fuel)
-- [ ] tests: not/true/false corpus, omega fuel-exact, determinism (run twice, same steps), size counting
-- [ ] commit
+- [x] `interpreter/lib/eval.ml`: port upstream `apply` verbatim (M1 tree type)
+- [x] step counting per AGENTS.md rule 4; fuel; live-tree size check against size_cap
+- [x] result type: `Normal of tree * steps | FuelExhausted of steps | SizeExhausted of steps`; step budget is exact (omega halts at exactly fuel)
+- [x] tests: not/true/false corpus, omega fuel-exact, determinism (run twice, same steps), size counting
+- [x] commit
 
 ## M3 — differential harness (reference twin)
 - [ ] `reference/tree-calc.lisp`: faithful CL port of the triage rules + step counter (same counting rule); documented header
@@ -128,5 +168,13 @@ Ground rules:
 - [ ] full run: dev.sh start + smoke + all verify scripts green; commit
 
 ## Deviations (append as they occur)
+
+- M2: result-variant naming is `Fuel_exhausted`/`Size_exhausted`
+  (snake_case) vs plan's `FuelExhausted`/`SizeExhausted` — cosmetic,
+  OCaml style.
+- M2: AGENTS.md rule 4's parenthetical "(rule 3b, then 3a)" for
+  not-true labels the fired rules inconsistently with its own rule list
+  (actual: fork(fork,_) then fork(leaf,_)). Step count 2 confirmed.
+  Recorded, AGENTS.md untouched.
 
 ## Open Questions (blocking notes)
