@@ -17,6 +17,10 @@
    lwt))
 
 (executable
+ (name tree_substrate_tests)
+ (libraries tuna tuna_compiler tuna_store tuna_server alcotest-lwt lwt))
+
+(executable
  (name repl_tests)
  (libraries tuna tuna_interp tuna_compiler tuna_server alcotest))
 
@@ -47,6 +51,16 @@
  (action
   (bash
    "bash %{workspace_root}/scripts/test-store.sh %{exe:store_tests.exe} ../migrations")))
+
+; M10 substrate integration tests: same PG gate as store_tests, but on
+; its own scratch database so the two suites never share one (dune
+; runs alias rules in parallel).
+(rule
+ (alias runtest)
+ (deps tree_substrate_tests.exe ../scripts/test-store.sh (source_tree ../migrations))
+ (action
+  (bash
+   "bash %{workspace_root}/scripts/test-store.sh %{exe:tree_substrate_tests.exe} ../migrations tuna_test_sub")))
 
 ; M3 differential harness: three engines (instrumented upstream copy,
 ; CL reference twin, tuna CLI) must agree on every corpus entry.
