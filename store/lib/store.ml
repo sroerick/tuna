@@ -872,8 +872,16 @@ let verify_ops_chain (ops : tree_op list) : [ `Ok | `Bad of string ] =
   match ops with
   | [] -> `Ok
   | first :: rest ->
-      let h0 = Tuna.Hash.hex_of_string (tree_op_concat first) in
-      if h0 <> first.o_op_hash then
+      (* a window starting at seq 1 anchors from genesis (the append
+         side chained prev_hash ^ concat); a window starting mid-log
+         (prefix folds) can only prove INTERNAL linkage -- its first
+         row's fields are trusted as the anchor *)
+      let anchor =
+        if first.o_seq = 1L then
+          Tuna.Hash.hex_of_string (genesis ^ tree_op_concat first)
+        else first.o_op_hash
+      in
+      if anchor <> first.o_op_hash then
         `Bad (Printf.sprintf "seq %Ld: op_hash mismatch" first.o_seq)
       else
         let rec go prev = function
