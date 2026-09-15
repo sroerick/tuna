@@ -109,13 +109,72 @@ Ground rules:
 - [x] commit
 
 ## M4 — compiler: surface language + bracket abstraction
-- [ ] `compiler/lib/sexp.ml`: surface s-expr reader: `(lambda (x) e)`, application, leaf 0, define-free (REPL adds defines later), `%/hash` literal tree refs
-- [ ] IR: named lambda IR with source spans on every node + parent pointers
-- [ ] compile-time checks: unbound variables, arity errors — reported with IR path
-- [ ] `compiler/lib/bracket.ml`: bracket abstraction WITH eta (upstream tree_builder.ml is the reference); compile IS reduction: closed expr evaluates during compile
-- [ ] provenance map: tree-path ↔ IR-node; stored alongside compiled ternary in `programs.ir`
-- [ ] tests: compile not/bools/nats; compile-time-eval; diagnostics carry IR path
-- [ ] commit
+- [x] `compiler/lib/sexp.ml`: surface s-expr reader: `(lambda (x) e)`, application, leaf 0, define-free (REPL adds defines later), `%/hash` literal tree refs
+- [x] IR: named lambda IR with source spans on every node + parent pointers
+- [x] compile-time checks: unbound variables, arity errors — reported with IR path
+- [x] `compiler/lib/bracket.ml`: bracket abstraction WITH eta (upstream tree_builder.ml is the reference); compile IS reduction: closed expr evaluates during compile
+- [x] provenance map: tree-path ↔ IR-node; stored alongside compiled ternary in `programs.ir`
+- [x] tests: compile not/bools/nats; compile-time-eval; diagnostics carry IR path
+- [x] commit
+
+## M4 notes (loop #8)
+
+- Layout: `compiler/lib/{sexp,ir,bracket,provenance}.ml` (library
+  `tuna_compiler`). The reader produces the IR DIRECTLY (single AST,
+  no separate surface AST): every node carries a unique id + span;
+  closure is enforced at read time — an unbound variable raises
+  Ir.Error with the occurrence's IR path, computed post-parse by node
+  id (`Ir.find_id`). Multi-arg lambda desugars to nested Lams; bare
+  digit-run atoms are rejected (tree literals need %); comments +
+  whitespace tolerated.
+- Bracket abstraction is a verbatim port of upstream `star_abstraction`
+  (with eta). The combinator language mirrors upstream Ref/Node/App
+  exactly: `CVar`/`CLeaf`/`CApp` (+`CLam` shell pre-elimination), with
+  an id tag threaded through every synthesized node (tag = enclosing
+  lambda's id). k u / s u v / i are built as PENDING CApps over the
+  leaf — during compile-time eval these reduce by WRAPPER application
+  only (no fuel); triage rules fire only for actual redexes, so the
+  compiled artifact is the normal form and `compile IS reduction` is
+  literal. `to_tagged` mirrors upstream `to_tree` with tags.
+- Corpus-fact cross-checks (python reference):
+  - compile `(lambda (x) x)` = 21100 (upstream id tree; apply(i,x)=x).
+  - compile `(lambda (x) (x x))` = s i i = 212110021100;
+    apply(sii,sii) diverges (python hits RecursionError) — the
+    divergent-term compile test uses fuel 200 (compile fails cleanly,
+    never hangs; compile fuel/cap default 1e6, overridable).
+  - compile `(lambda (f) (lambda (y) x))`-style K = 10; k i (zero's
+    form) = 2021100.
+- Extensional tests through the M2 interpreter: compiled zero, church
+  succ (succ zero not false = true), K, S (s not not false = not
+  false (not false) = 2010) all reduce correctly.
+- Provenance: every compiled-tree node carries the id of the IR node
+  responsible for it (`tags`, pre-order, path convention 0=stem-child
+  1=fork-left 2=fork-right — matches ternary digits);
+  provenance.ml resolves tree path → IR node → IR path → span and
+  backs `describe`. Compile determinism (same hash AND same tags on
+  recompile) is asserted — call-sites.stability's recompilation rule.
+- CLI: `tuna compile <source-file>` (hash/ternary/size/steps; compile
+  errors exit 1 with the IR path), `tuna eval-compiled <ternary>
+  [args...] [--fuel N] [--cap N]` (the M3 deviation's promised bare-
+  ternary subcommand). Bug found in first draft: eval-compiled fed the
+  program token into the args list — fixed before commit.
+- borge gotcha (cost ~15min): `(* agent note ... *)` comments must sit
+  at PROJECT level — placing one inside a subsection (after details)
+  silently breaks tuna.borg's inline-tree match and the report starts
+  orphaning every file, while `borge lint` stays clean. Note moved to
+  project level in borg/call-sites.borg.
+- OCaml gotcha (recurring): inline-record constructor args need ALL
+  fields (`App {id; span; fn; arg}` — omitting fn/arg is a type error,
+  not a record-update opportunity).
+- Tests now: 36 (M1/M2) + 26 (M4) green; differential harness 24/24
+  across refeval / CL twin / tuna CLI.
+- Deviation: plan's "parent pointers" are realized as (unique node id
+  + on-demand structural path via `Ir.find_id`/`at_path`) — same
+  navigation capability, no mutable parent links. Plan checkbox kept
+  as-is with this note.
+- Deviation: plan's "stored alongside compiled ternary in `programs.ir`
+  " — the artifact type (`Bracket.artifact` + `Provenance.t`) is ready
+  for the M5 store row; actual persistence lands with M5's schema.
 
 ## M5 — store layer
 - [ ] `store/lib/db.ml`: pgx_lwt pool over unix socket /tmp:5434 db tuna user tuna (env-configurable, matching dev.sh)
@@ -223,6 +282,13 @@ Ground rules:
   (actual: fork(fork,_) then fork(leaf,_)). Step count 2 confirmed.
   Recorded, AGENTS.md untouched.
 - M3: CLI subcommand is `tuna eval <corpus-file>` (not bare ternary);
-  corpus files bundle program+args+fuel+cap+expects (see notes).
+  corpus files bundle program+args+fuel+cap+expects (see notes). The
+  bare-ternary subcommand arrived in M4 as `tuna eval-compiled`.
+- M4: "parent pointers" in the IR are realized as unique node ids +
+  on-demand structural paths (`Ir.find_id` / `Ir.at_path`), not mutable
+  parent links — equivalent navigation, simpler OCaml.
+- M4: borge agent-note comments must sit at project level (see M4
+  notes); call-sites.provenance flipped to `partial` (compiler half
+  done, run-time diagnostic wiring lands with M7).
 
 ## Open Questions (blocking notes)
