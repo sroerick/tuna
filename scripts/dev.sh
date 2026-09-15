@@ -42,9 +42,19 @@ opam_env() {
     if [ -d "$LIBEV_DIR" ]; then
       export LIBRARY_PATH="${LIBRARY_PATH:+$LIBRARY_PATH:}$LIBEV_DIR"
     fi
+    # dev postgres also lives outside the switch; its bins need its lib
+    PG_BIN="${TUNA_PG_BIN:-$HOME/pg/bin}"
+    if [ -d "$PG_BIN" ]; then
+      export PATH="$PG_BIN:$PATH"
+      export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$PG_BIN/../lib"
+    fi
     have_opam_env=1
   fi
 }
+
+# switch + bootstrap tool paths (libev, dev postgres) for EVERY path,
+# including bare start-pg which never touches the build
+opam_env
 
 db_up() {
   psql -h "$SOCKET_DIR" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT 1" >/dev/null 2>&1
