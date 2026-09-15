@@ -10,6 +10,12 @@
       carried. NOT yet wired: the M6/M7 run-submission surface that
       injects grant trees as run arguments and the attenuation
       predicate interpretation (args_attenuation is stored, not yet
+      interpreted). M6 wired the VALIDATION half of the surface:
+      POST /api/runs validates every grants[] id live against the
+      grants table (exists, unrevoked, belongs to caller; 403 on
+      failure) — see server/lib/api.ml check_grants. Still to come:
+      prim-boundary per-call checks (M7) and attenuation predicate
+      interpretation (args_attenuation is stored, not yet
       interpreted). Status: grant-token + revocation partial until
       then.|) *)
  (doc "Tuna book chapter: grants — the capability model. Nothing inside the calculus is resolvable by name; a run touches the world only through grant tokens physically passed to it as tree arguments.")

@@ -1,0 +1,3 @@
+(executable
+ (name main)
+ (libraries tuna_server dream lwt lwt.unix unix))

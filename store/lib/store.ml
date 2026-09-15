@@ -336,6 +336,15 @@ let fetch_journals p run_id =
   Db.q ~params:[ p_str run_id ] p select_journals
   >>= fun rows -> Lwt.return (List.map journal_of_row rows)
 
+(* counterfactual fork bookkeeping (journal.counterfactual-edits; the
+   journal copy/chain-rebuild itself goes through append_journal) *)
+let insert_derived_journal p ~run_id ~parent_run_id () =
+  Db.q_unit
+    ~params:[ p_str run_id; p_str parent_run_id ]
+    p
+    "INSERT INTO derived_journals (run_id, parent_run_id) \
+     VALUES ($1::uuid, $2::uuid) ON CONFLICT (run_id) DO NOTHING"
+
 (* chain walk over fetched rows: recompute each row_hash from its
    fields + expected prev hash, and check the linkage. *)
 let verify_chain (js : journal list) : [ `Ok | `Bad of string ] =
