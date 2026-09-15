@@ -1,6 +1,6 @@
 (executable
  (name tuna_tests)
- (libraries tuna alcotest))
+ (libraries tuna tuna_interp alcotest))
 
 (rule
  (alias runtest)
