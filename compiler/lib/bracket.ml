@@ -234,5 +234,8 @@ let compile ?(fuel = default_compile_fuel) ?(size_cap = default_compile_size_cap
     steps = b.steps;
   }
 
-(* Convenience: compile surface source directly. *)
-let compile_source ?fuel ?size_cap src = compile ?fuel ?size_cap (Sexp.parse src)
+(* Convenience: compile surface source directly.  ?dictionary threads
+   the REPL's name->tree bindings into the reader (M9). *)
+let compile_source ?fuel ?size_cap ?(dictionary : (string * Tuna.Tree.t) list = [])
+    src =
+  compile ?fuel ?size_cap (Sexp.parse ~dictionary src)

@@ -164,4 +164,37 @@ echo "$TV" | grep -q '"verify":"failed"' || fail "tampered journal must fail ver
 echo "$TV" | grep -q 'chain broken' || fail "tamper must surface as chain break"
 # restore the row so later smoke runs stay green (row_hash is now wrong
 # either way; the tamper is the finding — re-verify via fork reads only)
+echo "[14] M9: POST /api/repl — eval/def/get/patch/first-diff/dict + transcript chain"
+RP=$(curl -sf -X POST -H "$AUTH" -d '{"command":"eval (lambda (x) x)","inputs":["22102000"]}' \
+  $BASE/api/repl) || fail "repl eval round"
+echo "$RP" | jget "d['round']['kind']" | grep -q eval || fail "round kind"
+echo "$RP" | jget "d['round']['run_id']" | grep -q '[0-9a-f-]' || fail "eval round must be a journaled run"
+DEFR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"def neg %22102000"}' $BASE/api/repl) \
+  || fail "repl def round"
+echo "$DEFR" | jget "d['round']['hash']" | grep -q 1f6cae19 || fail "def must pin the not tree"
+DICTR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"eval (neg %22102000)"}' $BASE/api/repl) \
+  || fail "repl round through the dictionary"
+echo "$DICTR" | jget "d['round']['ternary']" | grep -q 22102000 || fail "dictionary name must substitute"
+# transcript chain: the def round's run row links the previous round
+CHAIN=$(curl -sf -H "$AUTH" $BASE/api/runs/$(echo "$DICTR" | jget "d['round']['run_id']"))
+echo "$CHAIN" | jget "d['run']['parent_run_id']" | grep -q '[0-9a-f-]' \
+  || fail "REPL rounds must chain via parent_run_id"
+# structural commands
+GETR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"get 1"}' $BASE/api/repl) || fail "get round"
+echo "$GETR" | jget "d['round']['ternary']" | grep -q 210200 || fail "get subtree"
+PATCHR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"patch 1 %0"}' $BASE/api/repl) || fail "patch round"
+echo "$PATCHR" | jget "d['round']['ternary']" | grep -q 200 || fail "patch replaces the subtree"
+PH1=$(echo "$DEFR" | jget "d['round']['hash']")
+PH2=$(echo "$PATCHR" | jget "d['round']['hash']")
+FDR=$(curl -sf -X POST -H "$AUTH" -d "{\"command\":\"first-diff $PH1 $PH2\"}" $BASE/api/repl) \
+  || fail "first-diff round"
+echo "$FDR" | jget "d['round']['ternary']" | grep -q '^1$' || fail "first-diff must report the path"
+UNDR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"undef neg"}' $BASE/api/repl) || fail "undef round"
+echo "$UNDR" | jget "d['round']['note']" | grep -q 'undefined neg' || fail "undef note"
+BADR=$(curl -s -X POST -H "$AUTH" -d '{"command":"frobnicate"}' $BASE/api/repl)
+echo "$BADR" | grep -q 'unknown command' || fail "bad command must be a 400 message"
+# unauth
+curl_code -X POST -d '{"command":"dict"}' $BASE/api/repl | grep -q 401 \
+  || fail "repl requires auth"
+
 echo "SMOKE OK: all API chain checks passed"

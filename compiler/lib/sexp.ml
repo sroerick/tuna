@@ -10,9 +10,10 @@
    The reader produces the IR directly (named lambdas, a source span
    and a unique id on every node — ir.ml) and enforces closure at read
    time: unbound variables raise Ir.Error carrying the occurrence's IR
-   path. No defines at this layer (the REPL adds a dictionary later).
-   Diagnostics address programs by IR path; source spans are a human
-   courtesy only (borg/call-sites.borg, provenance). *)
+   path. No defines at this layer (the REPL adds a dictionary later —
+   see the ?dictionary parameter). Diagnostics address programs by IR
+   path; source spans are a human courtesy only (borg/call-sites.borg,
+   provenance). *)
 
 exception Lex_error of int * string
 
@@ -87,7 +88,15 @@ let is_var_atom a =
 
 type pending_unbound = { var_id : int; name : string; off : int }
 
-let parse (src : string) : Ir.t =
+(* parse ?dictionary: the REPL's name->tree dictionary (M9).  A free
+   occurrence of a name in the dictionary is read as a tree LITERAL of
+   the bound value, in place — capture-safe by construction, because a
+   lambda parameter that shadows the name is already in [scope] when
+   the occurrence is parsed (it becomes a Var, not a literal).  A free
+   occurrence NOT in the dictionary is still a pending unbound error. *)
+let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t =
+  let dict = Hashtbl.create 8 in
+  List.iter (fun (n, t) -> Hashtbl.replace dict n t) dictionary;
   let toks = Array.of_list (lex src) in
   let n = Array.length toks in
   let pos = ref 0 in
@@ -211,12 +220,21 @@ let parse (src : string) : Ir.t =
               | Some _ ->
                   let sp : Ir.span = { off; len = String.length a } in
                   Var ({ id = fresh (); span = sp; name = a })
-              | None ->
-                  let vid = fresh () in
-                  pending :=
-                    { var_id = vid; name = a; off } :: !pending;
-                  (* placeholder node; will abort after the walk below *)
-                  Var ({ id = vid; span = { off; len = String.length a }; name = a }))
+              | None -> (
+                  (try
+                     (* dictionary-bound name (M9): the REPL's defines are
+                        read as literal trees — compile IS reduction keeps
+                        holding, and the value's tree appears in the tags
+                        under the occurrence's own span *)
+                     let tree = Hashtbl.find dict a in
+                     let sp : Ir.span = { off; len = String.length a } in
+                     Tree_lit ({ id = fresh (); span = sp; tree })
+                   with Not_found ->
+                     let vid = fresh () in
+                     pending :=
+                       { var_id = vid; name = a; off } :: !pending;
+                     (* placeholder node; will abort after the walk below *)
+                     Var ({ id = vid; span = { off; len = String.length a }; name = a }))))
             else
               raise
                 (Ir.Error

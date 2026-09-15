@@ -11,6 +11,11 @@
      GET  /api/runs/:id                     row + journal
      GET  /api/journals/:run_id
      POST /api/journals/:run_id/fork        derived (counterfactual) journal
+     POST /api/repl                         the REPL round (M9: eval/def/get/
+                                            patch/first-diff/dict under the
+                                            caller's identity dictionary; eval
+                                            + def rounds are journaled runs
+                                            chained via repl_state)
 
    Identity bootstrap is the server binary's job (bin/main.ml): read
    TUNA_BOOTSTRAP_TOKEN or generate one, print it, insert the root
@@ -158,31 +163,10 @@ let journal_json (j : Store.journal) : J.t =
 
 (* ir column for compiled programs: provenance (tree path -> IR node
    id + IR path span) — the diagnostics join for journal rows and
-   divergence reports (call-sites.provenance). *)
-let ir_json_of_artifact (a : B.artifact) : J.t =
-  let span_of_id id =
-    match Tuna_compiler.Ir.find_id a.B.ir id with
-    | None -> None
-    | Some ip -> (
-        match Tuna_compiler.Ir.at_path a.B.ir ip with
-        | None -> None
-        | Some n ->
-            let { Tuna_compiler.Ir.off; len } = Tuna_compiler.Ir.span_of n in
-            Some (`Assoc [ ("off", `Int off); ("len", `Int len) ]))
-  in
-  `Assoc
-    [ ("kind", `String "compiled")
-    ; ("steps", `Int a.B.steps)
-    ; ( "tags"
-      , `List
-          (List.map
-             (fun (path, id) ->
-               `Assoc
-                 [ ( "path"
-                   , `String (String.concat "" (List.map string_of_int path)) )
-                 ; ("ir", `Int id)
-                 ; ("span", (match span_of_id id with Some s -> s | None -> `Null)) ])
-             a.B.tags) ) ]
+   divergence reports (call-sites.provenance).  Delegates to Repl_cmd
+   (the canonical definition; no module cycle, Repl_cmd never imports
+   Api). *)
+let ir_json_of_artifact = Repl_cmd.ir_json_of_artifact
 
 let program_json (p : Store.program) : J.t =
   let size =
@@ -588,6 +572,54 @@ let fork_journal pool _auth req =
                       ; ("verify", verdict_json row.Store.r_id v)
                       ; ("journal", `List (List.map journal_json njs)) ])))
 
+(* -- REPL (M9): the agent surface of the round-based REPL ------------- *)
+
+(* Body: {"command": "eval (lambda (x) x)"} — or {"term": ...} as
+   shorthand for a bare eval round; optional inputs[] / grants[] /
+   fuel / size_cap apply to eval rounds exactly like POST /api/runs.
+   Journaled rounds chain via repl_state (one parent chain per
+   identity); GET /api/runs/:id verifies them like any run. *)
+let outcome_json (o : Repl_cmd.outcome) : J.t =
+  `Assoc
+    [ ("kind", `String o.Repl_cmd.o_kind)
+    ; ("status", opt_str o.Repl_cmd.o_status)
+    ; ("ternary", `String o.Repl_cmd.o_ternary)
+    ; ("hash", `String o.Repl_cmd.o_hash)
+    ; ("steps", `Int o.Repl_cmd.o_steps)
+    ; ("run_id", opt_str o.Repl_cmd.o_run_id)
+    ; ("program_hash", opt_str o.Repl_cmd.o_program_hash)
+    ; ("note", `String o.Repl_cmd.o_note)
+    ; ( "dictionary"
+      , `List
+          (List.map
+             (fun (n, t) ->
+               `Assoc [ ("name", `String n); ("ternary", `String t) ])
+             o.Repl_cmd.o_dict_rows)) ]
+
+let post_repl pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      let command =
+        match get_string_opt j "command" with
+        | Some c -> Some c
+        | None -> get_string_opt j "term"
+      in
+      let fuel = Option.value (get_int_opt j "fuel") ~default:1_000_000 in
+      let size_cap =
+        Option.value (get_int_opt j "size_cap") ~default:1_000_000
+      in
+      match command with
+      | None -> (j_err "missing \"command\" (or \"term\")")
+      | Some command ->
+          Repl_cmd.execute pool ~caller:auth.auth_id ~command ~fuel
+            ~size_cap ~inputs:(strings_of j "inputs")
+            ~grant_ids:(strings_of j "grants")
+            ()
+          >>= function
+          | Error (code, msg) -> (j_err ~code msg)
+          | Ok o -> (j_ok (`Assoc [ ("round", outcome_json o) ])))
+
 (* -- grants (JSON surface; the M8 UI admin page sits on top) ---------- *)
 
 let post_grant pool auth req =
@@ -647,7 +679,8 @@ let api_routes pool =
     ; Dream.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))
     ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
-    ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool)) ]
+    ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))
+    ; Dream.post "/api/repl" (with_auth pool (post_repl pool)) ]
 
 (* assemble the full router: health + JSON API + human pages + static *)
 let router ?(static_dir = "server/static") pool =

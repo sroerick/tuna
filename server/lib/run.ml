@@ -123,7 +123,7 @@ let kv_of_pool pool : Prims.kv =
    Input trees are content-addressed into the programs table so replay
    can recover them from their hashes (run rows store input HASHES). *)
 let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
-    ~fuel ~size_cap () =
+    ?(parent_run_id = None) ~fuel ~size_cap () =
   let input_hashes = List.map Tuna.Hash.hex_of_tree inputs in
   let rec store_inputs = function
     | [] -> Lwt.return ()
@@ -136,7 +136,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
   store_inputs inputs
   >>= fun () ->
   S.insert_run pool ~program_hash ~inputs:input_hashes ~caller:(Some caller)
-    ~fuel ~size_cap ()
+    ~parent_run_id ~fuel ~size_cap ()
   >>= fun run_id ->
   grant_map pool grant_ids
   >>= fun gmap ->
@@ -227,8 +227,11 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
 (* Shared synchronous execution: up-front grant validation, program
    fetch, run row + boundary execution.  Lives in Run (not Api) so the
    page layer can use it without a module cycle (Program -> Run, while
-   Api -> Pages -> Program).  Used by post_run and the M8 run form. *)
-let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel ~size_cap () :
+   Api -> Pages -> Program).  Used by post_run, the M8 run form, and
+   the M9 REPL's journaled rounds (parent_run_id chains the per-session
+   transcript). *)
+let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
+    ?(parent_run_id = None) ~size_cap () :
     (S.run * S.journal list, int * string) result Lwt.t =
   if fuel < 1 || size_cap < 1 then
     Lwt.return (Error (400, "fuel and size_cap must be >= 1"))
@@ -265,6 +268,6 @@ let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel ~size_c
                         | Ok program ->
                             execute pool ~caller ~grant_ids ~program_hash
                               ~program ~ir_json:prog.S.p_ir ~inputs:input_trees
-                              ~fuel ~size_cap ()
+                              ~parent_run_id ~fuel ~size_cap ()
                             >>= fun (row, js) -> Lwt.return (Ok (row, js))))))
 

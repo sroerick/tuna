@@ -1,7 +1,8 @@
 #!/bin/bash
-# M8 acceptance smoke: exercise the whole htmx UI (server-rendered
-# pages, session-cookie auth, htmx fragments, no-JS degradation)
-# against a live server (scripts/dev.sh start).  Exit 0 on green.
+# M8+M9 acceptance smoke: exercise the whole htmx UI (server-rendered
+# pages, session-cookie auth, htmx fragments, no-JS degradation) plus
+# the M9 REPL (dictionary rounds, structural commands) against a live
+# server (scripts/dev.sh start).  Exit 0 on green.
 #
 # Env:
 #   TUNA_HTTP_PORT   server port   (default 18090)
@@ -128,7 +129,43 @@ curl -sf -b "$JAR" -H 'HX-Request: true' --data-urlencode 'source=(q x)' \
   "$BASE/repl/eval" | grep -q 'compile error' || fail "repl must surface compile errors"
 curl -sf -b "$JAR" "$BASE/repl" | grep -q 'repl' || fail "repl page"
 
-echo "[14] grants admin: page, mint (htmx), revoke (htmx), unknown prim 400"
+echo "[14] repl M9: define, dictionary round-trip, get/patch/first-diff commands"
+# a define is a journaled round: its result links a run row
+DEF_FRAG=$(curl -sf -b "$JAR" -H 'HX-Request: true' \
+  --data-urlencode 'source=def neg %22102000' "$BASE/repl/eval") \
+  || fail "repl def round"
+echo "$DEF_FRAG" | grep -q 'round: def' || fail "def fragment"
+echo "$DEF_FRAG" | grep -q 'defined neg' || fail "def note"
+echo "$DEF_FRAG" | grep -q 'journaled' || fail "def must link its journaled run"
+# the dictionary name now reads as a literal tree: eval (neg %0) = true
+curl -sf -b "$JAR" -H 'HX-Request: true' --data-urlencode 'source=eval (neg %0)' \
+  "$BASE/repl/eval" | grep -q '<pre class="code">10</pre>' \
+  || fail "dictionary-bound name must substitute"
+# shadowing: (lambda (neg) (neg %0)) must NOT see the dictionary value
+# (applied to the not tree: shadowed neg applies its arg -> "10")
+SHADOW=$(curl -sf -b "$JAR" -H 'HX-Request: true' \
+  --data-urlencode 'source=eval ((lambda (neg) (neg %0)) %22102000)' \
+  "$BASE/repl/eval") || fail "shadow round"
+echo "$SHADOW" | grep -q 'badge ok">normal' || fail "shadow eval"
+# structural commands on the last round's result (the shadow round
+# gave 10 = Stem Leaf, so path 0 is its stem child)
+curl -sf -b "$JAR" -H 'HX-Request: true' --data-urlencode 'source=get 0' \
+  "$BASE/repl/eval" | grep -q 'subtree at path 0' || fail "get command"
+curl -sf -b "$JAR" -H 'HX-Request: true' \
+  --data-urlencode 'source=patch 0 %22102000' \
+  "$BASE/repl/eval" | grep -q 'round: patch' || fail "patch round"
+curl -sf -b "$JAR" -H 'HX-Request: true' --data-urlencode 'source=badcommand' \
+  "$BASE/repl/eval" | grep -q 'unknown command' || fail "bad command surfaced"
+# the repl page lists the dictionary
+curl -sf -b "$JAR" "$BASE/repl" | grep -q '<td>neg</td>' \
+  || fail "repl page must list the dictionary"
+# undef clears it
+curl -sf -b "$JAR" -H 'HX-Request: true' --data-urlencode 'source=undef neg' \
+  "$BASE/repl/eval" | grep -q 'undefined neg' || fail "undef round"
+curl -sf -b "$JAR" "$BASE/repl" | grep -q '<td>neg</td>' \
+  && fail "undef must remove the dictionary entry" || true
+
+echo "[15] grants admin: page, mint (htmx), revoke (htmx), unknown prim 400"
 curl -sf -b "$JAR" "$BASE/grants" | grep -q 'args_attenuation' || fail "grants page"
 curl -sf -b "$JAR" -H 'HX-Request: true' -d 'prim=echo&args_attenuation={}' \
   "$BASE/grants/mint" | grep -q 'minted' || fail "mint fragment"
@@ -139,7 +176,7 @@ curl -sf -b "$JAR" -H 'HX-Request: true' -X POST "$BASE/grants/$GID/revoke" \
 curl_code -b "$JAR" -H 'HX-Request: true' -d 'prim=nope&args_attenuation={}' \
   "$BASE/grants/mint" | grep -q 400 || fail "unknown prim must 400"
 
-echo "[15] verify button detects out-of-band journal tamper"
+echo "[16] verify button detects out-of-band journal tamper"
 TGRANT=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" -d '{"prim":"echo","args_attenuation":{}}' \
   "$BASE/api/grants" | jget "d['id']") || fail "tamper-test grant"
 THASH=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" \
@@ -156,7 +193,7 @@ curl -sf -b "$JAR" -H 'HX-Request: true' -X POST "$BASE/runs/$TRUN/verify" \
 curl -sf -b "$JAR" "$BASE/runs/$TRUN" | grep -q 'badge ok">normal' \
   || fail "tampered run row still shows recorded status (history immutable)"
 
-echo "[16] logout drops the session"
+echo "[17] logout drops the session"
 curl_code -b "$JAR" "$BASE/logout" | grep -q 303 || fail "logout must redirect"
 curl -s -b "$JAR" -c "$JAR" -o /dev/null "$BASE/logout"
 grep -q 'tuna_session' "$JAR" && fail "session cookie must be expired by logout" || true

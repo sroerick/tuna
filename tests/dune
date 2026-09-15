@@ -16,6 +16,16 @@
  (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest-lwt
    lwt))
 
+(executable
+ (name repl_tests)
+ (libraries tuna tuna_interp tuna_compiler tuna_server alcotest))
+
+(rule
+ (alias runtest)
+ (deps repl_tests.exe)
+ (action
+  (run %{exe:repl_tests.exe})))
+
 (rule
  (alias runtest)
  (deps tuna_tests.exe)

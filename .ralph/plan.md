@@ -335,11 +335,69 @@ Ground rules:
   differential 24/24, smoke-api 13/13, smoke-ui 16/16.
 
 ## M9 — REPL
-- [ ] name→tree dictionary per identity; REPL round = compile+eval a term against dictionary; defines update dictionary rows (new table in migration 0002)
-- [ ] REPL transcript journaled as a run row (parent_run_id chain per session)
-- [ ] structural commands: get <path>, eval <term>, patch <path>, first-diff <hashA,hashB>
-- [ ] served on the REPL page (htmx) AND via POST /api/repl (agent surface)
-- [ ] commit
+- [x] name→tree dictionary per identity; REPL round = compile+eval a term against dictionary; defines update dictionary rows (new table in migration 0004; 0002 was already prim-kv)
+- [x] REPL transcript journaled as a run row (parent_run_id chain per session)
+- [x] structural commands: get <path>, eval <term>, patch <path>, first-diff <hashA,hashB>
+- [x] served on the REPL page (htmx) AND via POST /api/repl (agent surface)
+- [x] commit
+
+## M9 notes (loop: M9)
+
+- Layout: `migrations/0004-repl-dict.sql` (repl_dict keyed
+  (identity_id, name) + repl_state — the identity's REPL session
+  pointer); store accessors `dict_get/dict_set/dict_list/dict_del` +
+  `repl_state_get/put`; **`server/lib/repl_cmd.ml`** = the round engine
+  (pure command parser + Lwt execution; used by BOTH the page and the
+  API — one engine, no second brain); `compiler` gained
+  `parse/compile_source ?dictionary`.
+- Dictionary mechanics: a dictionary-bound name is read as a TREE
+  LITERAL at parse time — capture-safe by construction, because a
+  lambda parameter shadowing the name is already in scope when the
+  occurrence is read (it stays a Var). Compile IS reduction still
+  holds; the defined tree appears in the tags under the occurrence's
+  span. Tests: dict round-trip (f=not: (lambda (y) (f y)) compiles to
+  the not tree; (f %0) fully reduces at compile) + capture test
+  (hash of (lambda (f) (f %0)) identical with/without f=not).
+- Journaled rounds (eval, def) are FIRST-CLASS RUNS: the artifact is
+  upserted (with the full provenance ir column — API's
+  ir_json_of_artifact now delegates to Repl_cmd's to avoid divergence)
+  and executed through the SAME Run.execute_run boundary as
+  POST /api/runs (live grant checks, prim boundary, journaling).
+  Each round links parent_run_id to repl_state.last_run_id → the
+  transcript is a walkable parent chain per identity; smoke-api [14]
+  asserts the chain. def rounds run too (result = the defined tree).
+- Structural commands (get/patch/first-diff/dict/undef) are store
+  queries — journaled as NO runs (nothing computes); patch still
+  produces a new immutable program row (CAS pinned by the in-hand
+  subtree hash; concurrent change → conflict message). get/patch
+  default to the LAST ROUND'S result tree (repl_state → run row →
+  result_ternary), or an explicit program hash.
+- `POST /api/repl`: {"command": ...} or {"term": ...} + optional
+  inputs[]/grants[]/fuel/size_cap (eval rounds). Errors are values
+  (code,msg) — 400 malformed/unknown/parse, 403 grant, 404 unknown
+  hash, 500 store faults; auth 401 same as everything else.
+- Command grammar: eval <term> / def <name> <term> / undef <name> /
+  get <path> [hash] / patch <path> <new_ternary|%%literal> [hash] /
+  first-diff <hashA> <hashB> / dict; a bare term = eval. Paths follow
+  the ternary/provenance convention (0=stem-child 1=fork-left
+  2=fork-right) — NOTE: "0" only addresses stem children; a fork's
+  children are 1/2 (this bit twice).
+- BUGS FIXED en route: (1) dict_list selected 4 columns but decoded
+  name=r0/ternary=r1 — the name column was being compiled as ternary
+  ("unexpected character 'n'"); (2) parent_run_id never plumbed into
+  Run.execute_run (REPL rounds were orphan roots) — execute/execute_run
+  now take ?parent_run_id; (3) patch's new_ternary accepts the surface
+  %%-prefixed literal or the bare ternary.
+- Smoke: smoke-api.sh 14 sections (+[14] POST /api/repl: eval/def/get/
+  patch/first-diff/undef/bad-command/401 + parent-chain assertion);
+  smoke-ui.sh 17 sections (+[14] REPL M9: def, dictionary read,
+  CAPTURE (shadowing) round, get/patch, bad command, page dictionary
+  table, undef). Tests now: 36 unit + 3 repl + 12 prim + 11 store =
+  62 alcotest, differential 24/24.
+- Compiler note: `parse ?dictionary` lives in sexp.ml (the READER is
+  where names resolve); bracket.compile_source just threads it.
+  Sexp.parse keeps its pending-unbound machinery for names outside
+  the dictionary.
 
 ## M10 — acceptance + findings
 - [ ] scripts/verify-*.sh, one per acceptance.criteria item 1–7 (scripts callable in any order, each exit 0 on green)
@@ -433,8 +491,8 @@ Ground rules:
 
 - M8: the REPL page is the M8 SLICE (pure compile+eval round-trip);
   the plan's M9 items (name->tree dictionary per identity, defines,
-  journaled REPL transcripts as run rows, POST /api/repl) remain open
-  and are the next milestone.
+  journaled REPL transcripts as run rows, POST /api/repl) CLOSED in
+  the M9 loop — see M9 notes.
 - M8: session-cookie auth carries the identity token itself (v0; ONE
   credential store, no session table) — upgrade path noted in M8
   notes. Also: plan's "pretty tree render" is a box-drawing ASCII

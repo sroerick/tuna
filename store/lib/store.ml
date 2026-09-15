@@ -372,6 +372,75 @@ let verify_chain (js : journal list) : [ `Ok | `Bad of string ] =
   in
   go genesis js
 
+(* -- REPL dictionary + session state (M9) ----------------------------- *)
+
+type dict_entry = {
+  d_identity : string
+; d_name : string
+; d_ternary : string
+; d_updated_at : string option
+}
+
+let dict_entry_of_row r identity_id name =
+  { d_identity = identity_id
+  ; d_name = name
+  ; d_ternary = text r 1 ("repl_dict." ^ name)
+  ; d_updated_at = opt_text r 2 }
+
+let select_dict_entry =
+  "SELECT identity_id::text, ternary, updated_at::text FROM repl_dict \
+   WHERE identity_id = $1::uuid AND name = $2"
+
+let dict_get p ~identity_id ~name =
+  Db.q ~params:[ p_str identity_id; p_str name ] p select_dict_entry
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] -> Lwt.return (Some (dict_entry_of_row r identity_id name))
+  | _ -> store_error "repl_dict: multiple rows for %s/%s" identity_id name
+
+let dict_set p ~identity_id ~name ~ternary =
+  Db.q_unit
+    ~params:[ p_str identity_id; p_str name; p_str ternary ]
+    p
+    "INSERT INTO repl_dict (identity_id, name, ternary) VALUES ($1::uuid, $2, $3) \
+     ON CONFLICT (identity_id, name) \
+     DO UPDATE SET ternary = EXCLUDED.ternary, updated_at = now()"
+
+let dict_del p ~identity_id ~name =
+  Db.q_unit
+    ~params:[ p_str identity_id; p_str name ]
+    p
+    "DELETE FROM repl_dict WHERE identity_id = $1::uuid AND name = $2"
+
+let dict_list p ~identity_id =
+  Db.q ~params:[ p_str identity_id ] p
+    "SELECT name, ternary, updated_at::text FROM repl_dict \
+     WHERE identity_id = $1::uuid ORDER BY name"
+  >>= fun rows ->
+  Lwt.return
+    (List.map
+       (fun r -> dict_entry_of_row r identity_id (text r 0 "repl_dict.name"))
+       rows)
+
+(* session pointer: the identity's last journaled REPL round.  Each new
+   run row links parent_run_id = this value, forming the per-session
+   transcript chain (runs.parent_run_id). *)
+let repl_state_get p ~identity_id =
+  Db.q ~params:[ p_str identity_id ] p
+    "SELECT last_run_id::text FROM repl_state WHERE identity_id = $1::uuid"
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] -> Lwt.return (Some (text r 0 "repl_state.last_run_id"))
+  | _ -> store_error "repl_state: multiple rows for %s" identity_id
+
+let repl_state_put p ~identity_id ~run_id =
+  Db.q_unit
+    ~params:[ p_str identity_id; p_str run_id ]
+    p
+    "INSERT INTO repl_state (identity_id, last_run_id) VALUES ($1::uuid, $2::uuid) \
+     ON CONFLICT (identity_id) \
+     DO UPDATE SET last_run_id = EXCLUDED.last_run_id, updated_at = now()"
+
 (* -- prim kv (store/get + store/put; M7) ----------------------------- *)
 
 (* Fetch by the key's content hash. Returns the (key, value) pair. *)
