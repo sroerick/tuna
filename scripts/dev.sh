@@ -62,15 +62,25 @@ apply_migrations() {
   fi
 }
 
+ensure_db() {
+  # The tuna db/user may be missing even when the cluster is up
+  # (dropped by hand, initdb re-run, etc.) — create it on EVERY path.
+  if ! psql -h "$SOCKET_DIR" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT 1" >/dev/null 2>&1; then
+    psql -h "$SOCKET_DIR" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME" >/dev/null
+  fi
+}
+
 start_pg() {
   if [ -f "$pg_pidfile" ] && kill -0 "$(cat "$pg_pidfile")" 2>/dev/null; then
     echo "[dev] pg already running (pid $(cat "$pg_pidfile"))"
+    ensure_db
     apply_migrations
     return
   fi
   if [ -d "$DATA_DIR" ] && pg_ctl -D "$DATA_DIR" status >/dev/null 2>&1; then
     echo "[dev] pg already running (cluster_exists)"
     pg_ctl -D "$DATA_DIR" status | head -1
+    ensure_db
     apply_migrations
     return
   fi
@@ -82,10 +92,7 @@ start_pg() {
   pg_ctl -D "$DATA_DIR" -o "-k $SOCKET_DIR -p $DB_PORT" -l "$DEV_DIR/pg.log" start
   sleep 1
   until db_up; do sleep 0.5; done
-  if ! psql -h "$SOCKET_DIR" -p "$DB_PORT" -U "$DB_USER" -d postgres -tAc \
-       "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1; then
-    psql -h "$SOCKET_DIR" -p "$DB_PORT" -U "$DB_USER" -d postgres -c "CREATE DATABASE $DB_NAME" >/dev/null
-  fi
+  ensure_db
   apply_migrations
   echo "[dev] pg ready (db=$DB_NAME on :$DB_PORT)"
 }
@@ -104,9 +111,23 @@ start_server() {
   fi
   opam_env
   echo "[dev] starting server on :$HTTP_PORT (logs: $DEV_DIR/server.log)"
-  TUNA_DB_HOST="$SOCKET_DIR" TUNA_DB_PORT="$DB_PORT" TUNA_DB_NAME="$DB_NAME" \
+  # Re-boot discipline: if root already exists the server requires its
+  # ORIGINAL token.  dev.sh keeps the generated token in
+  # $DEV_DIR/bootstrap.token (first boot: absent -> server prints one
+  # to the log, we capture it); operator TUNA_BOOTSTRAP_TOKEN wins.
+  BOOT_TOKEN="${TUNA_BOOTSTRAP_TOKEN:-}"
+  [ -n "$BOOT_TOKEN" ] || BOOT_TOKEN=$(sed -n 's/^TUNA_BOOTSTRAP_TOKEN=//p' "$DEV_DIR/bootstrap.token" 2>/dev/null | tail -1)
+  [ -n "$BOOT_TOKEN" ] || BOOT_TOKEN=$(sed -n 's/^TUNA_BOOTSTRAP_TOKEN=//p' "$DEV_DIR/server.log" 2>/dev/null | tail -1)
+  echo "[dev] boot token: ${BOOT_TOKEN:+known}${BOOT_TOKEN:-none (first boot)}"
+  env TUNA_DB_HOST="$SOCKET_DIR" TUNA_DB_PORT="$DB_PORT" TUNA_DB_NAME="$DB_NAME" \
     TUNA_DB_USER="$DB_USER" TUNA_HTTP_PORT="$HTTP_PORT" \
+    $( [ -n "$BOOT_TOKEN" ] && printf 'TUNA_BOOTSTRAP_TOKEN=%s' "$BOOT_TOKEN" ) \
     nohup "$ROOT/_build/default/server/bin/main.exe" >"$DEV_DIR/server.log" 2>&1 &
+  sleep 0.3
+  # persist a freshly generated token (after the log got its line)
+  if grep -q '^TUNA_BOOTSTRAP_TOKEN=' "$DEV_DIR/server.log" 2>/dev/null; then
+    grep '^TUNA_BOOTSTRAP_TOKEN=' "$DEV_DIR/server.log" | tail -1 > "$DEV_DIR/bootstrap.token"
+  fi
   echo $! > "$sr_pidfile"
   sleep 1
   if curl -sS -m 3 "http://127.0.0.1:$HTTP_PORT/health" >/dev/null 2>&1; then

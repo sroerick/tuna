@@ -1,16 +1,18 @@
 (project tuna-journal
-   (* agent note (|M5 (store loop): the STORE half of row-schema is
-      implemented and tested (store/lib/store.ml: journal_event,
-      append_journal, fetch_journals, verify_chain; tests/store_tests.ml:
-      journals suite — append ordering, genesis chaining, row-hash
-      linkage, and a tamper-in-place case the chain walk catches).
-      row_hash = sha256 over a fixed-field \x1f-separated encoding of
-      (run_id, seq, callsite_path, prim, prim_contract, grant_id,
-      args_ternary, result_ternary, error, wall_ms, prev_hash), with
-      raw payload ternaries hashed (not column hashes) so payload and
-      chain tampering are both caught. NOT yet wired: the boundary
-      writer inside the run loop and replay consumption (M7). Status:
-      partial until then.|) *)
+   (* agent note (|M7 (prim-boundary loop): row-schema, recorded-
+      environment, and counterfactual-edits are now IMPLEMENTED.
+      Boundary writer: server/lib/run.ml (Run.execute) journals every
+      prim event (callsite_path resolved from provenance tags,
+      prim_contract "1", grant_id, args/result ternary inline, wall_ms)
+      through Store.append_journal's sha256 chain. Replay consumption:
+      server/lib/replay.ml (Replay.execute_fed) answers prim calls
+      sequentially from journal rows. Counterfactual: /api/journals/:id/f
+      edits + Replay.reexecute (tests/store_tests.ml m7 suites; smoke
+      [12]-[13]). v0 schema deviations from the details text below:
+      inline payloads are ternary TEXT (args_ternary/result_ternary)
+      not jsonb; no host_build column yet; oversized payloads are
+      answered+journaled as errors under Prims.payload_cap (65536)
+      rather than blob-spilled. |) *)
  (doc "Tuna book chapter: journal — the effect record. Every boundary event is journaled; the journal is the recorded environment and the only non-derivable artifact in the system.")
  (status planned)
  (convention ocaml-dune)
@@ -19,7 +21,7 @@
 
   (subsection row-schema
    (doc "Journal row shape and storage")
-   (status partial)
+   (status implemented)
    (details
     (doc (|
          One row per boundary event, within-run sequence numbered:
@@ -58,7 +60,7 @@
 
   (subsection recorded-environment
    (doc "The journal IS the environment: replay needs nothing live")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          The semantics that make the thesis work: a faithful replay
@@ -83,7 +85,7 @@
 
   (subsection counterfactual-edits
    (doc "Editing journals: counterfactual replay and mocks without infrastructure")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          Journals are data, so they can be edited: copy a journal,

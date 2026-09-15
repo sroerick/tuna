@@ -1,4 +1,18 @@
 (project tuna-replay
+ (* agent note (|M7 loop: faithful (Replay.verify / verify_and_record,
+    server/lib/replay.ml) + divergence-surface (Diverged{div_seq;
+    callsite_path; prim; reason; first_diff_path; recorded_hash;
+    replayed_hash} surfaced as JSON via api.ml verdict_json) are
+    implemented and tested (tests/store_tests.ml m7 suites: replay
+    identity, grant-denial run verifies, tamper -> bad chain, edited
+    fork re-executes; scripts/smoke-api.sh [11]-[13]). Replay identity
+    = chain walk + sequential journal-fed re-execution (the SAME
+    Prim_eval engine instance, so step accounting cannot drift) +
+    status/result-hash/step-count equality against the run row.
+    prim-versioning: prim_contract "1" is pinned per row and replay is
+    unconditional (server/lib/prims.ml), but contract-mismatch fields
+    in the divergence surface and live replay remain open; the
+    hand-checked first_diff_path corpus is M10 acceptance.|) *)
  (doc "Tuna book chapter: replay — verification, divergence detection, and the debugging surface. Replay is a consistency proof between the pure core and the journal, not a debugging afterthought.")
  (status planned)
  (convention ocaml-dune)
@@ -7,7 +21,7 @@
 
   (subsection faithful
    (doc "Faithful replay — the verification primitive")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          Faithful replay of a run: load program hash + input hashes,
@@ -65,7 +79,7 @@
 
   (subsection divergence-surface
    (doc "First-divergence reporting: diffable, not readable")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          Design target: the debugging surface is indexed structure for
@@ -95,7 +109,7 @@
 
   (subsection prim-versioning
    (doc "Pinning the prim contract: what a journal does and does not pin")
-   (status planned)
+   (status partial)
    (details
     (doc (|
          A journal pins what the host RETURNED, under prim_contract and

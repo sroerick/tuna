@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS grants (
   prim text NOT NULL,
   args_attenuation jsonb NOT NULL DEFAULT '{}',
   caller uuid NOT NULL REFERENCES identities(id),
-  minted_by uuid NULL REFERENCES grants(id),
+  minted_by uuid NULL REFERENCES identities(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   revoked_at timestamptz NULL);
 

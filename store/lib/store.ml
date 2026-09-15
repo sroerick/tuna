@@ -372,6 +372,27 @@ let verify_chain (js : journal list) : [ `Ok | `Bad of string ] =
   in
   go genesis js
 
+(* -- prim kv (store/get + store/put; M7) ----------------------------- *)
+
+(* Fetch by the key's content hash. Returns the (key, value) pair. *)
+let prim_get p key_ternary =
+  let kh = Tuna.Hash.hex_of_string key_ternary in
+  Db.q ~params:[ p_str kh ] p "SELECT key_ternary, value_ternary FROM prim_kv WHERE key_hash = $1"
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] -> Lwt.return (Some (text r 0 "prim_kv.key", text r 1 "prim_kv.value"))
+  | _ -> store_error "prim_kv: multiple rows for key %s" kh
+
+let prim_put p ~key_ternary ~value_ternary =
+  let kh = Tuna.Hash.hex_of_string key_ternary in
+  Db.q_unit
+    ~params:[ p_str kh; p_str key_ternary; p_str value_ternary ]
+    p
+    "INSERT INTO prim_kv (key_hash, key_ternary, value_ternary) \
+     VALUES ($1, $2, $3) \
+     ON CONFLICT (key_hash) DO UPDATE SET value_ternary = EXCLUDED.value_ternary, \
+     updated_at = now()"
+
 (* -- grants ---------------------------------------------------------- *)
 
 type grant = {

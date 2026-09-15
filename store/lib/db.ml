@@ -75,6 +75,12 @@ let q ?params p sql = with_pool p (fun c -> Pg.execute ?params c sql)
 let q_unit ?params p sql = with_pool p (fun c -> Pg.execute_unit ?params c sql)
 
 let apply_migrations p ~dir =
+  (* ensure the bookkeeping table exists before querying it — on a
+     fresh database the first migration file is what creates it *)
+  q_unit p
+    "CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, \
+     applied_at timestamptz NOT NULL DEFAULT now())"
+  >>= fun () ->
   let files =
     Sys.readdir dir |> Array.to_list
     |> List.filter (fun f -> Filename.check_suffix f ".sql")

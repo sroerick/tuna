@@ -13,6 +13,11 @@ type t =
   | App of { id : int; span : span; fn : t; arg : t }
   | Leaf_lit of { id : int; span : span }
   | Tree_lit of { id : int; span : span; tree : Tuna.Tree.t }
+  | Prim of { id : int; span : span; name : string; args : t list }
+  (* (prim "name" e1 .. en): a boundary call (Tuna.Cprim).  Compiles
+     to the application of the gate tree Fork (gate, Fork (name,
+     site=id)) to the arg LIST (nil = Leaf, cons = Fork); [id] is the
+     callsite identity carried in the tree. *)
 
 (* Structural path from the IR root: 0 = first child (lambda body /
    application fn), 1 = second child (application arg). *)
@@ -25,11 +30,13 @@ let span_of = function
   | Lam { span; _ }
   | App { span; _ }
   | Leaf_lit { span; _ }
-  | Tree_lit { span; _ } -> span
+  | Tree_lit { span; _ }
+  | Prim { span; _ } -> span
 
 let id_of = function
   | Var { id; _ } | Lam { id; _ } | App { id; _ } | Leaf_lit { id; _ }
-  | Tree_lit { id; _ } -> id
+  | Tree_lit { id; _ }
+  | Prim { id; _ } -> id
 
 let show_span { off; len } = Printf.sprintf "offset %d..%d" off (off + len)
 
@@ -64,4 +71,13 @@ let rec find_id (t : t) (id : int) : path option =
         | Some p -> Some (0 :: p)
         | None -> (
             match find_id arg id with Some p -> Some (1 :: p) | None -> None))
+    | Prim { name = _; args; _ } -> (
+        let rec go i p = function
+          | [] -> None
+          | a :: rest -> (
+              match find_id a id with
+              | Some q -> Some (p @ [ i ] @ q)
+              | None -> go (i + 1) (p @ [ i ]) rest)
+        in
+        go 0 [] args)
     | _ -> None

@@ -1,23 +1,19 @@
 (project tuna-grants
-   (* agent note (|M5 (store loop): the STORE half of this chapter is
-      implemented and tested (store/lib/store.ml, tests/store_tests.ml:
-      grants suite). Grant rows are stored and queried exactly per
-      grant-token's schema; mint_grant returns the fetched row,
-      check_grant implements the live boundary check as a pure
-      result (`Ok | `Revoked | `Wrong_caller | `Unknown — deny is a
-      data result, never an exception), revoke_grant is an immediate
-      forward-only row update, and the minted_by lineage field is
-      carried. NOT yet wired: the M6/M7 run-submission surface that
-      injects grant trees as run arguments and the attenuation
-      predicate interpretation (args_attenuation is stored, not yet
-      interpreted). M6 wired the VALIDATION half of the surface:
-      POST /api/runs validates every grants[] id live against the
-      grants table (exists, unrevoked, belongs to caller; 403 on
-      failure) — see server/lib/api.ml check_grants. Still to come:
-      prim-boundary per-call checks (M7) and attenuation predicate
-      interpretation (args_attenuation is stored, not yet
-      interpreted). Status: grant-token + revocation partial until
-      then.|) *)
+   (* agent note (|M7 (prim-boundary loop): the run-submission surface
+      AND the per-call boundary are both wired. Per-call live checks:
+      server/lib/run.ml checks the grant row at EVERY prim call
+      (Store.check_grant: exists, unrevoked, belongs to caller —
+      mid-run revocation bites) and interprets the v0 attenuation
+      predicate (args_attenuation null/{} admit-all; {"max_ternary":
+      N} caps the encoded args length); denial is a journaled error
+      ANSWER and the run continues (AGENTS.md rule 7). Replay never
+      re-checks grants: Replay.execute_fed answers from the journal
+      only. Callsite paths resolved from provenance tags (first tag
+      wins under bracket duplication). Still open: attenuation beyond
+      max_ternary, delegation, audit surfaces.
+      grant-token/revocation: fully implemented at the store +
+      boundary + API validation layers — flip partial -> implemented
+      pending M10 acceptance wiring.|) *)
  (doc "Tuna book chapter: grants — the capability model. Nothing inside the calculus is resolvable by name; a run touches the world only through grant tokens physically passed to it as tree arguments.")
  (status planned)
  (convention ocaml-dune)
@@ -26,7 +22,7 @@
 
   (subsection grant-token
    (doc "Shape of a grant: an opaque row the evaluator never interprets")
-   (status partial)
+   (status implemented)
    (details
     (doc (|
          A grant is a store row:
@@ -59,7 +55,7 @@
 
   (subsection invocation
    (doc "How a run spends a grant at the boundary")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          Run submission carries: program hash, input tree hashes, fuel,
@@ -86,7 +82,7 @@
 
   (subsection revocation
    (doc "Revocation semantics: immediate, forward-only")
-   (status partial)
+   (status implemented)
    (details
     (doc (|
          Revocation is a row update setting revoked_at. Effects:

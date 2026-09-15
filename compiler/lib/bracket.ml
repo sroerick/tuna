@@ -41,6 +41,22 @@ let s sid u v = CApp (sid, CApp (sid, CLeaf sid, CApp (sid, CLeaf sid, u)), v)
 
 let i_comb sid = s sid (CApp (sid, CLeaf sid, CLeaf sid)) (CLeaf sid)
 
+(* η-reduction, EXCEPT when the function side is a prim gate tree:
+   eliminating a prim call's application into data would strand the
+   prim where it never fires (the gate must stay in function position
+   of a run-time application). *)
+let rec is_stem_chain (n : int) (m : cterm) : bool =
+  match n with
+  | 0 -> (match m with CLeaf _ -> true | _ -> false)
+  | _ -> (
+      match m with CApp (_, CLeaf _, r) -> is_stem_chain (n - 1) r | _ -> false)
+
+let is_gate_lit (m : cterm) : bool =
+  (* lit-expansion of Fork (gate, _): (Leaf·gate-chain)·anything *)
+  match m with
+  | CApp (_, CApp (_, CLeaf _, g), _) when is_stem_chain 4 g -> true
+  | _ -> false
+
 (* Verbatim port of upstream star_abstraction (with eta). *)
 let rec abstract sid x (m : cterm) : cterm =
   match occurs x m with
@@ -48,7 +64,8 @@ let rec abstract sid x (m : cterm) : cterm =
   | true -> (
       match m with
       | CVar (_, y) when y = x -> i_comb sid
-      | CApp (_, m1, CVar (_, y)) when y = x && not (occurs x m1) ->
+      | CApp (_, m1, CVar (_, y)) when
+          y = x && not (occurs x m1) && not (is_gate_lit m1) ->
           (* η-reduction *)
           m1
       | CApp (_, m1, m2) -> s sid (abstract sid x m1) (abstract sid x m2)
@@ -78,6 +95,16 @@ let rec of_ir (ir : Ir.t) : cterm =
   | App { id; fn; arg; _ } -> CApp (id, of_ir fn, of_ir arg)
   | Leaf_lit { id; _ } -> CLeaf id
   | Tree_lit { id; tree; _ } -> lit id tree
+  | Prim { id; name; args; _ } ->
+      (* The prim call = the application of the gate tree (carrying
+         name + callsite id) to the arg LIST: nil = Leaf, cons =
+         (Leaf·a)·rest.  The gate must remain in function position, so
+         this is emitted as a plain application — never η'd away. *)
+      let rec list_ct = function
+        | [] -> CLeaf id
+        | a :: rest -> CApp (id, CApp (id, CLeaf id, of_ir a), list_ct rest)
+      in
+      CApp (id, lit id (Tuna.Cprim.call_tree ~name ~site:id), list_ct args)
 
 (* ---------- compile-time evaluation (tagged upstream to_tree) ---------- *)
 
@@ -107,8 +134,21 @@ let fire b =
 
 (* Tagged twin of upstream Tree.apply: same match arms, same
    evaluation order. Newly built wrapper nodes are tagged with the id
-   of the application performing them. *)
+   of the application performing them.
+
+   A prim gate tree in FUNCTION position of a compile-reducible
+   application means the prim call would fire while compiling —
+   prims only execute inside a run (with grants + journaling), so
+   that is a compile error, not an effect. *)
 let rec apply b tag a c =
+  (match a with
+   | TFork (_, TStem (_, TStem (_, TStem (_, TStem (_, TLeaf _)))), _) ->
+       raise
+         (Compile_failed
+            "a prim call fired during compile-time evaluation: prims only run \
+             inside a run — wrap the call in a lambda, e.g. (lambda (x) (prim ...))"
+         )
+   | _ -> ());
   match a with
   | TLeaf _ ->
       let r = TStem (tag, c) in

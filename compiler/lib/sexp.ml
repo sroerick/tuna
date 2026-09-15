@@ -65,7 +65,8 @@ let lex (src : string) : token list =
 
 (* A variable atom: identifier characters, not all digits and not all
    ternary digits (bare digit runs are ambiguous — they must be written
-   with % to be tree literals). *)
+   with % to be tree literals).  Quoted strings are reserved for prim
+   names inside (prim ...) and never name variables. *)
 let is_var_atom a =
   let all_ternary =
     String.length a > 0 && String.for_all (fun c -> c = '0' || c = '1' || c = '2') a
@@ -112,6 +113,59 @@ let parse (src : string) : Ir.t =
         let start = !pos - 1 in
         match peek () with
         | Some (Atom (_, "lambda")) -> parse_lambda start scope
+        | Some (Atom (_, "prim")) ->
+            (* (prim "name" args...): boundary call. "prim" is reserved as
+               the head atom of this form. *)
+            advance ();
+            let pname =
+              match peek () with
+              | Some (Atom (soff, s)) when
+                  String.length s >= 2
+                  && s.[0] = '"'
+                  && s.[String.length s - 1] = '"' ->
+                  advance ();
+                  let nm = String.sub s 1 (String.length s - 2) in
+                  if nm = "" then
+                    raise
+                      (Ir.Error
+                         ([], Printf.sprintf "prim: empty name at offset %d" soff));
+                  nm
+              | Some (Atom (_, a)) ->
+                  raise
+                    (Ir.Error
+                       ([],
+                        Printf.sprintf
+                          "prim: expected a quoted name, found %S at offset %d" a
+                          start))
+              | Some RP ->
+                  raise
+                    (Ir.Error
+                       ([], Printf.sprintf "prim: missing name at offset %d" start))
+              | Some LP ->
+                  raise
+                    (Ir.Error
+                       ([],
+                        Printf.sprintf
+                          "prim: expected a quoted name at offset %d, found '('"
+                          start))
+              | None ->
+                  raise
+                    (Ir.Error
+                       ([],
+                        Printf.sprintf "prim: unterminated form at offset %d" start))
+            in
+            let args = ref [] in
+            let rec collect () =
+              match peek () with
+              | Some (Atom (_, _)) | Some LP ->
+                  args := parse_term scope :: !args;
+                  collect ()
+              | _ -> ()
+            in
+            collect ();
+            expect_rp start "prim";
+            let sp : Ir.span = { off = start; len = !pos - start } in
+            Prim { id = fresh (); span = sp; name = pname; args = List.rev !args }
         | _ ->
             (* application: head first, then args; (f a b) folds
                left-assoc as App(App(f,a),b). Every App shares the whole

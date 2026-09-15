@@ -25,13 +25,16 @@ let test_ping () =
   Db.ping p
 
 let test_identities () =
+  (* NOT "root": the dev server bootstraps root with its own token,
+     and bootstrap_identity is get-or-create — a collision would make
+     this test's token verify against someone else's hash. *)
   Db.init (Db.config_from_env ()) >>= fun p ->
-  S.bootstrap_identity p ~name:"root" ~token:"bootstrap-test-token" ()
+  S.bootstrap_identity p ~name:"tuna-test-root" ~token:"bootstrap-test-token" ()
   >>= fun root ->
-  Alcotest.(check string) "root name" "root" root.S.i_name;
+  Alcotest.(check string) "root name" "tuna-test-root" root.S.i_name;
   Alcotest.(check bool) "root admin" true root.S.i_is_admin;
   (* idempotent: second bootstrap is a no-op, same row *)
-  S.bootstrap_identity p ~name:"root" ~token:"other-token" () >>= fun root2 ->
+  S.bootstrap_identity p ~name:"tuna-test-root" ~token:"other-token" () >>= fun root2 ->
   Alcotest.(check string) "same row" root.S.i_id root2.S.i_id;
   (* verify by token *)
   S.verify_token p "bootstrap-test-token" >>= fun found ->
@@ -166,6 +169,233 @@ let test_grants () =
    | `Unknown -> Lwt.return ()
    | _ -> Alcotest.fail "expected unknown")
 
+
+(* -- M7: run boundary + replay --------------------------------------- *)
+
+module Rn = Tuna_server.Run
+module Rp = Tuna_server.Replay
+module Api = Tuna_server.Api
+module C = Tuna_compiler.Bracket
+
+(* compile a source program and persist it (with provenance ir json) *)
+let seed_program p ~caller src =
+  let art = C.compile_source src in
+  let ternary = art.C.ternary in
+  let hash = art.C.hash_hex in
+  let ir_json = Yojson.Basic.to_string (Api.ir_json_of_artifact art) in
+  S.upsert_program p ~hash ~ternary ~ir:(Some ir_json) ~created_by:caller
+  >>= fun _ -> Lwt.return (hash, art)
+
+let expect_verified _run_id = function
+  | Rp.Verified _ -> ()
+  | Rp.Bad_chain msg -> Alcotest.failf "expected verified, got bad chain: %s" msg
+  | Rp.Diverged d ->
+      Alcotest.failf
+        "expected verified, diverged at seq %a: %s"
+        (fun fmt -> function
+           | Some s -> Format.pp_print_int fmt s
+           | None -> Format.pp_print_string fmt "none")
+        d.Rp.div_seq d.Rp.reason
+  | Rp.Unverifiable msg -> Alcotest.failf "expected verified, unverifiable: %s" msg
+
+(* The canonical M7 effectful program: echo the input, then negate it.
+   Journal: exactly one boundary row (echo), carrying the grant and the
+   callsite tree path resolved from the compiled provenance. *)
+let test_run_boundary () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m7-root" ~token:"m7-token" () >>= fun me ->
+  S.mint_grant p ~prim:"echo" ~args_attenuation:"{}" ~caller:me.S.i_id ()
+  >>= fun g ->
+  seed_program p ~caller:(Some me.S.i_id)
+    "(lambda (x) (%22102000 (prim \"echo\" x)))"
+  >>= fun (hash, art) ->
+  let input = Tuna.Canon.parse "10" in
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:(Some (Yojson.Basic.to_string (Api.ir_json_of_artifact art)))
+    ~inputs:[ input ] ~fuel:10000 ~size_cap:100000 ()
+  >>= fun (row, js) ->
+  Alcotest.(check string) "status normal" "normal" (S.Run_status.to_string row.S.r_status);
+  Alcotest.(check int) "one journal row" 1 (List.length js);
+  (match js with
+   | [ j ] ->
+       Alcotest.(check string) "prim" "echo" j.S.j_prim;
+       Alcotest.(check string) "contract pinned" "1" j.S.j_prim_contract;
+       Alcotest.(check (option string)) "grant spent" (Some g.S.g_id)
+         j.S.j_grant_id;
+       Alcotest.(check bool) "callsite path resolved" true
+         (j.S.j_callsite_path <> "");
+       (* the journal input tree is content-addressed for replay *)
+       Alcotest.(check bool) "input stored for replay" true
+         (row.S.r_input_hashes = [ Tuna.Hash.hex_of_tree input ]);
+       (match S.verify_chain js with
+        | `Ok -> ()
+        | `Bad msg -> Alcotest.failf "fresh journal must verify: %s" msg)
+   | _ -> Alcotest.fail "bad journal");
+  (* replay identity: same engine, journal-fed -> verified, same steps *)
+  Rp.verify p ~run:row
+  >>= fun v ->
+  expect_verified row.S.r_id v;
+  (match v with
+   | Rp.Verified outcome ->
+       Alcotest.(check (option int)) "steps match" row.S.r_step_count
+         (Some (Rp.outcome_steps outcome))
+   | _ -> ());
+  (* verify_and_record writes verify_status *)
+  Rp.verify_and_record p ~run_id:row.S.r_id
+  >>= fun _ ->
+  S.fetch_run p row.S.r_id
+  >>= (function
+        | None -> Alcotest.fail "run vanished"
+        | Some r2 ->
+            Alcotest.(check (option string)) "verify_status recorded"
+              (Some "verified") r2.S.r_verify_status;
+            Lwt.return ())
+
+(* grant denial is a journaled error answer; the run continues and the
+   replay still verifies (denial is data, never an exception) *)
+let test_run_denial () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m7-root" ~token:"m7-token" () >>= fun me ->
+  seed_program p ~caller:(Some me.S.i_id)
+    "(lambda (x) (%22102000 (prim \"echo\" x)))"
+  >>= fun (hash, art) ->
+  let input = Tuna.Canon.parse "10" in
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:(None) ~inputs:[ input ] ~fuel:10000
+    ~size_cap:100000 ()
+  >>= fun (row, js) ->
+  Alcotest.(check string) "denied run still normal" "normal"
+    (S.Run_status.to_string row.S.r_status);
+  Alcotest.(check int) "one journaled denial" 1 (List.length js);
+  (match js with
+   | [ j ] ->
+       Alcotest.(check (option string)) "no grant spent" None j.S.j_grant_id;
+       Alcotest.(check bool) "error journaled" true
+         (Option.is_some j.S.j_error)
+   | _ -> Alcotest.fail "bad journal");
+  Rp.verify p ~run:row >>= fun v -> expect_verified row.S.r_id v;
+  Lwt.return ()
+
+(* store/get + store/put through the boundary (migration 0002 prim_kv) *)
+let test_run_store_prims () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m7-root" ~token:"m7-token" () >>= fun me ->
+  (* kv accessors directly, then upsert semantics *)
+  S.prim_put p ~key_ternary:"10" ~value_ternary:"0" >>= fun () ->
+  S.prim_get p "10"
+  >>= (function
+        | Some (k, v) ->
+            Alcotest.(check string) "kv key" "10" k;
+            Alcotest.(check string) "kv value" "0" v;
+            Lwt.return ()
+        | None -> Alcotest.fail "kv roundtrip failed")
+  >>= fun () ->
+  S.prim_put p ~key_ternary:"10" ~value_ternary:"10" >>= fun () ->
+  S.prim_get p "10"
+  >>= (function
+        | Some (_, v) ->
+            Alcotest.(check string) "kv overwrite" "10" v;
+            Lwt.return ()
+        | None -> Alcotest.fail "kv vanished")
+  >>= fun () ->
+  (* a run that reads through the boundary *)
+  S.mint_grant p ~prim:"store/get" ~args_attenuation:"{}"
+    ~caller:me.S.i_id ()
+  >>= fun g ->
+  seed_program p ~caller:(Some me.S.i_id) "(lambda (x) (prim \"store/get\" x))"
+  >>= fun (hash, art) ->
+  let key = Tuna.Canon.parse "10" in
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:(Some (Yojson.Basic.to_string (Api.ir_json_of_artifact art)))
+    ~inputs:[ key ] ~fuel:10000 ~size_cap:100000 ()
+  >>= fun (row, _js) ->
+  Alcotest.(check string) "store/get returns the value" "10"
+    (Option.value row.S.r_result_ternary ~default:"MISSING");
+  Rp.verify p ~run:row >>= fun v -> expect_verified row.S.r_id v;
+  Lwt.return ()
+
+(* journal tampering is caught by the chain walk *)
+let test_tamper_bad_chain () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m7-root" ~token:"m7-token" () >>= fun me ->
+  S.mint_grant p ~prim:"echo" ~args_attenuation:"{}" ~caller:me.S.i_id ()
+  >>= fun g ->
+  seed_program p ~caller:(Some me.S.i_id)
+    "(lambda (x) (%22102000 (prim \"echo\" x)))"
+  >>= fun (hash, art) ->
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:(None) ~inputs:[ Tuna.Canon.parse "10" ]
+    ~fuel:10000 ~size_cap:100000 ()
+  >>= fun (row, _) ->
+  Db.q_unit
+    ~params:[ S.p_str row.S.r_id ]
+    p
+    "UPDATE journals SET result_ternary = '0' WHERE run_id = $1::uuid AND seq = 0"
+  >>= fun () ->
+  S.fetch_run p row.S.r_id
+  >>= (function
+        | None -> Alcotest.fail "run vanished"
+        | Some run ->
+            Rp.verify p ~run
+            >>= fun v ->
+            (match v with
+             | Rp.Bad_chain _ -> Lwt.return ()
+             | _ -> Alcotest.fail "tampered journal must fail the chain walk"))
+
+(* counterfactual fork: the edited answer flows through; history is
+   untouched and the parent still verifies *)
+let test_counterfactual_fork () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m7-root" ~token:"m7-token" () >>= fun me ->
+  S.mint_grant p ~prim:"echo" ~args_attenuation:"{}" ~caller:me.S.i_id ()
+  >>= fun g ->
+  seed_program p ~caller:(Some me.S.i_id)
+    "(lambda (x) (%22102000 (prim \"echo\" x)))"
+  >>= fun (hash, art) ->
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:(None) ~inputs:[ Tuna.Canon.parse "10" ]
+    ~fuel:10000 ~size_cap:100000 ()
+  >>= fun (parent, pjs) ->
+  (* fork with the echo answer replaced by Leaf *)
+  Api.fork p ~parent_run_id:parent.S.r_id
+    ~edits:[ (0, Api.Set_result Tuna.Tree.Leaf) ]
+  >>= fun (derived, djs, v) ->
+  expect_verified derived.S.r_id v;
+  Alcotest.(check (option string)) "derived linked" (Some parent.S.r_id)
+    derived.S.r_parent_run_id;
+  Alcotest.(check int) "same journal length"
+    (List.length pjs) (List.length djs);
+  (* exactly the reachable suffix changed: rows other than seq 0 are
+     copies, seq 0 carries the edited answer *)
+  (match (pjs, djs) with
+   | [ pj ], [ dj ] ->
+       Alcotest.(check bool) "args unchanged" true
+         (Option.equal String.equal pj.S.j_args_ternary
+            dj.S.j_args_ternary);
+       Alcotest.(check string) "edited answer journaled" "0"
+         (Option.value dj.S.j_result_ternary ~default:"MISSING")
+   | _ -> Alcotest.fail "bad journal shape");
+  (* the counterfactual outcome differs from the parent's *)
+  Alcotest.(check bool) "outcomes differ" true
+    (not
+       (String.equal
+          (Option.value parent.S.r_result_ternary ~default:"")
+          (Option.value derived.S.r_result_ternary ~default:"~")));
+  (* history untouched: the parent still verifies *)
+  Rp.verify p ~run:parent
+  >>= fun v ->
+  expect_verified parent.S.r_id v;
+  (* a divergent edit (cleared row) leaves the fork unverifiable *)
+  Api.fork p ~parent_run_id:parent.S.r_id ~edits:[ (0, Api.Clear) ]
+  >>= fun (bad, _, bv) ->
+  (match bv with
+   | Rp.Diverged _ -> Lwt.return ()
+   | _ -> Alcotest.fail "cleared row must diverge the replay")
+  >>= fun () ->
+  Alcotest.(check string) "divergent fork errored" "error"
+    (S.Run_status.to_string bad.S.r_status);
+  Lwt.return ()
+
 let () =
   match Sys.getenv_opt "TUNA_TEST_PG" with
   | None -> print_endline "store tests skipped (TUNA_TEST_PG not set)"
@@ -178,4 +408,11 @@ let () =
          ; ("programs", [ lwt "upsert+fetch" test_programs ])
          ; ("runs", [ lwt "insert/update/fetch/list" test_runs ])
          ; ("journals", [ lwt "append+chain+tamper" test_journals ])
-         ; ("grants", [ lwt "mint/check/revoke" test_grants ]) ])
+         ; ("grants", [ lwt "mint/check/revoke" test_grants ])
+         ; ( "m7"
+           , [ lwt "run boundary + journal + replay identity" test_run_boundary
+             ; lwt "grant denial journaled, replay verifies" test_run_denial
+             ; lwt "store/get+put through the boundary" test_run_store_prims
+             ; lwt "journal tamper -> bad chain" test_tamper_bad_chain
+             ; lwt "counterfactual fork re-executes" test_counterfactual_fork
+             ] ) ])

@@ -1,4 +1,4 @@
 (library
  (name tuna_interp)
- (modules eval)
+ (modules eval prim_eval)
  (libraries tuna))

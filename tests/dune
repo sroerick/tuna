@@ -7,8 +7,17 @@
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
 (executable
+ (name prim_tests)
+ (libraries tuna tuna_interp tuna_compiler alcotest))
+
+(executable
+ (name dbg)
+ (libraries tuna tuna_interp tuna_compiler))
+
+(executable
  (name store_tests)
- (libraries tuna tuna_store pgx alcotest-lwt lwt))
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest-lwt
+   lwt))
 
 (rule
  (alias runtest)
@@ -18,9 +27,9 @@
 
 (rule
  (alias runtest)
- (deps compiler_tests.exe)
+ (deps prim_tests.exe)
  (action
-  (run %{exe:compiler_tests.exe})))
+  (run %{exe:prim_tests.exe})))
 
 ; M5 store integration tests: require a live postgres (scripts/dev.sh
 ; start-pg); skipped silently when it is down.  The migrations tree is

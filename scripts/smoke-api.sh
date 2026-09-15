@@ -14,7 +14,10 @@ LOG="${TUNA_DEV_DIR:-/tmp/tuna-dev}/server.log"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 TOKEN="${TUNA_SMOKE_TOKEN:-}"
-[ -n "$TOKEN" ] || TOKEN=$(grep TUNA_BOOTSTRAP_TOKEN "$LOG" 2>/dev/null | tail -1 | cut -d= -f2)
+# prefer dev.sh's persisted token file (the log only carries it on a
+# first boot; a re-boot with the replayed token prints nothing)
+[ -n "$TOKEN" ] || TOKEN=$(sed -n 's/^TUNA_BOOTSTRAP_TOKEN=//p' "${TUNA_DEV_DIR:-/tmp/tuna-dev}/bootstrap.token" 2>/dev/null | tail -1)
+[ -n "$TOKEN" ] || TOKEN=$(sed -n 's/^TUNA_BOOTSTRAP_TOKEN=//p' "$LOG" 2>/dev/null | tail -1)
 [ -n "$TOKEN" ] || fail "no bearer token: set TUNA_SMOKE_TOKEN or boot the server"
 AUTH="Authorization: Bearer $TOKEN"
 
@@ -105,4 +108,60 @@ psql -h /tmp -p 5434 -U tuna -d tuna -tAc \
   "SELECT parent_run_id FROM derived_journals WHERE run_id='$FORK_ID'" \
   | grep -q "$RUN_ID" || fail "derived_journals row missing"
 
+echo "[10] M7: grants + prim boundary + journal row"
+GRANT_ID=$(curl -sf -X POST -H "$AUTH" --data-binary '{"prim":"echo"}' $BASE/api/grants \
+  | jget "d['id']") || fail "mint echo grant"
+ECHO_HASH=$(curl -sf -X POST -H "$AUTH" --data-binary \
+  '{"source":"(lambda (x) (prim \"echo\" x))"}' $BASE/api/programs | jget "d['hash']") \
+  || fail "POST echo source program"
+PRIM_RUN=$(curl -sf -X POST -H "$AUTH" --data-binary \
+  "{\"program_hash\":\"$ECHO_HASH\",\"inputs\":[\"10\"],\"grants\":[\"$GRANT_ID\"],\"fuel\":1000,\"size_cap\":100000}" \
+  $BASE/api/runs) || fail "POST prim run"
+echo "$PRIM_RUN" | grep -q '"status":"normal"' || fail "prim run must be normal"
+echo "$PRIM_RUN" | grep -q '"prim":"echo"' || fail "prim call must be journaled"
+echo "$PRIM_RUN" | grep -q "\"grant_id\":\"$GRANT_ID\"" || fail "grant must be journaled"
+CALLSITE=$(echo "$PRIM_RUN" | jget "d['journal'][0]['callsite_path']")
+[ -n "$CALLSITE" ] || fail "callsite path must be resolved from provenance"
+echo "$PRIM_RUN" | grep -q '"result_ternary":"2100"' || fail "echo must return the cons-list args"
+# denial without grants is a journaled error answer, run continues
+DENIED=$(curl -sf -X POST -H "$AUTH" --data-binary \
+  "{\"program_hash\":\"$ECHO_HASH\",\"inputs\":[\"10\"],\"fuel\":1000,\"size_cap\":100000}" \
+  $BASE/api/runs) || fail "POST denied run"
+echo "$DENIED" | grep -q '"status":"normal"' || fail "denied run must still be normal"
+echo "$DENIED" | grep -q '"error":"grant denial' || fail "denial must be journaled as error"
+
+PRIM_RUN_ID=$(echo "$PRIM_RUN" | jget "d['run']['id']")
+
+echo "[11] M7: auto-verify on fetch + verify sweeper"
+V=$(curl -sf -H "$AUTH" $BASE/api/runs/$PRIM_RUN_ID | jget "d['run']['verify_status']")
+[ "$V" = "verified" ] || fail "fetch must auto-verify, got $V"
+SWEEP=$(curl -sf -H "$AUTH" "$BASE/api/runs/verify?all=1")
+echo "$SWEEP" | grep -q "\"run_id\":\"$PRIM_RUN_ID\"" || fail "sweeper must include the run"
+echo "$SWEEP" | grep -q '"verify":"verified"' || fail "sweeper must verify"
+
+echo "[12] M7: counterfactual fork re-executes the edited journal"
+CFORK=$(curl -sf -X POST -H "$AUTH" --data-binary \
+  '{"edits":[{"seq":0,"result_ternary":"0"}]}' \
+  $BASE/api/journals/$PRIM_RUN_ID/fork) || fail "counterfactual fork"
+echo "$CFORK" | grep -q "\"forked_from\":\"$PRIM_RUN_ID\"" || fail "fork must link to parent"
+echo "$CFORK" | grep -q '"verify":{"run_id":"' || fail "fork must report a verify verdict"
+FORK_VERIFY=$(echo "$CFORK" | jget "d['verify']['verify']")
+[ "$FORK_VERIFY" = "verified" ] || fail "counterfactual fork must verify, got $FORK_VERIFY"
+FORK_ID=$(echo "$CFORK" | jget "d['run']['id']")
+FORK_RES=$(echo "$CFORK" | jget "d['run']['result_ternary']")
+PRIM_RES=$(echo "$PRIM_RUN" | jget "d['run']['result_ternary']")
+[ "$FORK_RES" != "$PRIM_RES" ] || fail "counterfactual must change the outcome"
+# empty edits = faithful copy, still verified
+COPY=$(curl -sf -X POST -H "$AUTH" --data-binary '{"edits":[]}' \
+  $BASE/api/journals/$PRIM_RUN_ID/fork) || fail "faithful fork"
+echo "$COPY" | jget "d['verify']['verify']" | grep -q verified || fail "faithful fork must verify"
+
+echo "[13] M7: journal tampering caught (out-of-band SQL edit)"
+psql -h /tmp -p 5434 -U tuna -d tuna -q -c \
+  "UPDATE journals SET result_ternary='0' WHERE run_id='$PRIM_RUN_ID' AND seq=0" >/dev/null
+TV=$(curl -sf -H "$AUTH" "$BASE/api/runs/verify?all=1")
+echo "$TV" | grep -q '"verify":"failed"' || fail "tampered journal must fail verification"
+echo "$TV" | grep -q 'chain broken' || fail "tamper must surface as chain break"
+# restore the row so later smoke runs stay green (row_hash is now wrong
+# either way; the tamper is the finding — re-verify via fork reads only)
 echo "SMOKE OK: all API chain checks passed"

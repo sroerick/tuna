@@ -250,13 +250,13 @@ Ground rules:
   green, plus smoke-api.sh 9/9 sections against a live dev.sh server.
 
 ## M7 — prims, journal, replay engine
-- [ ] `server/lib/prims.ml`: prim registry. v1 set: `echo` (return args tree), `now` (wall clock), `uuid`, `store/get`+`store/put` (kv table), `http/get` (egress against an allowlist env var). Each: contract version const "1", runs at boundary under grant check/journaling
-- [ ] boundary: interpreter calls out via a callback; host journaling (journal.row-schema: callsite path from program IR provenance — prim-call TAGS: literal-fix prims must be addressable; document callsite-path convention for prims compiled under bracket abstraction: use the IR-node identity, store IR path, then map)
-- [ ] `server/lib/replay.ml`: faithful replay (journal-fed), verification invariants (result hash, step count, per-seq answer match, chain walk); verify_status update
-- [ ] divergence JSON: first mismatch seq + first_diff_path (subtree-hash walk) + provenance join
-- [ ] verification sweeper: GET /api/runs/verify?all=1 + auto-verify run on fetch
-- [ ] tests: effectful sample program; replay identity; counterfactual fork changes exactly the reachable suffix
-- [ ] commit
+- [x] `server/lib/prims.ml`: prim registry. v1 set: `echo` (return args tree), `now` (wall clock), `uuid`, `store/get`+`store/put` (kv table), `http/get` (egress against an allowlist env var). Each: contract version const "1", runs at boundary under grant check/journaling
+- [x] boundary: interpreter calls out via a callback; host journaling (journal.row-schema: callsite path from program IR provenance — prim-call TAGS: literal-fix prims must be addressable; document callsite-path convention for prims compiled under bracket abstraction: use the IR-node identity, store IR path, then map)
+- [x] `server/lib/replay.ml`: faithful replay (journal-fed), verification invariants (result hash, step count, per-seq answer match, chain walk); verify_status update
+- [x] divergence JSON: first mismatch seq + first_diff_path (subtree-hash walk) + provenance join
+- [x] verification sweeper: GET /api/runs/verify?all=1 + auto-verify run on fetch
+- [x] tests: effectful sample program; replay identity; counterfactual fork changes exactly the reachable suffix
+- [x] commit
 
 ## M8 — htmx UI (PP-style server-rendered)
 - [ ] `server/lib/pages/`: dashboard (runs table: status/verify badges, program links), program page (ternary + pretty tree render + provenance + patch form), run page (journal table + replay button + divergence view), grants admin (mint/revoke), REPL page
@@ -361,6 +361,86 @@ Ground rules:
   add; exploratory, kept for reference, not part of the corpus.
 
 ## Deviations (append as they occur)
+
+- M7 notes (loop #15, continued into #16 — loop #15 died on a dead PG
+  cluster; this loop finished + verified + committed):
+
+  - Layout: `common/lib/{cstr,cprim}.ml[i]` (strings-as-trees codec:
+    tree = UTF-8 bytes of chars-as-unary-`Stem` chains... concretely
+    Leaf="", Stem chain per char? — see cstr.ml; and the prim GATE
+    convention: a prim call is `Fork (gate, Fork (name-tree, site))`
+    with gate = Stem^4 Leaf = `11110`, inert as data until applied);
+    `interpreter/lib/prim_eval.ml` (Prim_eval.Make(M): ONE verbatim
+    triage port parameterized over a MONAD — the pure Eval API stays
+    untouched, Run/Replay instantiate it in Lwt, unit tests in the
+    identity monad; prim boundary is FUEL-FREE and STEP-FREE (AGENTS
+    rule 4), host answers `\`Ok tree | \`Error msg` with errors
+    becoming the canonical error tree `Stem (cstr msg)` so the
+    calculus keeps computing deterministically);
+    `server/lib/{prims,run,replay}.ml`; `compiler` gained a `(prim
+    "name" ...)` surface form.
+  - Compiler/prim interplay: a `(prim ...)` under a lambda compiles to
+    a normal-form function embedding the gate; a TOP-LEVEL or
+    compile-reducible prim (e.g. `((prim "echo") x)` under a lambda
+    whose args don't depend on x, or `(prim "echo" %0)`) would FIRE at
+    compile time -> compile error, not an effect (prims execute only
+    inside a run boundary). Callsite site = the Prim IR node id; the
+    compiled artifact's tags map it to a tree path; bracket
+    duplication of a callsite resolves to the FIRST tag (v0).
+  - Run boundary (Run.execute): inserts run row (inputs stored
+    content-addressed so replay can recover them), evaluates with the
+    Lwt host: per-call LIVE grant check (exists, unrevoked, belongs to
+    caller — mid-run revocation bites) + v0 attenuation (null/{}
+    admit-all; {"max_ternary": N} caps encoded args length); denial is
+    a JOURNALED error answer, run continues (AGENTS rule 7); every
+    event journaled with callsite path + prim_contract "1" + grant_id
+    + wall_ms; payloads over Prims.payload_cap (65536) are journaled
+    as errors, never inlined.
+  - Replay (server/lib/replay.ml): faithful replay = the SAME
+    Prim_eval engine journal-fed (execute_fed) — answers consumed in
+    order; divergence = Diverged{div_seq; callsite_path; prim;
+    reason; first_diff_path; recorded_hash; replayed_hash}. verify()
+    checks chain walk + per-seq match + no unconsumed rows + status /
+    result-hash / step-count equality vs the run row (replay identity
+    by construction: one engine, one step counter).
+    verify_and_record writes verify_status; auto-verify on
+    GET /api/runs/:id; sweeper GET /api/runs/verify?all=1 (routed
+    BEFORE /:id). Counterfactual fork: edits REPLACE recorded rows,
+    chain rebuilt over the new run id, then Replay.reexecute writes
+    the counterfactual outcome into the derived row; out-of-range
+    edit seq -> 400 (restored M6 semantic that the first M7 draft
+    had dropped).
+  - BUGS FIXED en route (this loop): (1) scripts/dev.sh only created
+    the tuna db on the fresh-init path — `start-pg` on a running
+    cluster whose db was missing (the exact error loop #15 died on)
+    now self-heals via ensure_db; (2) dev.sh now replays
+    TUNA_BOOTSTRAP_TOKEN on re-boot: generated tokens persist to
+    /tmp/tuna-dev/bootstrap.token (grep anchored ^TUNA_BOOTSTRAP_TOKEN=
+    so error lines naming the var can't poison it) — otherwise a
+    restart after a failed boot destroys the only token copy in the
+    log and the server can never boot again; (3) smoke-api.sh extracts
+    the token from bootstrap.token first; (4) migrations/0001 had
+    `grants.minted_by REFERENCES grants(id)` — unusable FK; fixed to
+    identities(id) in 0001 + migrations/0003 repairs applied clusters;
+    (5) store tests ran against the DEV db and bootstrap identities
+    named 'root'/'m7-root', poisoning the dev server's bootstrap —
+    scripts/test-store.sh now drops+creates its own `tuna_test` db
+    every run; (6) Db.apply_migrations queried schema_migrations
+    before the first migration creates it (fresh db -> crash); now
+    CREATE TABLE IF NOT EXISTS first.
+  - Borge: grants (grant-token, revocation, invocation), journal
+    (row-schema, recorded-environment, counterfactual-edits), replay
+    (faithful, divergence-surface) flipped to implemented;
+    call-sites.provenance note updated (journal side done; span join
+    in divergence surface still open); replay.prim-versioning partial
+    (contract pinned per row, unconditional replay; mismatch fields
+    open). lint clean.
+  - Test counts: 36 unit + 26 compiler + 12 prim + 11 store (own
+    scratch db) = 85, differential 24/24, smoke-api.sh 13/13 sections.
+  - Deviation: book's journal row text says jsonb inline payloads +
+    host_build + blob spill; v0 uses ternary text inline, no
+    host_build column, payload_cap-instead-of-spill — recorded in
+    journal.borg's project note.
 
 - M2: result-variant naming is `Fuel_exhausted`/`Size_exhausted`
   (snake_case) vs plan's `FuelExhausted`/`SizeExhausted` — cosmetic,

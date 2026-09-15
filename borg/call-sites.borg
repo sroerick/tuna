@@ -1,16 +1,14 @@
 (project tuna-call-sites
-   (* agent note (|M4 (compiler loop): the compiler-side half of this
-      subsection is implemented and tested. Every compiled-tree node
-      carries the id of the responsible IR node (tags, compiler/lib/
-      bracket.ml: every bracket-abstraction-synthesized node tags the
-      enclosing lambda); provenance.ml resolves tree path -> IR node ->
-      IR path -> source span, and the unbound-variable diagnostic
-      carries the occurrence's IR path (tests/compiler_tests.ml:
-      provenance + compile_error cases; compile determinism — same
-      hash AND same tags on recompile — is asserted). NOT yet wired:
-      run-time diagnostics (denial/divergence/fuel) carrying the
-      callsite pair + span; that lands with the M7 journal/prim
-      boundary. Status: partial until then.|) *)
+   (* agent note (|M7 (prim-boundary loop): the RUN side is now wired
+      for the journal: Run.execute resolves each prim call's site (the
+      IR node id carried by the gate literal's tag) to a callsite tree
+      path via the compiled artifact's tags and journals it
+      (server/lib/run.ml site_paths). Bracket-abstraction duplication
+      of a callsite is handled v0-style: the FIRST tag wins (noted in
+      run.ml). Still open in the diagnostics surface: divergence JSON
+      joining callsite_path to the SOURCE SPAN (currently the path is
+      surfaced, the span join is M10/M8 UX work). Status: partial
+      until then.|) *)
  (doc "Tuna book chapter: call-sites — path-tagged boundary calls. Every prim call in a compiled program carries its canonical path in the program tree; diagnostics address trees, source spans are a courtesy on top.")
  (status planned)
  (convention ocaml-dune)

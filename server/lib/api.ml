@@ -156,10 +156,20 @@ let journal_json (j : Store.journal) : J.t =
     ; ("prev_hash", `String j.j_prev_hash)
     ; ("row_hash", `String j.j_row_hash) ]
 
-(* ir column for compiled programs: provenance-lite (tree path -> IR
-   node id, pre-order).  Full path -> IR-node -> span resolution
-   arrives with the M7 diagnostics join. *)
+(* ir column for compiled programs: provenance (tree path -> IR node
+   id + IR path span) — the diagnostics join for journal rows and
+   divergence reports (call-sites.provenance). *)
 let ir_json_of_artifact (a : B.artifact) : J.t =
+  let span_of_id id =
+    match Tuna_compiler.Ir.find_id a.B.ir id with
+    | None -> None
+    | Some ip -> (
+        match Tuna_compiler.Ir.at_path a.B.ir ip with
+        | None -> None
+        | Some n ->
+            let { Tuna_compiler.Ir.off; len } = Tuna_compiler.Ir.span_of n in
+            Some (`Assoc [ ("off", `Int off); ("len", `Int len) ]))
+  in
   `Assoc
     [ ("kind", `String "compiled")
     ; ("steps", `Int a.B.steps)
@@ -170,7 +180,8 @@ let ir_json_of_artifact (a : B.artifact) : J.t =
                `Assoc
                  [ ( "path"
                    , `String (String.concat "" (List.map string_of_int path)) )
-                 ; ("ir", `Int id) ])
+                 ; ("ir", `Int id)
+                 ; ("span", (match span_of_id id with Some s -> s | None -> `Null)) ])
              a.B.tags) ) ]
 
 let program_json (p : Store.program) : J.t =
@@ -379,33 +390,18 @@ let post_run pool auth req =
                             Store.insert_run pool ~program_hash
                               ~inputs:input_hashes
                               ~caller:(Some auth.auth_id) ~fuel ~size_cap ()
-                            >>= fun run_id ->
-                            let result =
-                              Tuna_interp.Eval.eval ~fuel ~size_cap ~program
-                                input_trees
-                            in
-                            let status, result_ternary, steps =
-                              match result with
-                              | Normal (t, s) ->
-                                  ( Store.Run_status.Normal
-                                  , Some (Tuna.Canon.encode t)
-                                  , s )
-                              | Fuel_exhausted s ->
-                                  (Store.Run_status.Fuel_exhausted, None, s)
-                              | Size_exhausted s ->
-                                  (Store.Run_status.Size_exhausted, None, s)
-                            in
-                            Store.update_run_result pool ~id:run_id ~status
-                              ?result_ternary:result_ternary
-                              ?step_count:(Some steps) ()
-                            >>= fun () ->
-                            Store.fetch_run pool run_id
-                            >>= function
-                            | None ->
-                                 (j_err ~code:500 "run row vanished")
-                            | Some row ->
-                                Store.fetch_journals pool run_id >>= fun js ->
-                                
+                            >>= fun _seed ->
+                            (* M7 boundary: synchronous execution with the
+                               prim host (grant checks + journaling).
+                               Input trees are content-addressed into the
+                               programs table by the boundary so replay can
+                               recover them from their hashes. *)
+                            Run.execute pool ~caller:auth.auth_id
+                              ~grant_ids:(strings_of j "grants")
+                              ~program_hash ~program ~ir_json:prog.p_ir
+                              ~inputs:input_trees ~fuel ~size_cap ()
+                            >>= fun (row, js) ->
+                            
                                   (j_ok ~code:201
                                      (`Assoc
                                        [ ("run", run_json row)
@@ -413,18 +409,90 @@ let post_run pool auth req =
                                          , `List (List.map journal_json js) )
                                        ])))
 
+(* run-row level verify response; the divergence is addressed structure,
+   not prose (replay.divergence-surface) *)
+let verdict_json run_id (v : Replay.verdict) : J.t =
+  match v with
+  | Replay.Verified _ ->
+      `Assoc [ ("run_id", `String run_id); ("verify", `String "verified") ]
+  | Replay.Bad_chain msg ->
+      `Assoc
+        [ ("run_id", `String run_id)
+        ; ("verify", `String "failed")
+        ; ("reason", `String ("journal hash chain broken: " ^ msg)) ]
+  | Replay.Diverged d ->
+      `Assoc
+        [ ("run_id", `String run_id)
+        ; ("verify", `String "failed")
+        ; ("reason", `String d.Replay.reason)
+        ; ("divergence_seq", opt_int d.Replay.div_seq)
+        ; ("callsite_path", `String d.Replay.callsite_path)
+        ; ("prim", `String d.Replay.prim)
+        ; ("first_diff_path", `String d.Replay.first_diff_path)
+        ; ("recorded_hash", opt_str d.Replay.recorded_hash)
+        ; ("replayed_hash", opt_str d.Replay.replayed_hash) ]
+  | Replay.Unverifiable msg ->
+      `Assoc
+        [ ("run_id", `String run_id)
+        ; ("verify", `String "unverifiable")
+        ; ("reason", `String msg) ]
+
+(* GET /api/runs/:id — auto-verify on fetch: an unverified finished run
+   is replay-verified inline and the verdict recorded (verify_status). *)
 let get_run pool _auth req =
   let id = Dream.param req "id" in
   Store.fetch_run pool id
   >>= function
   | None ->  (j_err ~code:404 "unknown run id")
   | Some r ->
-      Store.fetch_journals pool id >>= fun js ->
-      
-        (j_ok
-           (`Assoc
-             [ ("run", run_json r)
-             ; ("journal", `List (List.map journal_json js)) ]))
+      (match (r.Store.r_verify_status, r.Store.r_status) with
+       | None, Store.Run_status.Running -> Lwt.return ()
+       | None, _ ->
+           Replay.verify_and_record pool ~run_id:id
+           >>= fun _ -> Lwt.return ()
+       | Some _, _ -> Lwt.return ())
+      >>= fun () ->
+      Store.fetch_run pool id
+      >>= function
+      | None ->  (j_err ~code:500 "run row vanished")
+      | Some r ->
+          Store.fetch_journals pool id >>= fun js ->
+          
+            (j_ok
+               (`Assoc
+                 [ ("run", run_json r)
+                 ; ("journal", `List (List.map journal_json js)) ]))
+
+(* GET /api/runs/verify?all=1 — the verification sweeper: replay-verify
+   every finished run (cap 200, newest first).  Without all=1, returns
+   the current verify statuses only.  NOTE: routed BEFORE /api/runs/:id. *)
+let verify_sweep pool _auth req =
+  match Dream.query req "all" with
+  | Some "1" ->
+      Store.list_runs pool ~caller:None ~program:None ~limit:200 ()
+      >>= fun rs ->
+      let rec go acc = function
+        | [] -> Lwt.return (List.rev acc)
+        | r :: rest -> (
+            Replay.verify_and_record pool ~run_id:r.Store.r_id
+            >>= fun v -> go (verdict_json r.Store.r_id v :: acc) rest)
+      in
+      go [] rs >>= fun vs ->
+       (j_ok (`Assoc [ ("verified", `List vs) ]))
+  | _ ->
+      Store.list_runs pool ~caller:None ~program:None ~limit:200 ()
+      >>= fun rs ->
+       (j_ok
+          (`Assoc
+            [ ( "runs"
+              , `List
+                  (List.map
+                     (fun r ->
+                       `Assoc
+                         [ ("id", `String r.Store.r_id)
+                         ; ("verify_status", opt_str r.Store.r_verify_status)
+                         ; ("status", `String (Store.Run_status.to_string r.Store.r_status)) ])
+                     rs)) ]))
 
 let list_runs pool _auth req =
   let caller = Dream.query req "caller" in
@@ -449,6 +517,61 @@ let get_journal pool _auth req =
 
 type edit = Set_result of Tuna.Tree.t | Set_error of string | Clear
 
+(* Copy the parent run's journal into a derived run with the edits
+   applied (chain rebuilt over the NEW run id), then re-execute
+   journal-fed (Replay.reexecute): the counterfactual outcome becomes
+   the derived row's status/result.  A divergent edit (e.g. a cleared
+   row) leaves the run in Error; history itself is never mutated. *)
+let fork pool ~parent_run_id ~(edits : (int * edit) list) =
+  Store.fetch_run pool parent_run_id
+  >>= (function
+        | None -> Lwt.fail (Failure "unknown run")
+        | Some parent ->
+            Store.fetch_journals pool parent_run_id
+            >>= fun js ->
+            Store.insert_run pool ~program_hash:parent.r_program_hash
+              ~inputs:parent.r_input_hashes ~caller:parent.r_caller
+              ~parent_run_id:(Some parent_run_id) ~fuel:parent.r_fuel
+              ~size_cap:parent.r_size_cap ()
+            >>= fun new_id ->
+            let rec copy = function
+              | [] -> Lwt.return ()
+              | j :: rest -> (
+                  let result_ternary, e_error =
+                    match List.assoc j.Store.j_seq edits with
+                    | Set_result t -> (Some (Tuna.Canon.encode t), None)
+                    | Set_error e -> (None, Some e)
+                    | exception Not_found ->
+                        (j.Store.j_result_ternary, j.Store.j_error)
+                    | Clear -> (None, None)
+                  in
+                  let ev : Store.journal_event =
+                    { e_callsite_path = j.Store.j_callsite_path
+                    ; e_prim = j.Store.j_prim
+                    ; e_prim_contract = j.Store.j_prim_contract
+                    ; e_grant_id = j.Store.j_grant_id
+                    ; e_args_ternary = j.Store.j_args_ternary
+                    ; e_result_ternary = result_ternary
+                    ; e_error = e_error
+                    ; e_wall_ms = j.Store.j_wall_ms }
+                  in
+                  Store.append_journal pool ~run_id:new_id ev
+                  >>= fun _ -> copy rest)
+            in
+            copy js >>= fun () ->
+            Store.insert_derived_journal pool ~run_id:new_id
+              ~parent_run_id:parent_run_id ()
+            >>= fun () ->
+            Replay.reexecute pool ~run_id:new_id
+            >>= fun v ->
+            Store.fetch_run pool new_id
+            >>= (function
+                  | None -> Lwt.fail (Failure "fork run vanished")
+                  | Some row ->
+                      Store.fetch_journals pool new_id
+                      >>= fun njs ->
+                      Lwt.return (row, njs, v)))
+
 let rec validate_edits acc = function
   | [] -> Ok (List.rev acc)
   | e :: rest -> (
@@ -469,12 +592,13 @@ let rec validate_edits acc = function
           | None, Some err -> validate_edits ((seq, Set_error err) :: acc) rest
           | None, None -> validate_edits ((seq, Clear) :: acc) rest))
 
-(* fork: data-plane counterfactual (journal.counterfactual-edits).  The
-   derived run gets a fresh journal with the edits applied and the
-   hash chain rebuilt over the NEW run id (row fingerprints include
-   run_id, so every row_hash changes).  Re-EXECUTION of the edited
-   suffix — the replay engine — lands in M7; v0 copies status/result
-   from the parent. *)
+(* fork: counterfactual replay (journal.counterfactual-edits).  The
+   derived run gets a fresh journal with the edits applied and the hash
+   chain rebuilt over the NEW run id (row fingerprints include run_id,
+   so every row_hash changes).  The derived run is then RE-EXECUTED
+   journal-fed (replay engine): the edited answers flow through the
+   program, the derived row carries the counterfactual outcome, and
+   its own verification is recorded. *)
 let fork_journal pool _auth req =
   let run_id = Dream.param req "run_id" in
   body_json req >>= function
@@ -483,69 +607,72 @@ let fork_journal pool _auth req =
       match validate_edits [] (get_list j "edits") with
       | Error msg ->  (j_err msg)
       | Ok edits ->
-          Store.fetch_run pool run_id
-          >>= function
-          | None ->  (j_err ~code:404 "unknown run id")
-          | Some parent ->
+          (* edits are counterfactual REPLACEMENTS of recorded rows: an
+             edit naming a seq the parent journal does not hold is a
+             request to overwrite history that never happened -> 400 *)
+          Store.fetch_run pool run_id >>= (function
+          | None -> j_err ~code:404 "unknown run id"
+          | Some _ ->
               Store.fetch_journals pool run_id >>= fun js ->
-              let seqs = List.map (fun j -> j.Store.j_seq) js in
-              (match
-                 List.find (fun (seq, _) -> not (List.mem seq seqs)) edits
-               with
-               | seq, _ ->
-                   
-                     (j_err
-                        (Printf.sprintf "edit targets unknown journal seq %d" seq))
-               | exception Not_found ->
-                   Store.insert_run pool ~program_hash:parent.r_program_hash
-                     ~inputs:parent.r_input_hashes ~caller:parent.r_caller
-                     ~parent_run_id:(Some run_id) ~fuel:parent.r_fuel
-                     ~size_cap:parent.r_size_cap ()
-                   >>= fun new_id ->
-                   let rec copy = function
-                     | [] -> Lwt.return ()
-                     | j :: rest -> (
-                         let result_ternary, e_error =
-                           match List.assoc j.Store.j_seq edits with
-                           | Set_result t -> (Some (Tuna.Canon.encode t), None)
-                           | Set_error e -> (None, Some e)
-                           | Clear -> (None, None)
-                         in
-                         let ev : Store.journal_event =
-                           { e_callsite_path = j.j_callsite_path
-                           ; e_prim = j.j_prim
-                           ; e_prim_contract = j.j_prim_contract
-                           ; e_grant_id = j.j_grant_id
-                           ; e_args_ternary = j.j_args_ternary
-                           ; e_result_ternary = result_ternary
-                           ; e_error = e_error
-                           ; e_wall_ms = j.j_wall_ms }
-                         in
-                         Store.append_journal pool ~run_id:new_id ev
-                         >>= fun _ -> copy rest)
-                   in
-                   copy js >>= fun () ->
-                   (* v0 data-plane fork: the derived row snapshots the
-                      parent's status/result; re-execution lands in M7 *)
-                   (Store.update_run_result pool ~id:new_id
-                      ~status:parent.r_status
-                      ?result_ternary:parent.r_result_ternary
-                      ?step_count:parent.r_step_count ()
-                    >>= fun () ->
-                    Store.insert_derived_journal pool ~run_id:new_id
-                      ~parent_run_id:run_id ())
-                   >>= fun () ->
-                   Store.fetch_run pool new_id
-                   >>= function
-                   | None ->  (j_err ~code:500 "fork run vanished")
-                   | Some row ->
-                       Store.fetch_journals pool new_id >>= fun njs ->
-                       
-                         (j_ok ~code:201
-                            (`Assoc
-                              [ ("run", run_json row)
-                              ; ("forked_from", `String run_id)
-                              ; ("journal", `List (List.map journal_json njs)) ]))))
+              let known = List.length js in
+              match List.find_opt (fun (seq, _) -> seq >= known) edits with
+              | Some (seq, _) ->
+                  j_err
+                    (Printf.sprintf
+                       "edit seq %d is beyond the parent journal (%d rows)"
+                       seq known)
+              | None ->
+                  fork pool ~parent_run_id:run_id ~edits
+                  >>= fun (row, njs, v) ->
+                  j_ok ~code:201
+                    (`Assoc
+                      [ ("run", run_json row)
+                      ; ("forked_from", `String run_id)
+                      ; ("verify", verdict_json row.Store.r_id v)
+                      ; ("journal", `List (List.map journal_json njs)) ])))
+
+(* -- grants (JSON surface; the M8 UI admin page sits on top) ---------- *)
+
+let post_grant pool auth req =
+  body_json req >>= function
+  | Error msg ->  (j_err msg)
+  | Ok j -> (
+      let prim = get_string_opt j "prim" in
+      let attenuation = get_string_opt j "args_attenuation" in
+      match prim with
+      | None ->  (j_err "missing \"prim\"")
+      | Some prim ->
+          let attenuation =
+            Option.value attenuation ~default:"{}" (* jsonb: admit-all *)
+          in
+          (try
+             J.from_string attenuation |> ignore;
+             Store.mint_grant pool ~prim ~args_attenuation:attenuation
+               ~caller:auth.auth_id ~minted_by:(Some auth.auth_id) ()
+             >>= fun g ->
+              (j_ok ~code:201
+                 (`Assoc
+                   [ ("id", `String g.Store.g_id)
+                   ; ("prim", `String g.Store.g_prim)
+                   ; ("caller", `String g.Store.g_caller)
+                   ; ("args_attenuation", `String g.Store.g_args_attenuation) ]))
+           with Yojson.Json_error _ ->
+             (j_err "args_attenuation must be JSON")))
+
+let revoke_grant pool auth req =
+  let id = Dream.param req "id" in
+  Store.fetch_grant pool id
+  >>= (function
+        | None ->  (j_err ~code:404 "unknown grant id")
+        | Some g ->
+            (* only the grant's caller (or an admin) may revoke; the
+               grant row is the capability *)
+            if g.Store.g_caller <> auth.auth_id && not auth.auth_is_admin then
+              (j_err ~code:403 "grant belongs to another identity")
+            else
+              Store.revoke_grant pool id
+              >>= fun () ->
+               (j_ok (`Assoc [ ("revoked", `String id) ])))
 
 (* -- router / server ------------------------------------------------- *)
 
@@ -558,10 +685,13 @@ let router pool =
         (with_auth pool (patch_program pool))
     ; Dream.post "/api/runs" (with_auth pool (post_run pool))
     ; Dream.get "/api/runs" (with_auth pool (list_runs pool))
+    ; Dream.get "/api/runs/verify" (with_auth pool (verify_sweep pool))
     ; Dream.get "/api/runs/:id" (with_auth pool (get_run pool))
     ; Dream.get "/api/journals/:run_id" (with_auth pool (get_journal pool))
     ; Dream.post "/api/journals/:run_id/fork"
-        (with_auth pool (fork_journal pool)) ]
+        (with_auth pool (fork_journal pool))
+    ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
+    ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool)) ]
 
 (* Called by bin/main.ml inside its own Lwt_main.run: bootstraps the
    root identity, then serves without spawning another event loop. *)

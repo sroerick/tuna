@@ -1,4 +1,5 @@
 (library
  (name tuna_server)
- (modules patch api)
- (libraries tuna tuna_interp tuna_compiler tuna_store dream yojson lwt))
+ (modules patch api prims run replay)
+ (libraries tuna tuna_interp tuna_compiler tuna_store dream yojson lwt
+   lwt.unix unix))
