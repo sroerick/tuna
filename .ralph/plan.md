@@ -23,6 +23,11 @@ Ground rules:
 - pgx_lwt connection string: socket /tmp, port 5434, db tuna, user tuna.
 - Postgres may need `scripts/dev.sh start-pg` for integration tests; unit
   tests must NOT require PG (pure interpreter/compiler tests run always).
+- After each green-gate commit on master, push: `git push origin master`
+  (origin = github:sroerick/tuna; added 2026-09-15 by the operator). Only
+  after the plan's normal build+test gates passed and the commit landed;
+  never push mid-work (no `git add -A` of uncommitted slices), never
+  force-push.
 
 ## M0 — bootstrap [done by hand before this plan started]
 - [x] repo scaffold, migrations/0001, scripts/dev.sh, vendored reference/tree-calculus
