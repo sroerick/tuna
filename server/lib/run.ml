@@ -149,6 +149,27 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
   let host ~site ~name ~args =
     let t0 = Unix.gettimeofday () in
     let args_ternary = Tuna.Canon.encode args in
+    (* M10 substrate prims: op kind + the paths the call would touch
+       (for the live grant prefix check).  Every tree-prim ERROR answer
+       is journaled as a no-effect tree_ops row below; effects are
+       journaled by the handlers themselves. *)
+    let tree_op = Tree_prims.op_of_name name in
+    let op_path =
+      match tree_op with None -> "" | Some _ -> Tree_prims.op_path_of_args args
+    in
+    let grant_paths =
+      match tree_op with
+      | None -> []
+      | Some _ -> Option.value (Tree_prims.grant_paths name args) ~default:[]
+    in
+    let journal_tree_denial () =
+      match tree_op with
+      | None -> Lwt.return ()
+      | Some op ->
+          S.op_append pool ~op ~path:op_path ~value_hash:None ~prev_version:None
+            ~version:None ~actor:caller
+          >>= fun _ -> Lwt.return ()
+    in
     (if String.length args_ternary > Prims.payload_cap then
        (* never inline oversized payloads: journal hash-free, answer error *)
        Lwt.return
@@ -165,11 +186,13 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
              , None
              , Some args_ternary )
        | Some (gid, attenuation) -> (
-           S.check_grant pool ~id:gid ~caller ()
+           S.check_grant pool ~id:gid ~caller ~paths:grant_paths ()
            >>= function
            | `Ok ->
                if attenuation_ok attenuation args_ternary then
-                 Prims.dispatch ~name ~args ~kv ~allowlist
+                 (if tree_op <> None then
+                    Tree_prims.dispatch ~pool ~actor:caller ~name ~args
+                  else Prims.dispatch ~name ~args ~kv ~allowlist)
                  >>= fun a -> Lwt.return (a, Some gid, Some args_ternary)
                else
                  Lwt.return
@@ -204,7 +227,11 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
       ; e_wall_ms = Some wall_ms }
     in
     S.append_journal pool ~run_id ev
-    >>= fun _ -> Lwt.return answer
+    >>= fun _ ->
+    (match (tree_op, answer) with
+     | Some _, `Error _ -> journal_tree_denial ()
+     | _ -> Lwt.return ())
+      >>= fun () -> Lwt.return answer
   in
   Eng.eval ~host ~fuel ~size_cap ~program inputs
   >>= fun result ->

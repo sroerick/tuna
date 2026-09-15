@@ -19,7 +19,20 @@ type answer = [ `Ok of Tuna.Tree.t | `Error of string ]
 
 let contract = "1"
 
-let names = [ "echo"; "now"; "uuid"; "store/get"; "store/put"; "http/get" ]
+let names =
+  [ "echo"
+  ; "now"
+  ; "uuid"
+  ; "store/get"
+  ; "store/put"
+  ; "http/get"
+    (* M10 substrate prims; handlers live in Tree_prims, dispatched by
+       the run boundary *)
+  ; "tree/get"
+  ; "tree/put"
+  ; "tree/cas"
+  ; "tree/list"
+  ; "ns/fork" ]
 
 let exists name = List.mem name names
 

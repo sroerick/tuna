@@ -846,9 +846,9 @@ let op_append p ~op ~path ~value_hash ~prev_version ~version ~actor =
   Db.with_pool p (fun c ->
       op_append_conn c ~op ~path ~value_hash ~prev_version ~version ~actor)
 
-(* ops_fold: the replay/rewind surface.  Reads rows for [prefix] (None =
-   whole log) in [from_seq, to_seq], ascending.  [to_seq] None = head. *)
-let ops_fold p ?(prefix = None) ?(from_seq = 0L) ?(to_seq = None) () =
+(* ops_fold: the replay/rewind surface.  Reads rows for [prefix] (empty
+   string = whole log) in [from_seq, to_seq], ascending. *)
+let ops_fold p ?(prefix = "") ?(from_seq = 0L) ?(to_seq = Int64.max_int) () =
   let sql =
     select_tree_ops
     ^ " WHERE seq >= $1 AND seq <= $2 \
@@ -858,8 +858,8 @@ let ops_fold p ?(prefix = None) ?(from_seq = 0L) ?(to_seq = None) () =
   in
   Db.q
     ~params:[ p_int64 from_seq
-            ; (match to_seq with Some s -> p_int64 s | None -> p_int64 Int64.max_int)
-            ; p_opt prefix ]
+            ; p_int64 to_seq
+            ; p_opt (if prefix = "" then None else Some prefix) ]
     p sql
   >>= fun rows -> Lwt.return (List.map tree_op_of_row rows)
 

@@ -663,6 +663,230 @@ let revoke_grant pool auth req =
               >>= fun () ->
                (j_ok (`Assoc [ ("revoked", `String id) ])))
 
+(* -- tree substrate (M10): JSON over the derived path index -----------
+
+   These endpoints are the HOST surface of the substrate (bearer-authed
+   like every /api/* route; the actor is the calling identity).  They
+   journal every op into the tree_ops chain with NULL-value_hash rows
+   for reads and failed writes, exactly like the prim boundary; prim
+   grants do not gate them (grants gate the calculus boundary, per
+   grants.borg - the host API is the operator surface).  /api/tree/log
+   and /api/tree/state are the rewind surface: clients fold ops. *)
+
+let journal_tree_op pool ~actor ~op ~path ?value_hash ?prev_version ?version () =
+  Store.op_append pool ~op ~path ~value_hash ~prev_version ~version ~actor
+  >>= fun _ -> Lwt.return ()
+
+let entry_json (e : Store.path_entry) : J.t =
+  `Assoc
+    [ ("path", `String e.Store.tp_path)
+    ; ("value_hash", `String e.Store.tp_value_hash)
+    ; ("version", `Int (Int64.to_int e.Store.tp_version))
+    ; ("owner", `String e.Store.tp_owner)
+    ; ("updated_at", opt_str e.Store.tp_updated_at) ]
+
+let tree_op_json (o : Store.tree_op) : J.t =
+  `Assoc
+    [ ("seq", `Int (Int64.to_int o.Store.o_seq))
+    ; ("path", `String o.Store.o_path)
+    ; ("op", `String o.Store.o_op)
+    ; ("value_hash", opt_str o.Store.o_value_hash)
+    ; ("prev_version", (match o.Store.o_prev_version with Some v -> `Int (Int64.to_int v) | None -> `Null))
+    ; ("version", (match o.Store.o_version with Some v -> `Int (Int64.to_int v) | None -> `Null))
+    ; ("actor", `String o.Store.o_actor)
+    ; ("ts", `Int (Int64.to_int o.Store.o_ts_unix))
+    ; ("op_hash", `String o.Store.o_op_hash) ]
+
+let get_int64_query req k =
+  match Dream.query req k with
+  | None -> Ok None
+  | Some s -> (
+      match Int64.of_string s with
+      | v -> Ok (Some v)
+      | exception _ -> Error (Printf.sprintf "%s must be an integer" k))
+
+let post_tree_get pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match get_string_opt j "path" with
+      | None -> (j_err "missing \"path\"")
+      | Some path -> (
+          match Tree_prims.check_path "path" path with
+          | Error e -> (j_err e)
+          | Ok path -> (
+              Store.path_get pool ~path
+              >>= function
+              | None ->
+                  journal_tree_op pool ~actor:auth.auth_id ~op:"get" ~path ()
+                  >>= fun () ->
+                  (j_err ~code:404 (Printf.sprintf "no value at path %s" path))
+              | Some entry -> (
+                  Store.value_fetch pool entry.Store.tp_value_hash
+                  >>= function
+                  | None ->
+                      (j_err ~code:500
+                         ("stored value missing for hash "
+                         ^ entry.Store.tp_value_hash))
+                  | Some ternary ->
+                      journal_tree_op pool ~actor:auth.auth_id ~op:"get" ~path ()
+                      >>= fun () ->
+                      (j_ok
+                         (`Assoc
+                           [ ("path", `String path)
+                           ; ("value_ternary", `String ternary)
+                           ; ("value_hash", `String entry.Store.tp_value_hash)
+                           ; ( "version"
+                             , `Int (Int64.to_int entry.Store.tp_version) )
+                           ; ("owner", `String entry.Store.tp_owner) ]))))))
+
+(* one substrate write through the store (unconditional or CAS), then
+   the op row; the JSON answer is returned in Lwt.t position *)
+let tree_put_write pool auth ~path ~hash ~expected_version ~expected_hash =
+  match expected_version with
+  | None ->
+      Store.path_put pool ~path ~value_hash:hash ~owner:auth.auth_id
+      >>= fun newv ->
+      journal_tree_op pool ~actor:auth.auth_id ~op:"put" ~path ~value_hash:hash
+        ?prev_version:(if newv = 1L then None else Some (Int64.pred newv))
+        ~version:newv ()
+      >>= fun () ->
+      j_ok ~code:201
+        (`Assoc
+          [ ("path", `String path)
+          ; ("version", `Int (Int64.to_int newv))
+          ; ("value_hash", `String hash) ])
+  | Some n ->
+      Store.path_put_cas pool ~path ~value_hash:hash ~owner:auth.auth_id
+        ~expected_version:(Some (Int64.of_int n)) ~expected_hash
+      >>= (function
+            | `Ok newv ->
+                journal_tree_op pool ~actor:auth.auth_id ~op:"cas" ~path
+                  ~value_hash:hash ~prev_version:(Int64.of_int n) ~version:newv ()
+                >>= fun () ->
+                j_ok ~code:201
+                  (`Assoc
+                    [ ("path", `String path)
+                    ; ("version", `Int (Int64.to_int newv))
+                    ; ("value_hash", `String hash) ])
+            | `Conflict ->
+                journal_tree_op pool ~actor:auth.auth_id ~op:"cas" ~path ()
+                >>= fun () ->
+                j_ok ~code:409
+                  (`Assoc
+                    [ ("error", `String "tree put conflict: version mismatch")
+                    ; ("path", `String path) ])
+            | `Absent ->
+                journal_tree_op pool ~actor:auth.auth_id ~op:"cas" ~path ()
+                >>= fun () ->
+                j_err ~code:404 (Printf.sprintf "no value at path %s" path))
+
+let post_tree_put pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match (get_string_opt j "path", get_string_opt j "value_ternary") with
+      | None, _ -> (j_err "missing \"path\"")
+      | _, None -> (j_err "missing \"value_ternary\"")
+      | Some path, Some value_ternary -> (
+          match Tree_prims.check_path "path" path with
+          | Error e -> (j_err e)
+          | Ok path -> (
+              match parse_ternary value_ternary with
+              | Error msg -> (j_err ("value_ternary: " ^ msg))
+              | Ok _value ->
+                  if String.length value_ternary > Prims.payload_cap then
+                    (j_err "value exceeds the journal payload cap")
+                  else
+                    let hash = Tuna.Hash.hex_of_string value_ternary in
+                    Store.value_put pool ~hash ~ternary:value_ternary
+                    >>= fun () ->
+                    tree_put_write pool auth ~path ~hash
+                      ~expected_version:(get_int_opt j "expected_version")
+                      ~expected_hash:(get_string_opt j "expected_hash"))))
+
+let post_tree_list pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      let prefix = Option.value (get_string_opt j "prefix") ~default:"" in
+      let limit = Option.value (get_int_opt j "limit") ~default:1000 in
+      match Tree_prims.validate_prefix "prefix" prefix with
+      | Some e -> (j_err e)
+      | None -> (
+          Store.path_list pool ~prefix ~limit ()
+          >>= fun entries ->
+          journal_tree_op pool ~actor:auth.auth_id ~op:"list" ~path:prefix ()
+          >>= fun () ->
+          (j_ok
+             (`Assoc
+               [ ( "entries"
+                 , `List (List.map entry_json entries) ) ]))))
+
+let get_tree_log pool _auth req =
+  (match (get_int64_query req "from_seq", get_int64_query req "to_seq") with
+   | Error e, _ | _, Error e -> Lwt.return (Error e)
+     | Ok from_seq, Ok to_seq ->
+         let from_seq = Option.value from_seq ~default:0L in
+         let to_seq = Option.value to_seq ~default:Int64.max_int in
+         (match Dream.query req "prefix" with
+          | Some p -> Store.ops_fold pool ?prefix:(Some p) ~from_seq ~to_seq ()
+          | None -> Store.ops_fold pool ~from_seq ~to_seq ())
+         >>= fun ops -> Lwt.return (Ok ops))
+  >>= (function
+        | Error e -> (j_err e)
+        | Ok ops ->
+            (j_ok (`Assoc [ ("ops", `List (List.map tree_op_json ops)) ])))
+
+let post_ns_fork pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      let src = get_string_opt j "src" and dst = get_string_opt j "dst" in
+      match (src, dst) with
+      | None, _ | _, None -> (j_err "body needs \"src\" and \"dst\" prefixes")
+      | Some src, Some dst -> (
+          match
+            ( Tree_prims.validate_path "src" src
+            , Tree_prims.validate_path "dst" dst )
+          with
+          | Some e, _ | _, Some e -> (j_err e)
+          | None, None -> (
+              Store.ns_fork pool ~src_prefix:src ~dst_prefix:dst
+                ~actor:auth.auth_id
+              >>= fun copied ->
+              (j_ok ~code:201
+                 (`Assoc
+                   [ ("src", `String src)
+                   ; ("dst", `String dst)
+                   ; ("copied", `Int copied) ])))))
+
+let get_tree_state pool _auth req =
+  (match get_int64_query req "at_seq" with
+   | Error e -> Lwt.return (Error e)
+   | Ok at_seq ->
+       let prefix = Option.value (Dream.query req "prefix") ~default:"" in
+       let at_seq = Option.value at_seq ~default:Int64.max_int in
+       (match Tree_prims.validate_prefix "prefix" prefix with
+        | Some e -> Lwt.return (Error e)
+        | None -> (
+            Rewind.state pool ~prefix ~at_seq
+            >>= fun entries -> Lwt.return (Ok (prefix, at_seq, entries)))))
+  >>= (function
+        | Error e -> (j_err e)
+        | Ok (prefix, at_seq, entries) ->
+            let e_json (e : Rewind.entry) =
+              `Assoc
+                [ ("path", `String e.Rewind.path)
+                ; ("value_hash", `String e.Rewind.value_hash)
+                ; ("version", `Int (Int64.to_int e.Rewind.version)) ]
+            in
+            (j_ok
+               (`Assoc
+                 [ ("prefix", `String prefix)
+                 ; ("at_seq", `Int (Int64.to_int at_seq))
+                 ; ("entries", `List (List.map e_json entries)) ])))
+
 (* -- router / server ------------------------------------------------- *)
 
 (* route list, mounted alongside the M8 page routes by bin/main.ml *)
@@ -678,9 +902,15 @@ let api_routes pool =
     ; Dream.get "/api/journals/:run_id" (with_auth pool (get_journal pool))
     ; Dream.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))
-    ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
-    ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))
-    ; Dream.post "/api/repl" (with_auth pool (post_repl pool)) ]
+      ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
+      ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))
+      ; Dream.post "/api/repl" (with_auth pool (post_repl pool))
+      ; Dream.post "/api/tree/get" (with_auth pool (post_tree_get pool))
+      ; Dream.post "/api/tree/put" (with_auth pool (post_tree_put pool))
+      ; Dream.post "/api/tree/list" (with_auth pool (post_tree_list pool))
+      ; Dream.get "/api/tree/log" (with_auth pool (get_tree_log pool))
+      ; Dream.get "/api/tree/state" (with_auth pool (get_tree_state pool))
+      ; Dream.post "/api/ns/fork" (with_auth pool (post_ns_fork pool)) ]
 
 (* assemble the full router: health + JSON API + human pages + static *)
 let router ?(static_dir = "server/static") pool =
