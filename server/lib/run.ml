@@ -75,16 +75,25 @@ let site_paths (ir_json : string option) : (int * string) list =
 (* Grant rows for the run: prim name -> (grant id, attenuation json
    text).  First id minted for a prim wins; submission already
    validated every id live against the grants table. *)
-let grant_map pool grant_ids =
-  let rec go acc = function
-    | [] -> Lwt.return acc
-    | gid :: rest -> (
-        S.fetch_grant pool gid
-        >>= function
-        | None -> go acc rest
-        | Some g -> go ((g.S.g_prim, (gid, g.S.g_args_attenuation)) :: acc) rest)
-  in
-  go [] grant_ids
+  let grant_map pool grant_ids =
+    let rec go acc = function
+      | [] -> Lwt.return acc
+      | gid :: rest -> (
+          S.fetch_grant pool gid
+          >>= function
+          | None -> go acc rest
+          | Some g -> go ((g.S.g_prim, (gid, g.S.g_args_attenuation)) :: acc) rest)
+    in
+    go [] grant_ids
+
+  (* M11 routes.borg law 3: route dispatch mints prim-"*" grants scoped
+     to a record's grant_prefix - they answer ANY prim, still live-
+     checked (unrevoked, caller, path prefix) at every call like any
+     other grant. *)
+  let grant_for gmap name =
+    match List.assoc_opt name gmap with
+    | Some g -> Some g
+    | None -> List.assoc_opt "*" gmap
 
 (* v0 attenuation predicate interpretation (grants.grant-token: host
    policy, stored not computed). *)
@@ -150,25 +159,33 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
     let t0 = Unix.gettimeofday () in
     let args_ternary = Tuna.Canon.encode args in
     (* M10 substrate prims: op kind + the paths the call would touch
-       (for the live grant prefix check).  Every tree-prim ERROR answer
-       is journaled as a no-effect tree_ops row below; effects are
-       journaled by the handlers themselves. *)
+       (for the live grant prefix check).  M11 byte-value prims (law 2,
+       byte-values.borg): reads are hash-gated, puts capability-gated
+       live in the handler - neither spends the run's grant map.  Every
+       substrate-prim ERROR answer is journaled as a no-effect tree_ops
+       row below; effects are journaled by the handlers themselves. *)
     let tree_op = Tree_prims.op_of_name name in
+    let value_op = Value_prims.op_of_name name in
     let op_path =
-      match tree_op with None -> "" | Some _ -> Tree_prims.op_path_of_args args
+      match tree_op with
+      | Some _ -> Tree_prims.op_path_of_args args
+      | None -> (
+          match value_op with
+          | Some _ -> Value_prims.op_path_of_args name args
+          | None -> "")
     in
     let grant_paths =
       match tree_op with
-      | None -> []
       | Some _ -> Option.value (Tree_prims.grant_paths name args) ~default:[]
+      | None -> []
     in
-    let journal_tree_denial () =
-      match tree_op with
-      | None -> Lwt.return ()
-      | Some op ->
+    let journal_substrate_denial () =
+      match (tree_op, value_op) with
+      | Some op, _ | None, Some op ->
           S.op_append pool ~op ~path:op_path ~value_hash:None ~prev_version:None
             ~version:None ~actor:caller
           >>= fun _ -> Lwt.return ()
+      | None, None -> Lwt.return ()
     in
     (if String.length args_ternary > Prims.payload_cap then
        (* never inline oversized payloads: journal hash-free, answer error *)
@@ -177,23 +194,25 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
              (Printf.sprintf "prim %s: args exceed the journal payload cap" name)
          , None
          , None )
-     else
-       match List.assoc_opt name gmap with
-       | None ->
-           Lwt.return
-             ( `Error
-                 (Printf.sprintf "grant denial: no live grant for prim %s" name)
-             , None
-             , Some args_ternary )
-       | Some (gid, attenuation) -> (
-           S.check_grant pool ~id:gid ~caller ~paths:grant_paths ()
-           >>= function
-           | `Ok ->
-               if attenuation_ok attenuation args_ternary then
-                 (if tree_op <> None then
-                    Tree_prims.dispatch ~pool ~actor:caller ~name ~args
-                  else Prims.dispatch ~name ~args ~kv ~allowlist)
-                 >>= fun a -> Lwt.return (a, Some gid, Some args_ternary)
+       else
+         match grant_for gmap name with
+         | None ->
+             Lwt.return
+               ( `Error
+                   (Printf.sprintf "grant denial: no live grant for prim %s" name)
+               , None
+                , Some args_ternary )
+           | Some (gid, attenuation) -> (
+             S.check_grant pool ~id:gid ~caller ~paths:grant_paths ()
+             >>= function
+             | `Ok ->
+                 if attenuation_ok attenuation args_ternary then
+                   (if value_op <> None then
+                      Value_prims.dispatch ~pool ~actor:caller ~name ~args
+                    else if tree_op <> None then
+                      Tree_prims.dispatch ~pool ~actor:caller ~name ~args
+                    else Prims.dispatch ~name ~args ~kv ~allowlist)
+                   >>= fun a -> Lwt.return (a, Some gid, Some args_ternary)
                else
                  Lwt.return
                    ( `Error
@@ -201,7 +220,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
                           "grant denial: prim %s args exceed attenuation" name)
                    , Some gid
                    , Some args_ternary )
-            | (`Revoked | `Wrong_caller | `Unknown | `Prefix_denied) as denial ->
+               | (`Revoked | `Wrong_caller | `Unknown | `Prefix_denied) as denial ->
                 Lwt.return
                   ( `Error
                       (Printf.sprintf "grant denial (%s) for prim %s"
@@ -228,8 +247,8 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
     in
     S.append_journal pool ~run_id ev
     >>= fun _ ->
-    (match (tree_op, answer) with
-     | Some _, `Error _ -> journal_tree_denial ()
+    (match (tree_op, value_op, answer) with
+     | (Some _, _, `Error _) | (_, Some _, `Error _) -> journal_substrate_denial ()
      | _ -> Lwt.return ())
       >>= fun () -> Lwt.return answer
   in

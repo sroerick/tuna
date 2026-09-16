@@ -32,7 +32,13 @@ let names =
   ; "tree/put"
   ; "tree/cas"
   ; "tree/list"
-  ; "ns/fork" ]
+  ; "ns/fork"
+    (* M11 byte-value prims; handlers live in Value_prims, dispatched by
+       the run boundary under byte-values.borg law 2 (reads are
+       hash-gated, puts capability-gated outside the grant map) *)
+  ; "value/put"
+  ; "value/get"
+  ; "value/len" ]
 
 let exists name = List.mem name names
 

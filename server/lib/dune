@@ -3,4 +3,4 @@
 (library
  (name tuna_server)
  (libraries tuna tuna_interp tuna_compiler tuna_store dream yojson lwt
-   lwt.unix unix))
+   lwt.unix unix base64))
