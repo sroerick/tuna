@@ -1,12 +1,12 @@
 (project tuna-byte-values
  (doc "Tuna book chapter: byte values - the value store grows a raw-byte kind so text (HTML, JSON, templates, media) never travels through tree encoding. Ternary remains the only form of code. Research question: can two content kinds share one hash namespace without the substrate laws noticing?")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section byte-values
   (doc "Values are content-addressed primitives; the path index stays derived and never leaks into the value store. 0008 adds byte_values(hash, bytes): hash = sha256 over the exact stored bytes, lowercase hex - the same address law as tree_values, different payload kind.")
-  (status planned)
+  (status implemented)
   (subsection laws
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       1. ONE NAMESPACE, TWO KINDS. tree_values.ternary and
@@ -29,7 +29,7 @@
          referenced by hash. The unary-bloat thesis is falsified the
          first time a byte form is larger than its tree-encoded twin. |))))
   (subsection surface
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Prims (boundary, journaled, grant-checked like tree prims):
@@ -43,7 +43,7 @@
       hash (INSERT ... ON CONFLICT DO NOTHING semantics). The 0-byte
       value is legal and addressable. |))))
   (subsection acceptance
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       1. ROUND-TRIP. put/get round-trips byte-identical for: empty,

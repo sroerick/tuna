@@ -1,12 +1,12 @@
 (project tuna-routes
  (doc "Tuna book chapter: routes as paths - endpoints become data in the path index. A route is a tree_paths entry under the reserved route/ namespace whose value is a JSON record naming a program and/or a byte-value template. Research question: for a substrate whose path index + prefix grants already are an ACL'd routing table, does data-first routing beat handler-code routing?")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section routes
   (doc "Publishing an endpoint is a store write - journaled, versioned (CAS), grant-gated, rewritable - with no rebuild and no redeploy. New OCaml only when the prim surface itself grows.")
-  (status planned)
+  (status implemented)
   (subsection laws
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       1. ROUTES ARE DATA. route/<site-path> maps site path /<site-path>
@@ -33,7 +33,7 @@
          match -> next candidate; nothing matches -> plain 404 (routes
          serve anonymous by design; no login redirect). |))))
   (subsection surface
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       POST /api/route/put    {path, record, expected_version?} -> {ok, version, value_hash}
@@ -43,7 +43,7 @@
       grants on publish/delete follow the existing prefix-grant model
       (admin bypass). |))))
   (subsection acceptance
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       1. PUBLISH WITHOUT REDEPLOY. A template route published via the
