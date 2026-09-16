@@ -997,6 +997,88 @@ let get_value pool auth req =
   >>= fun (code, content_type, body, hdrs) ->
   Dream.respond ~code ~headers:(("Content-Type", content_type) :: hdrs) body
 
+(* -- routes (M11): the routing table as data ---------------------------
+
+   /api/route/* manage route/<site-path> records (routes.borg surface);
+   publish/delete enforce the covering-grant rule with admin bypass,
+   and every answer - including denials - lands in the tree_ops chain.
+   Dispatch itself mounts as the LAST catch-all in the router below,
+   after Pages, /api/*, /health, /login, /logout and /static (law 2:
+   static wins, always). *)
+
+let post_route_put pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match (get_string_opt j "path", member_opt "record" j) with
+      | None, _ -> (j_err "missing \"path\"")
+      | _, None -> (j_err "missing \"record\"")
+      | Some path, Some record ->
+          guard
+            (Routes.publish pool ~caller_id:auth.auth_id
+               ~caller_admin:auth.auth_is_admin ~site_path:path ~record
+               ~expected_version:(get_int_opt j "expected_version")
+             >>= fun (code, j) -> j_ok ~code j))
+
+let post_route_delete pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match get_string_opt j "path" with
+      | None -> (j_err "missing \"path\"")
+      | Some path ->
+          guard
+            (Routes.delete pool ~caller_id:auth.auth_id
+               ~caller_admin:auth.auth_is_admin ~site_path:path
+               ~expected_version:(get_int_opt j "expected_version")
+             >>= fun (code, j) -> j_ok ~code j))
+
+let get_route_get pool auth req =
+  let path = Option.value (Dream.query req "path") ~default:"" in
+  guard
+    (Routes.get pool ~actor:auth.auth_id ~site_path:path
+     >>= fun (code, j) -> j_ok ~code j)
+
+let get_route_list pool auth req =
+  let prefix = Option.value (Dream.query req "prefix") ~default:"" in
+  guard
+    (Routes.list pool ~actor:auth.auth_id ~prefix
+     >>= fun (code, j) -> j_ok ~code j)
+
+(* the route-dispatch boundary: adapt a Routes.response to HTTP.  The
+   request context reaches program routes as one JSON string-tree input
+   {method, path, query, body_hash, actor}; anonymous runs are
+   attributed to the daemon identity (root), authenticated invokers to
+   their identity (law 3). *)
+let dispatch_route pool req =
+  Dream.body req >>= fun body ->
+  let target = Dream.target req in
+  let path_part, query =
+    match String.index_opt target '?' with
+    | Some i ->
+        ( String.sub target 0 i
+        , Some (String.sub target (i + 1) (String.length target - i - 1)) )
+    | None -> (target, None)
+  in
+  let site_path =
+    if String.length path_part > 0 && path_part.[0] = '/' then
+      String.sub path_part 1 (String.length path_part - 1)
+    else path_part
+  in
+  let meth = Dream.method_to_string (Dream.method_ req) in
+  authenticate pool req >>= fun auth ->
+  Store.fetch_identity_by_name pool "root" >>= fun daemon ->
+  (match daemon with
+   | None -> (j_err ~code:500 "daemon identity missing (root)")
+   | Some d ->
+       guard
+         (Routes.dispatch pool ~daemon:d.Store.i_id ~meth ~site_path ~query
+            ~body ~actor:(Option.map (fun a -> a.auth_id) auth)
+          >>= fun r ->
+          Dream.respond ~code:r.Routes.code
+            ~headers:(("Content-Type", r.Routes.content_type) :: r.Routes.headers)
+            r.Routes.body))
+
 (* -- router / server ------------------------------------------------- *)
 
 (* route list, mounted alongside the M8 page routes by bin/main.ml *)
@@ -1022,7 +1104,11 @@ let api_routes pool =
       ; Dream.get "/api/tree/state" (with_auth pool (get_tree_state pool))
       ; Dream.post "/api/ns/fork" (with_auth pool (post_ns_fork pool))
       ; Dream.post "/api/value/put" (with_auth pool (post_value_put pool))
-      ; Dream.get "/api/value/:hash" (with_auth pool (get_value pool)) ]
+      ; Dream.get "/api/value/:hash" (with_auth pool (get_value pool))
+      ; Dream.post "/api/route/put" (with_auth pool (post_route_put pool))
+      ; Dream.post "/api/route/delete" (with_auth pool (post_route_delete pool))
+      ; Dream.get "/api/route/get" (with_auth pool (get_route_get pool))
+      ; Dream.get "/api/route/list" (with_auth pool (get_route_list pool)) ]
 
 (* assemble the full router: health + JSON API + human pages + static *)
 let router ?(static_dir = "server/static") pool =
@@ -1031,7 +1117,8 @@ let router ?(static_dir = "server/static") pool =
     :: api_routes pool
     @ Pages.open_routes pool
     @ Pages.routes pool
-    @ [ Dream.get "/static/**" (Dream.static static_dir) ])
+    @ [ Dream.get "/static/**" (Dream.static static_dir) ]
+    @ [ Dream.any "/**" (dispatch_route pool) ])
 
 (* Called by bin/main.ml inside its own Lwt_main.run: bootstraps the
    root identity, then serves without spawning another event loop. *)
