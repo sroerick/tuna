@@ -193,9 +193,21 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
          ( `Error
              (Printf.sprintf "prim %s: args exceed the journal payload cap" name)
          , None
-         , None )
-       else
-         match grant_for gmap name with
+          , None )
+        else
+         (if name = "tree/del" then S.is_admin pool caller else Lwt.return false)
+         >>= function
+         | true ->
+             (* M11 tree/del (operator-approved pin): the covering-prefix
+                rule is tree/put's (a live grant covering the path), with
+                ADMINS EXEMPT - a live admin identity dispatches without
+                spending the run's grant map; the journal row carries
+                grant_id NULL.  Everyone else falls through to the
+                standard grant check below. *)
+             Tree_prims.dispatch ~pool ~actor:caller ~name ~args
+             >>= fun a -> Lwt.return (a, None, Some args_ternary)
+         | false ->
+           match grant_for gmap name with
          | None ->
              Lwt.return
                ( `Error

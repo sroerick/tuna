@@ -32,6 +32,10 @@ let names =
   ; "tree/put"
   ; "tree/cas"
   ; "tree/list"
+    (* M11 tree/del: path deletion through the run boundary - tree/put's
+       covering-prefix rule with admins exempt; paths only, the value
+       store is immutable *)
+  ; "tree/del"
   ; "ns/fork"
     (* M11 byte-value prims; handlers live in Value_prims, dispatched by
        the run boundary under byte-values.borg law 2 (reads are
