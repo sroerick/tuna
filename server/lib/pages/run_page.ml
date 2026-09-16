@@ -76,6 +76,10 @@ let verify_fragment (v : Replay.verdict) : string =
       Printf.sprintf
         {|<span id="verify-slot">%s <span class="err">%s</span></span>|}
         (L.badge "muted" "unverifiable") (L.esc msg)
+  | Replay.Gone msg ->
+      Printf.sprintf
+        {|<span id="verify-slot">%s <span class="muted">%s</span></span>|}
+        (L.badge "muted" "gone (gced)") (L.esc msg)
 
 let verify_button run_id =
   Printf.sprintf

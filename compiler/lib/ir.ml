@@ -55,6 +55,14 @@ let rec at_path (t : t) (p : path) : t option =
   | 0 :: rest, Lam { body; _ } -> at_path body rest
   | 0 :: rest, App { fn; _ } -> at_path fn rest
   | 1 :: rest, App { arg; _ } -> at_path arg rest
+  (* Prim args walk 0,1,.. — the SAME convention find_id emits
+     (go i).  Without this arm at_path fails for every node under a
+     (prim ...) and its provenance span comes out None (caught by
+     acceptance criterion 2: a callsite path resolving to an IR node
+     under a prim lost its span). *)
+  | i :: rest, Prim { args; _ } ->
+      if i < 0 || i >= List.length args then None
+      else at_path (List.nth args i) rest
   | _ -> None
 
 (* Structural path of the node with the given id (None if absent).

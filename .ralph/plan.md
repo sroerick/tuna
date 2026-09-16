@@ -400,11 +400,71 @@ Ground rules:
   the dictionary.
 
 ## M10 — acceptance + findings
-- [ ] scripts/verify-*.sh, one per acceptance.criteria item 1–7 (scripts callable in any order, each exit 0 on green)
-- [ ] wire failures to FINDINGS.md (F1–F4 observed evidence)
-- [ ] README.md: quickstart + API reference
-- [ ] borge: statuses flipped for implemented stanzas (make pass), agent notes appended to each chapter with evidence lines
-- [ ] full run: dev.sh start + smoke + all verify scripts green; commit
+- [x] scripts/verify-*.sh, one per acceptance.criteria item 1–7 (scripts callable in any order, each exit 0 on green)
+- [x] wire failures to FINDINGS.md (F1–F4 observed evidence)
+- [x] README.md: quickstart + API reference
+- [x] borge: statuses flipped for implemented stanzas (make pass), agent notes appended to each chapter with evidence lines
+- [x] full run: dev.sh start + smoke + all verify scripts green; commit
+
+## M10 notes (loop #16, finished a dead loop's mid-task state)
+
+- Loop #16's first run died mid-task on its own harness (the trailing
+  JSONDecodeError was a bash heredoc eating stdin, NOT a repo fault) —
+  it had already written verify-1..7 + verify-lib.sh, the retention-GC
+  store layer (gc_journal / redact / fetch_gc_tombstone), GC+redact
+  store suites, the /api/runs/:id/gc endpoint, and a third pool
+  deadlock fix. This loop debugged the scripts to green, found two
+  REAL system bugs the criteria exposed, and shipped everything.
+- **Bug 1 (acceptance found it): `Ir.at_path` did not traverse Prim
+  args.** find_id emits arg paths 0,1,.. for (prim ...) nodes but
+  at_path had no Prim arm — every provenance tag whose IR node sat
+  under a prim came out `span: null`, so journal callsites under prims
+  had NO source span (criterion 2 failed end-to-end). Fixed in
+  compiler/lib/ir.ml mirroring find_id's convention.
+- **Bug 2: stale provenance rows.** Programs are content-addressed;
+  the pre-fix rows keep their span-less ir forever under
+  `ON CONFLICT DO NOTHING`. upsert_program now REFRESHES the ir column
+  on recompile (`COALESCE(EXCLUDED.ir, programs.ir)` — a ternary-only
+  re-upsert keeps the old ir; SQL NULL passed when ir is None, jsonb
+  `null` string is NOT SQL NULL, which the first draft got wrong and
+  the store test caught). Hash pins the tree; ir is annotation.
+- **Bug 3 (the dead loop's crash):** `echo X | python3 - "IDS" <<EOF`
+  is broken by construction — the heredoc redirect overrides the
+  pipe, so `json.load(sys.stdin)` reads the consumed heredoc (empty).
+  verify-3 + verify-7 now pass JSON via argv instead.
+- **Bug 4 (bonus, M5's pool had a THIRD deadlock):** the one-conn-mvar
+  cell blocked a returning fiber whenever another conn was parked
+  (overlapping requests stalled one drain at a time — observed at
+  120s/754s server-side). The mvar now holds the IDLE LIST (single
+  cell, never full): release can never block, take consumes+re-puts
+  the remainder.
+- Verify scripts: verify-lib.sh (shared preamble: token, jget, psql_q,
+  mint_grant, curl -m timeouts everywhere so a hung compile fails
+  instead of wedging); verify-1 uses a 120-nested-echo program to keep
+  the boundary busy past the revoke window (bracket abstraction is
+  O(n²) at n=300 — do not raise n casually); verify-2 resolves both
+  callsites' paths through the ir tags; verify-4 asserts counterfactual
+  precision (edit seq0 changes exactly the downstream suffix; last-row
+  edit diverges nothing); verify-5 hand-derived first_diff_path
+  corpus; verify-6 pure-SQL audit; verify-7 gc tombstone + redaction.
+- FINDINGS.md created: F1–F4 all NOT TRIGGERED, with F4 carrying a
+  partial signal (bracket-duplication size: 3-nested-echo compiles to
+  901-char ternary, ~900 tags — provenance still resolves every one;
+  the defining hand-debug condition untested, no v1-scale program yet).
+- README.md: quickstart, calculus summary, CLI + full API reference,
+  prim/boundary/replay semantics, layout, test+acceptance runbook.
+- borge make pass: call-sites (tagging/stability/provenance)
+  implemented, journal.retention-gc PARTIAL (tombstone + visible
+  redaction break accepted by verify-7; automatic per-caller policy
+  scheduling open), grants.audit implemented (verify-6),
+  acceptance.criteria + failure-definitions implemented (FINDINGS.md).
+  lint clean; report 14 implemented / 8 planned (tuna.borg stays
+  planned: the pure-step core is the thesis's GOAL, not shipped).
+- Final battery, all green: dune build @all; dune runtest (62+ tests:
+  36 unit + 3 repl + 12 prim + 11 store + m10 gc/redaction suites);
+  differential 24/24 (refeval == CL twin == tuna CLI); smoke-api 14/14;
+  smoke-ui 17/17; verify-1..7 7/7; borge lint clean.
+
 
 ## M5 notes (loop #12)
 

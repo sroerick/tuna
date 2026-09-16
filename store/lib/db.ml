@@ -38,7 +38,7 @@ let connect_one cfg =
 
 type pool = {
   cfg : config
-; free : Pg.t Lwt_mvar.t
+; free : Pg.t list Lwt_mvar.t
 ; size : int
 ; created : int ref  (* connections created so far (<= size); Lwt is
                        cooperative so the check+incr is atomic w.r.t.
@@ -51,22 +51,59 @@ let init ?(size = 8) cfg =
   let free = Lwt_mvar.create_empty () in
   Lwt.return { cfg; free; size; created = ref 0 }
 
+(* The mvar holds the LIST of currently idle connections (single cell,
+   never full): [release] re-inserts under an EMPTY mvar (take/put are
+   back-to-back with no await between, so they are atomic under Lwt's
+   cooperative scheduler).  This kills the third, sneakier deadlock the
+   M5 'take_available-first' fix left behind: with the old one-conn-per-
+   cell mvar, a finalize [put] BLOCKS whenever another conn is already
+   parked in the cell — the returning fiber (and its whole request
+   handler) then stalls until the next take drains the cell.  With two
+   overlapping requests that withheld every subsequent response one
+   drain at a time: server-side runs observed at 120s/754s that take
+   milliseconds standalone, completing only when the NEXT request
+   arrived.  With the list-cell form a release can never block and a
+   taker that consumes the list puts the remainder straight back. *)
+
 let take_conn ({ cfg; free; size; _ } as p) =
-  match Lwt_mvar.take_available free with
-  | Some c -> Lwt.return c  (* reuse a pooled connection when one is free *)
-  | None ->
+  (* consume the idle-list cell (Some list) or find it empty (None);
+     both fall through to the same create-or-wait logic *)
+  let idle = match Lwt_mvar.take_available free with Some l -> l | None -> [] in
+  match idle with
+  | c :: rest ->
+      (* put the still-idle remainder back immediately (mvar is empty
+         now — we just consumed it) *)
+      Lwt_mvar.put free rest >>= fun () -> Lwt.return c
+  | [] ->
     if !(p.created) < size then begin
       p.created := !(p.created) + 1;
       connect_one cfg
     end
-    else Lwt_mvar.take free  (* all size conns created and none free: wait for a return *)
+    else begin
+      (* all size conns exist and none is idle: wait for a release;
+         loop past empty-list cells (a 1-conn release that was consumed
+         by another taker can put [] back) *)
+      let rec wait () =
+        Lwt_mvar.take free >>= function
+        | c :: rest -> Lwt_mvar.put free rest >>= fun () -> Lwt.return c
+        | [] -> wait ()
+      in
+      wait ()
+    end
 
 (* NOTE: a connection whose protocol stream breaks is put back and will
    fail on next use; v0 does not replace it (single dev server, short
    lifetime).  Revisit if a long-lived daemon needs self-healing. *)
 let with_pool ({ free; _ } as p) f =
   take_conn p >>= fun c ->
-  Lwt.finalize (fun () -> f c) (fun () -> Lwt_mvar.put free c)
+  Lwt.finalize
+    (fun () -> f c)
+    (fun () ->
+      (* non-blocking release: see [take_conn] — take the cell (if any)
+         and re-put with our conn consed on, atomically *)
+      match Lwt_mvar.take_available free with
+      | Some idle -> Lwt_mvar.put free (c :: idle)
+      | None -> Lwt_mvar.put free [ c ])
 
 let ping p = with_pool p (fun c -> Pg.ping c)
 

@@ -1,3 +1,12 @@
+(* agent note (|M10 loop (acceptance): audit is now implemented —
+   scripts/verify-6-audit.sh (criterion 6) runs the "which runs touched
+   grant g" query as pure SQL over journals joined to run rows
+   (psql-side, no log grep): exact set of runs that exercised the
+   grant, plus grant-level detail (which prims, at which callsite
+   paths).  Runs submitted without grants only touch the grant as NULL
+   denial rows and are correctly excluded.  The book's headline demo
+   holds: the effect record IS the audit record.|) *)
+
 (project tuna-grants
    (* agent note (|M7 (prim-boundary loop): the run-submission surface
       AND the per-call boundary are both wired. Per-call live checks:
@@ -124,7 +133,7 @@
 
   (subsection audit
    (doc "Grant usage as a SQL query — the audit demo")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          Because every journal row carries grant id, prim, callsite

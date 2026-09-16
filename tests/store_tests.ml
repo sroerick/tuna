@@ -197,6 +197,7 @@ let expect_verified _run_id = function
            | None -> Format.pp_print_string fmt "none")
         d.Rp.div_seq d.Rp.reason
   | Rp.Unverifiable msg -> Alcotest.failf "expected verified, unverifiable: %s" msg
+  | Rp.Gone msg -> Alcotest.failf "expected verified, gone: %s" msg
 
 (* The canonical M7 effectful program: echo the input, then negate it.
    Journal: exactly one boundary row (echo), carrying the grant and the
@@ -396,6 +397,110 @@ let test_counterfactual_fork () =
     (S.Run_status.to_string bad.S.r_status);
   Lwt.return ()
 
+(* M10 acceptance wiring: retention (journal.retention-gc).  GC leaves
+   a cited tombstone; verifiers report GONE, never VERIFIED.  Redaction
+   is a visible chain break; the run can never verify again. *)
+let test_gc_tombstone () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m10-root" ~token:"m10-token" () >>= fun me ->
+  S.mint_grant p ~prim:"echo" ~args_attenuation:"{}" ~caller:me.S.i_id ()
+  >>= fun g ->
+  seed_program p ~caller:(Some me.S.i_id) "(lambda (x) (prim \"echo\" x))"
+  >>= fun (hash, art) ->
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:None ~inputs:[ Tuna.Canon.parse "10" ]
+    ~fuel:10000 ~size_cap:100000 ()
+  >>= fun (row, js) ->
+  Alcotest.(check int) "journal present" 1 (List.length js);
+  (* GC: rows deleted, tombstone cited, verify_status gced *)
+  S.gc_journal p ~run_id:row.S.r_id ~policy:"keep-30d" ()
+  >>= (function
+        | None -> Alcotest.fail "gc lost the run row"
+        | Some gced ->
+            Alcotest.(check string) "tombstone status" "gced"
+              (Option.value gced.S.r_verify_status ~default:"MISSING");
+            S.fetch_journals p row.S.r_id
+            >>= fun after ->
+            Alcotest.(check int) "journal gone" 0 (List.length after);
+            S.fetch_gc_tombstone p row.S.r_id
+            >>= fun tomb ->
+            Alcotest.(check (option string)) "policy cited" (Some "keep-30d")
+              (Option.join tomb);
+            S.fetch_run p row.S.r_id
+            >>= (function
+                  | None -> Alcotest.fail "run vanished"
+                  | Some run ->
+                      Rp.verify p ~run
+                      >>= fun v ->
+                      (match v with
+                       | Rp.Gone msg ->
+                           Alcotest.(check bool) "cited in the verdict" true
+                             (String.length msg > 0);
+                           Lwt.return ()
+                       | Rp.Verified _ ->
+                           Alcotest.fail "GONE must never report VERIFIED"
+                       | _ -> Alcotest.fail "gc'd run must be Gone")))
+
+(* redaction = explicit chain break; the break is visible, the row's
+   answer is unknown, and no stale VERIFIED survives *)
+let test_redaction_breaks_chain () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m10-root" ~token:"m10-token" () >>= fun me ->
+  S.mint_grant p ~prim:"echo" ~args_attenuation:"{}" ~caller:me.S.i_id ()
+  >>= fun g ->
+  seed_program p ~caller:(Some me.S.i_id) "(lambda (x) (prim \"echo\" x))"
+  >>= fun (hash, art) ->
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:None ~inputs:[ Tuna.Canon.parse "10" ]
+    ~fuel:10000 ~size_cap:100000 ()
+  >>= fun (row, _) ->
+  (* first verify clean *)
+  S.fetch_run p row.S.r_id
+  >>= (function
+        | None -> Alcotest.fail "run vanished"
+        | Some run ->
+            Rp.verify p ~run >>= fun v ->
+            expect_verified run.S.r_id v;
+            Lwt.return ())
+  >>= fun () ->
+  S.redact_journal_row p ~run_id:row.S.r_id ~seq:0 ~policy:"pii-scrub" ()
+  >>= fun () ->
+  S.fetch_run p row.S.r_id
+  >>= (function
+        | None -> Alcotest.fail "run vanished"
+        | Some run ->
+            (* verify_status cleared: no stale VERIFIED *)
+            Alcotest.(check (option string)) "verify_status cleared" None
+              run.S.r_verify_status;
+            S.fetch_journals p row.S.r_id
+            >>= fun js ->
+            (match js with
+             | [ j ] ->
+                 Alcotest.(check (option string)) "payload redacted" None
+                   j.S.j_result_ternary;
+                 (match j.S.j_error with
+                  | Some e when String.length e >= 8 &&
+                                String.sub e 0 8 = "redacted" -> ()
+                  | _ -> Alcotest.fail "row must cite the redaction policy")
+             | _ -> Alcotest.fail "expected one row");
+            Rp.verify p ~run
+            >>= fun v ->
+            (match v with
+             | Rp.Bad_chain msg ->
+                 Alcotest.(check bool) "break mentions seq 0" true
+                   (String.length msg > 0);
+                 Lwt.return ()
+             | _ -> Alcotest.fail "redaction must be a visible chain break")
+            >>= fun () -> Rp.verify_and_record p ~run_id:row.S.r_id
+            >>= fun _ ->
+            S.fetch_run p row.S.r_id
+            >>= (function
+                  | None -> Alcotest.fail "run vanished"
+                  | Some run ->
+                      Alcotest.(check (option string)) "recorded failed"
+                        (Some "failed") run.S.r_verify_status;
+                      Lwt.return ()))
+
 let () =
   match Sys.getenv_opt "TUNA_TEST_PG" with
   | None -> print_endline "store tests skipped (TUNA_TEST_PG not set)"
@@ -415,4 +520,10 @@ let () =
              ; lwt "store/get+put through the boundary" test_run_store_prims
              ; lwt "journal tamper -> bad chain" test_tamper_bad_chain
              ; lwt "counterfactual fork re-executes" test_counterfactual_fork
+             ] )
+         ; ( "m10"
+           , [ lwt "gc leaves a cited tombstone; verifier reports GONE"
+                 test_gc_tombstone
+             ; lwt "redaction = visible chain break (answer unknown)"
+                 test_redaction_breaks_chain
              ] ) ])

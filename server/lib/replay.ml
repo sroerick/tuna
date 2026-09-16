@@ -52,6 +52,7 @@ type verdict =
   | Bad_chain of string
   | Diverged of divergence
   | Unverifiable of string
+  | Gone of string (* journal.retention-gc: GC tombstone cited *)
 
 let outcome_status = function
   | Normal _ -> "normal"
@@ -224,6 +225,19 @@ let verify pool ~(run : S.run) : verdict Lwt.t =
   if run.S.r_status = S.Run_status.Running then
     Lwt.return (Unverifiable "run is still running")
   else
+    (* retention tombstone first: a GC'd journal is GONE, never VERIFIED
+       and never FAILED-on-merits — the answer is unknown because the
+       recorded environment was retired under a cited policy. *)
+    S.fetch_gc_tombstone pool run.S.r_id
+    >>= (function
+          | Some policy ->
+              Lwt.return
+                (Gone
+                   (Printf.sprintf
+                      "journal gced; replay answers are unknown (retention \
+                       policy: %s)"
+                      (Option.value policy ~default:"uncited")))
+          | None ->
     S.fetch_journals pool run.S.r_id
     >>= fun js ->
     match S.verify_chain js with
@@ -311,7 +325,7 @@ let verify pool ~(run : S.run) : verdict Lwt.t =
                           else Lwt.return (Verified outcome))
                       (function
                         | Diverged d -> Lwt.return (Diverged d)
-                        | e -> Lwt.fail e))))
+                        | e -> Lwt.fail e)))))
 
 (* Re-execute a (derived) run against its own journal and WRITE the
    outcome into the run row: the counterfactual execution behind fork.
@@ -375,7 +389,7 @@ let reexecute pool ~run_id : verdict Lwt.t =
                                    >>= fun () -> Lwt.return (Diverged d)
                                | e -> Lwt.fail e)))))
 
-(* Verify and WRITE verify_status ("verified" / "failed"). *)
+(* Verify and WRITE verify_status ("verified" / "failed" / "gced"). *)
 let verify_and_record pool ~run_id =
   S.fetch_run pool run_id
   >>= (function
@@ -386,6 +400,7 @@ let verify_and_record pool ~run_id =
             let status =
               match v with
               | Verified _ -> "verified"
+              | Gone _ -> "gced"
               | Bad_chain _ | Diverged _ | Unverifiable _ -> "failed"
             in
             S.update_verify_status pool ~id:run_id ~verify_status:status ()

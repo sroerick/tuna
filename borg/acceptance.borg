@@ -1,3 +1,16 @@
+(* agent note (|M10 loop: both stanzas are now implemented.  criteria:
+   scripts/verify-{1..7}-*.sh (shared scripts/verify-lib.sh preamble,
+   callable in any order, each exit 0 on green) over a live dev
+   server — all seven green 2026-09-15 (acceptance 1: mid-run
+   revocation journaled as an error answer with granted prefix
+   intact; 2: both callsites span-resolved after the Ir.at_path fix;
+   3: replay identity + sweeper drift; 4: counterfactual precision;
+   5: hand-derived first_diff_path corpus; 6: SQL audit; 7: cited
+   GC tombstones + visible redaction break).  failure-definitions:
+   FINDINGS.md now records F1-F4 statuses (all four NOT TRIGGERED;
+   F4 carries a partial signal — bracket-duplication size, not the
+   defining hand-debug condition).|) *)
+
 (project tuna-acceptance
  (doc "Tuna book chapter: acceptance — validation criteria and pre-registered failure definitions for v1. This is a research project: define what failure looks like before building, so ambiguity cannot keep it alive.")
  (status planned)
@@ -7,7 +20,7 @@
 
   (subsection criteria
    (doc "v1 acceptance tests (extends SPEC.md §6 criteria 4-5)")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          v1 is done when ALL hold, scripted over the v0 corpus:
@@ -46,7 +59,7 @@
 
   (subsection failure-definitions
    (doc "Pre-registered failure modes — each is a finding, not a bug to hide")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
            F1 STEP COUNT DOES NOT SURVIVE OPTIMIZATION. If the first
