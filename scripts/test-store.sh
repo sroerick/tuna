@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Gate for the M5 store integration tests (run via tests/dune):
 #   - postgres down  -> skip silently (unit tests must never need PG)
 #   - postgres up    -> TUNA_TEST_PG=1 store_tests with migrations dir

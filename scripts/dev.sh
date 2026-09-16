@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Tuna dev orchestration: temp Postgres + the server binary.
 #
 #   scripts/dev.sh start      # boot PG (if needed) + build + run server
