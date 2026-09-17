@@ -1,7 +1,8 @@
 (* Tuna_server.Tree_prims: the M10 substrate prims over the derived
    path index (migrations 0005/0006).
 
-   tree/get, tree/put, tree/cas, tree/list address the path index; ns/fork
+   tree/get, tree/put, tree/cas, tree/list address the path index; tree/del
+   removes a path (M11, paths only - the value store is immutable); ns/fork
    copies an index slice under a new prefix.  Paths and prefixes travel
    as string trees (Tuna.Cstr); the value side is content-addressed
    ternary (tree_values, dedup by sha256) and tree_paths stores hashes
@@ -21,7 +22,8 @@ module S = Tuna_store.Store
 
 type answer = [ `Ok of Tuna.Tree.t | `Error of string ]
 
-let names = [ "tree/get"; "tree/put"; "tree/cas"; "tree/list"; "ns/fork" ]
+let names =
+  [ "tree/get"; "tree/put"; "tree/cas"; "tree/list"; "tree/del"; "ns/fork" ]
 
 let exists name = List.mem name names
 
@@ -31,6 +33,7 @@ let op_of_name = function
   | "tree/put" -> Some "put"
   | "tree/cas" -> Some "cas"
   | "tree/list" -> Some "list"
+  | "tree/del" -> Some "delete"
   | "ns/fork" -> Some "fork"
   | _ -> None
 
@@ -69,7 +72,7 @@ let op_path_of_args (args : Tuna.Tree.t) : string =
   | [] -> ""
 
 (* the paths a substrate call would touch, for the live grant prefix
-   check: get/put/cas/list address their first arg; ns/fork reads src
+   check: get/put/cas/del/list address their first arg; ns/fork reads src
    AND writes dst, so the grant must cover both.  None = no decodable
    paths (the handler will reject the call as an error answer). *)
 let grant_paths (name : string) (args : Tuna.Tree.t) : string list option =
@@ -78,7 +81,7 @@ let grant_paths (name : string) (args : Tuna.Tree.t) : string list option =
     match List.nth_opt elems i with Some t -> Prims.unstr t | None -> None
   in
   match name with
-  | "tree/get" | "tree/put" | "tree/cas" | "tree/list" ->
+  | "tree/get" | "tree/put" | "tree/cas" | "tree/list" | "tree/del" ->
       Option.map (fun p -> [ p ]) (str 0)
   | "ns/fork" -> (
       match (str 0, str 1) with
@@ -277,6 +280,44 @@ let ns_fork_prim p ~actor args =
       | _ -> Lwt.return (`Error "ns/fork: src and dst must be string trees"))
   | _ -> Lwt.return (`Error "ns/fork: args must be [src dst]")
 
+
+(* -- tree/del: [path] -> "deleted:N" (the row's next version) ----------- *)
+
+(* M11 tree/del (operator-approved pins): paths only - the value store is
+   IMMUTABLE, the delete never touches values, so the journal row carries
+   value_hash NULL (no value effect) and version = the row's NEXT version
+   (v+1, what a re-put would have slotted past), making replay ordering
+   across the path's lifetime unambiguous; the rewind fold drops the path
+   on exactly these rows via prev_version.  Grant checking is tree/put's
+   covering-prefix rule with admins exempt, enforced by the run boundary
+   (Run.execute).  Deleting an absent path is an ERROR ANSWER - journaled
+   as a NULL-effect denial row by the boundary - never an exception. *)
+let tree_del p ~actor args =
+  match Prims.list_of_tree args with
+  | [ path_t ] -> (
+      match Prims.unstr path_t with
+      | None -> Lwt.return (`Error "tree/del: path must be a string tree")
+      | Some path -> (
+          match validate_path "tree/del" path with
+          | Some e -> Lwt.return (`Error e)
+          | None -> (
+              S.path_delete p ~path ~expected_version:None
+              >>= function
+              | `Ok v ->
+                  S.op_append p ~op:"delete" ~path ~value_hash:None
+                    ~prev_version:(Some v) ~version:(Some (Int64.succ v)) ~actor
+                  >>= fun _ ->
+                  Lwt.return
+                    (`Ok
+                       (Prims.str
+                            (Printf.sprintf "deleted:%Ld" (Int64.succ v))))
+              | `Absent -> Lwt.return (`Error ("tree/del: no value at path " ^ path))
+              | `Conflict ->
+                  (* unconditional deletes cannot conflict; kept for
+                     exhaustiveness *)
+                  Lwt.return (`Error "tree/del: unexpected conflict"))))
+  | _ -> Lwt.return (`Error "tree/del: args must be [path]")
+
 (* -- dispatch ----------------------------------------------------------- *)
 
 let dispatch ~pool ~actor ~name ~args : answer Lwt.t =
@@ -285,5 +326,6 @@ let dispatch ~pool ~actor ~name ~args : answer Lwt.t =
   | "tree/put" -> tree_put pool ~actor args
   | "tree/cas" -> tree_cas pool ~actor args
   | "tree/list" -> tree_list pool ~actor args
+  | "tree/del" -> tree_del pool ~actor args
   | "ns/fork" -> ns_fork_prim pool ~actor args
   | other -> Lwt.return (`Error ("unknown prim: " ^ other))

@@ -21,6 +21,11 @@
  (libraries tuna tuna_compiler tuna_store tuna_server alcotest-lwt lwt))
 
 (executable
+ (name m11_tests)
+ (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest-lwt
+   lwt))
+
+(executable
  (name repl_tests)
  (libraries tuna tuna_interp tuna_compiler tuna_server alcotest))
 
@@ -61,6 +66,15 @@
  (action
   (bash
    "bash %{workspace_root}/scripts/test-store.sh %{exe:tree_substrate_tests.exe} ../migrations tuna_test_sub")))
+
+; M11 acceptance tests (byte values, routes as paths, tree/del): same PG
+; gate, its own scratch database so the three PG suites never share one.
+(rule
+ (alias runtest)
+ (deps m11_tests.exe ../scripts/test-store.sh (source_tree ../migrations))
+ (action
+  (bash
+   "bash %{workspace_root}/scripts/test-store.sh %{exe:m11_tests.exe} ../migrations tuna_test_m11")))
 
 ; M3 differential harness: three engines (instrumented upstream copy,
 ; CL reference twin, tuna CLI) must agree on every corpus entry.

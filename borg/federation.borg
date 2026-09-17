@@ -1,0 +1,42 @@
+(project tuna-federation
+ (doc "Tuna book chapter: federation - two tuna instances speak trees. Pre-registered as a sketch so the substrate never grows a feature that forecloses it. Thesis: the ops chain (genesis-anchored, hash-linked, prefix-folded, tamper-verified) is the replicable unit; peers exchange values by hash and converge by shipping verified ops windows, not by inventing a second protocol.")
+ (status planned)
+ (convention ocaml-dune)
+ (section federation
+  (doc "Out of v0/v1 scope. Three phases, each independently shippable, each with pre-registered failure.")
+  (status planned)
+  (subsection phases
+   (status planned)
+   (details
+    (doc (|
+      F1 VALUE EXCHANGE (read-only). GET /api/fed/value/:hash returns
+         {kind, payload} for either kind; the peer rehashes on receipt
+         and trusts nothing but the hash. Per-peer bearer identities;
+         hash-gated reads (byte-values law 2) mean no new authz model.
+      F2 OPS-CHAIN SYNC. Pull: GET /api/fed/ops?prefix=&after_seq=
+         returns op windows with op_hash linkage a peer can verify
+         (mid-log windows verify internal-linkage-only, genesis anchor
+         for seq 1 - the d7e0ae7 lesson, pinned). Push: POST
+         /api/fed/ops/apply accepts a verified window into a
+         peer-scoped namespace ns/<peer>/... and re-derives the index
+         by fold. Per-peer authz = one prefix grant per peer. Conflict
+         law v0: append-only per namespace, no merge - divergence is
+         visible as two namespaces, never silently reconciled.
+      F3 PRICKLYPEAR BRIDGE. Align attribution first (PP acted_by,
+         still unshipped), then bearer parity (PP delegated Bearer ==
+         tuna identity token), then a PP prims library calling
+         /api/tree/* and /api/fed/* so PP rows and tuna paths cite each
+         other by id/hash without either store encoding the other's
+         internals. PP is a client of the tree surface before it is a
+         peer of the chain. |))))
+  (subsection pre-registered-failures
+   (status planned)
+   (details
+    (doc (|
+      1. Two peers diverge on the same path and no check notices ->
+         failure; divergence must surface as distinct namespaces or a
+         verified rejection.
+      2. An applied op that fails rehash or chain-linkage verification
+         -> failure; rejects are journaled, never absorbed.
+      3. A bridge write attributed to any identity other than the true
+         actor (or its delegated identity) -> failure. |))))))

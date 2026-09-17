@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Gate for the M5 store integration tests (run via tests/dune):
 #   - postgres down  -> skip silently (unit tests must never need PG)
 #   - postgres up    -> TUNA_TEST_PG=1 store_tests with migrations dir
 # Usage: test-store.sh <exe> <migrations-dir> [db-name]
 set -e
-exe=$(readlink -f "$1"); mig=$2
+exe=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); mig=$2  # OpenBSD readlink has no -f
 DB_USER="${TUNA_DB_USER:-tuna}"
 if ! psql -h /tmp -p "${TUNA_DB_PORT:-5434}" -U "$DB_USER" \
      -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then

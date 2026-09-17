@@ -913,6 +913,198 @@ let get_tree_state pool _auth req =
                  ; ("at_seq", `Int (Int64.to_int at_seq))
                  ; ("entries", `List (List.map e_json entries)) ])))
 
+(* -- byte values (M11): JSON over the byte value store ----------------
+
+   Host surface of borg/byte-values.borg: bearer-authed like every
+   /api/* route, op rows in the tree_ops chain exactly like the prim
+   boundary (value-put / value-get; NULL-effect denial rows -
+   acceptance 4).  Law 2: reads are hash-gated (any valid bearer
+   identity; the hash is the capability), puts need one unrevoked grant,
+   admins exempt.  Law 3: the payload cap answers 413 as a journaled
+   denial, never a raised error. *)
+
+let journal_value pool ~actor ~op ~path ?(value_hash = None) () =
+  Store.op_append pool ~op ~path ~value_hash ~prev_version:None ~version:None
+    ~actor
+  >>= fun _ -> Lwt.return ()
+
+let put_allowed pool (auth : auth) =
+  if auth.auth_is_admin then Lwt.return true
+  else Store.has_live_grant pool auth.auth_id
+
+(* POST /api/value/put {"bytes_b64"} -> {hash, len}; dedup is a no-op
+   re-put returning the same hash (byte-values.borg surface).  Returns
+   (code, json) so tests can exercise the core without Dream. *)
+let value_put_core pool ~(auth : auth) ~bytes : (int * J.t) Lwt.t =
+  let len = String.length bytes in
+  let cap = Store.value_max_bytes () in
+  let denied code msg =
+    journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:"" ()
+    >>= fun () -> Lwt.return (code, `Assoc [ ("error", `String msg) ])
+  in
+  if len > cap then
+    denied 413
+      (Printf.sprintf "payload of %d bytes exceeds the cap of %d" len cap)
+  else
+    put_allowed pool auth
+    >>= function
+    | false -> denied 403 "value/put: caller holds no unrevoked grant"
+    | true ->
+        let hash = Store.byte_hash bytes in
+        Store.byte_value_put pool ~hash ~bytes
+        >>= fun () ->
+        journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:hash
+          ~value_hash:(Some hash) ()
+        >>= fun () ->
+        Lwt.return (201, `Assoc [ ("hash", `String hash); ("len", `Int len) ])
+
+let post_value_put pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match get_string_opt j "bytes_b64" with
+      | None -> (j_err "missing \"bytes_b64\"")
+      | Some b64 -> (
+          match Base64.decode b64 with
+          | Error _ -> (j_err "bytes_b64 is not valid base64")
+          | Ok bytes ->
+              value_put_core pool ~auth ~bytes
+              >>= fun (code, j) -> (j_ok ~code j)))
+
+(* GET /api/value/:hash[?kind=bytes|tree] -> payload + headers; kind
+   pins the store (byte-values.borg law 1), absent from both is a 404
+   journaled answer.  Returns (code, content_type, body, headers). *)
+let value_get_core pool ~(auth : auth) ~hash ~kind =
+  let hash = Tuna.Hash.normalize_hex hash in
+  let answer code content_type body hdrs =
+    journal_value pool ~actor:auth.auth_id ~op:"value-get" ~path:hash ()
+    >>= fun () -> Lwt.return (code, content_type, body, hdrs)
+  in
+  let denied code msg =
+    answer code "application/json"
+      (J.to_string (`Assoc [ ("error", `String msg) ]))
+      []
+  in
+  match kind with
+  | Some k when k <> "bytes" && k <> "tree" ->
+      denied 400 "kind must be \"bytes\" or \"tree\""
+  | _ -> (
+      let fetch () =
+        match kind with
+        | Some "bytes" -> (
+            Store.byte_value_fetch pool hash
+            >>= (function
+                  | Some b -> Lwt.return (Some (Store.Bytes b))
+                  | None -> Lwt.return None))
+        | Some "tree" -> (
+            Store.value_fetch pool hash
+            >>= (function
+                  | Some t -> Lwt.return (Some (Store.Tree t))
+                  | None -> Lwt.return None))
+        | _ -> Store.probe_value pool hash
+      in
+      fetch () >>= function
+      | None -> denied 404 ("no value with hash " ^ hash)
+      | Some (Store.Bytes b) ->
+          answer 200 "application/octet-stream" b
+            [ ("X-Tuna-Hash", hash)
+            ; ("X-Tuna-Kind", "bytes")
+            ; ("X-Tuna-Length", string_of_int (String.length b)) ]
+      | Some (Store.Tree ternary) ->
+          answer 200 "text/plain; charset=us-ascii" ternary
+            [ ("X-Tuna-Hash", hash)
+            ; ("X-Tuna-Kind", "tree")
+            ; ("X-Tuna-Length", string_of_int (String.length ternary)) ])
+
+let get_value pool auth req =
+  let hash = Dream.param req "hash" in
+  let kind = Dream.query req "kind" in
+  value_get_core pool ~auth ~hash ~kind
+  >>= fun (code, content_type, body, hdrs) ->
+  Dream.respond ~code ~headers:(("Content-Type", content_type) :: hdrs) body
+
+(* -- routes (M11): the routing table as data ---------------------------
+
+   /api/route/* manage route/<site-path> records (routes.borg surface);
+   publish/delete enforce the covering-grant rule with admin bypass,
+   and every answer - including denials - lands in the tree_ops chain.
+   Dispatch itself mounts as the LAST catch-all in the router below,
+   after Pages, /api/*, /health, /login, /logout and /static (law 2:
+   static wins, always). *)
+
+let post_route_put pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match (get_string_opt j "path", member_opt "record" j) with
+      | None, _ -> (j_err "missing \"path\"")
+      | _, None -> (j_err "missing \"record\"")
+      | Some path, Some record ->
+          guard
+            (Routes.publish pool ~caller_id:auth.auth_id
+               ~caller_admin:auth.auth_is_admin ~site_path:path ~record
+               ~expected_version:(get_int_opt j "expected_version")
+             >>= fun (code, j) -> j_ok ~code j))
+
+let post_route_delete pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match get_string_opt j "path" with
+      | None -> (j_err "missing \"path\"")
+      | Some path ->
+          guard
+            (Routes.delete pool ~caller_id:auth.auth_id
+               ~caller_admin:auth.auth_is_admin ~site_path:path
+               ~expected_version:(get_int_opt j "expected_version")
+             >>= fun (code, j) -> j_ok ~code j))
+
+let get_route_get pool auth req =
+  let path = Option.value (Dream.query req "path") ~default:"" in
+  guard
+    (Routes.get pool ~actor:auth.auth_id ~site_path:path
+     >>= fun (code, j) -> j_ok ~code j)
+
+let get_route_list pool auth req =
+  let prefix = Option.value (Dream.query req "prefix") ~default:"" in
+  guard
+    (Routes.list pool ~actor:auth.auth_id ~prefix
+     >>= fun (code, j) -> j_ok ~code j)
+
+(* the route-dispatch boundary: adapt a Routes.response to HTTP.  The
+   request context reaches program routes as one JSON string-tree input
+   {method, path, query, body_hash, actor}; anonymous runs are
+   attributed to the daemon identity (root), authenticated invokers to
+   their identity (law 3). *)
+let dispatch_route pool req =
+  Dream.body req >>= fun body ->
+  let target = Dream.target req in
+  let path_part, query =
+    match String.index_opt target '?' with
+    | Some i ->
+        ( String.sub target 0 i
+        , Some (String.sub target (i + 1) (String.length target - i - 1)) )
+    | None -> (target, None)
+  in
+  let site_path =
+    if String.length path_part > 0 && path_part.[0] = '/' then
+      String.sub path_part 1 (String.length path_part - 1)
+    else path_part
+  in
+  let meth = Dream.method_to_string (Dream.method_ req) in
+  authenticate pool req >>= fun auth ->
+  Store.fetch_identity_by_name pool "root" >>= fun daemon ->
+  (match daemon with
+   | None -> (j_err ~code:500 "daemon identity missing (root)")
+   | Some d ->
+       guard
+         (Routes.dispatch pool ~daemon:d.Store.i_id ~meth ~site_path ~query
+            ~body ~actor:(Option.map (fun a -> a.auth_id) auth)
+          >>= fun r ->
+          Dream.respond ~code:r.Routes.code
+            ~headers:(("Content-Type", r.Routes.content_type) :: r.Routes.headers)
+            r.Routes.body))
+
 (* -- router / server ------------------------------------------------- *)
 
 (* route list, mounted alongside the M8 page routes by bin/main.ml *)
@@ -936,7 +1128,13 @@ let api_routes pool =
       ; Dream.post "/api/tree/list" (with_auth pool (post_tree_list pool))
       ; Dream.get "/api/tree/log" (with_auth pool (get_tree_log pool))
       ; Dream.get "/api/tree/state" (with_auth pool (get_tree_state pool))
-      ; Dream.post "/api/ns/fork" (with_auth pool (post_ns_fork pool)) ]
+      ; Dream.post "/api/ns/fork" (with_auth pool (post_ns_fork pool))
+      ; Dream.post "/api/value/put" (with_auth pool (post_value_put pool))
+      ; Dream.get "/api/value/:hash" (with_auth pool (get_value pool))
+      ; Dream.post "/api/route/put" (with_auth pool (post_route_put pool))
+      ; Dream.post "/api/route/delete" (with_auth pool (post_route_delete pool))
+      ; Dream.get "/api/route/get" (with_auth pool (get_route_get pool))
+      ; Dream.get "/api/route/list" (with_auth pool (get_route_list pool)) ]
 
 (* assemble the full router: health + JSON API + human pages + static *)
 let router ?(static_dir = "server/static") pool =
@@ -945,7 +1143,8 @@ let router ?(static_dir = "server/static") pool =
     :: api_routes pool
     @ Pages.open_routes pool
     @ Pages.routes pool
-    @ [ Dream.get "/static/**" (Dream.static static_dir) ])
+    @ [ Dream.get "/static/**" (Dream.static static_dir) ]
+    @ [ Dream.any "/**" (dispatch_route pool) ])
 
 (* Called by bin/main.ml inside its own Lwt_main.run: bootstraps the
    root identity, then serves without spawning another event loop. *)

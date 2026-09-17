@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # M6 acceptance smoke: exercise the whole JSON API chain against a live
 # server (scripts/dev.sh start).  Exit 0 on green.
 #

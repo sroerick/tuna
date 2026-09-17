@@ -687,6 +687,124 @@ let value_fetch p hash =
   | [ r ] -> Lwt.return (Some (text r 0 "tree_values.ternary"))
   | _ -> store_error "tree_values: multiple rows for hash %s" hash
 
+(* -- byte values (M11, migration 0008) --------------------------------
+
+   The BYTE kind of the content-addressed value store
+   (borg/byte-values.borg): raw bytes (HTML, JSON, templates, media)
+   addressed by sha256 over the exact stored bytes - the same address
+   law as tree_values, a different payload kind.  ONE NAMESPACE, TWO
+   KINDS: readers probe both stores by hash; kinds do not coalesce, so
+   the same content can live in both tables under one hash. *)
+
+let byte_hash = Tuna.Hash.hex_of_string
+
+(* payload cap (byte-values.borg law 3): a journaled denial answer at
+   the boundary, never a raised error; default 1 MiB, env
+   TUNA_VALUE_MAX_BYTES. *)
+let value_max_bytes () =
+  match Sys.getenv_opt "TUNA_VALUE_MAX_BYTES" with
+  | Some s -> (
+      match int_of_string_opt s with
+      | Some v when v >= 0 -> v
+      | _ -> 1_048_576)
+  | None -> 1_048_576
+
+let byte_value_put p ~hash ~bytes =
+  Db.q_unit
+    ~params:[ p_str hash; V.of_binary bytes ]
+    p
+    "INSERT INTO byte_values (hash, bytes) VALUES ($1, $2) \
+     ON CONFLICT (hash) DO NOTHING"
+
+let byte_value_fetch p hash =
+  Db.q ~params:[ p_str hash ] p "SELECT bytes FROM byte_values WHERE hash = $1"
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] -> Lwt.return (Some (V.to_binary_exn (col r 0)))
+  | _ -> store_error "byte_values: multiple rows for hash %s" hash
+
+let byte_value_len p hash =
+  Db.q ~params:[ p_str hash ] p
+    "SELECT octet_length(bytes) FROM byte_values WHERE hash = $1"
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] -> Lwt.return (Some (int64 r 0 "byte_values.len"))
+  | _ -> store_error "byte_values: multiple rows for hash %s" hash
+
+(* probe-both-stores resolution (byte-values.borg law 1): the kind is
+   whichever store answers; tree_values wins the probe where both
+   exist (only possible when the ternary text and the bytes share a
+   sha256 - callers that care state the kind). *)
+type probe = Tree of string | Bytes of string
+
+let probe_value p hash =
+  value_fetch p hash
+  >>= function
+  | Some ternary -> Lwt.return (Some (Tree ternary))
+  | None -> (
+      byte_value_fetch p hash >>= function
+      | Some bytes -> Lwt.return (Some (Bytes bytes))
+      | None -> Lwt.return None)
+
+(* octet length of whichever store holds [hash] (the value/len cheap
+   probe: lengths without materializing payloads) *)
+let probe_len p hash =
+  Db.q ~params:[ p_str hash ] p
+    "SELECT octet_length(ternary) FROM tree_values WHERE hash = $1"
+  >>= function
+  | [ r ] -> Lwt.return (Some (int64 r 0 "tree_values.len"))
+  | [] -> (
+      Db.q ~params:[ p_str hash ] p
+        "SELECT octet_length(bytes) FROM byte_values WHERE hash = $1"
+      >>= function
+      | [ r ] -> Lwt.return (Some (int64 r 0 "byte_values.len"))
+      | [] -> Lwt.return None
+      | _ -> store_error "byte_values: multiple rows for hash %s" hash)
+  | _ -> store_error "tree_values: multiple rows for hash %s" hash
+
+(* -- law 2 live checks (byte-values.borg: HASH-GATED READS,
+   CAPABILITY-GATED WRITES) ------------------------------------------- *)
+
+(* a bare non-uuid actor (tree_ops actors are free text) simply holds
+   nothing; cast failures read as false, never raise *)
+let is_admin p id =
+  Lwt.catch
+    (fun () ->
+      Db.q ~params:[ p_str id ] p
+        "SELECT is_admin FROM identities WHERE id = $1::uuid"
+      >>= function
+      | [ r ] -> Lwt.return (bool r 0 "identity.is_admin")
+      | _ -> Lwt.return false)
+    (fun _ -> Lwt.return false)
+
+(* value/put capability: the caller holds at least one unrevoked grant *)
+let has_live_grant p caller =
+  Lwt.catch
+    (fun () ->
+      Db.q ~params:[ p_str caller ] p
+        "SELECT 1 FROM grants WHERE caller = $1::uuid AND revoked_at IS NULL LIMIT 1"
+      >>= (function
+            | [] -> Lwt.return false
+            | _ -> Lwt.return true))
+    (fun _ -> Lwt.return false)
+
+(* M11 route publish/delete capability: an unrevoked grant of [caller]
+   whose prefix covers [path] (NULL prefix covers everything) *)
+let has_covering_grant p caller path =
+  Lwt.catch
+    (fun () ->
+      Db.q ~params:[ p_str caller ] p
+        "SELECT path_prefix FROM grants WHERE caller = $1::uuid AND revoked_at IS NULL"
+      >>= fun rows ->
+      Lwt.return
+        (List.exists
+           (fun r ->
+             match opt_text r 0 with
+             | None -> true
+             | Some pfx -> prefix_match pfx path)
+           rows))
+    (fun _ -> Lwt.return false)
+
 (* unconditional write: INSERT at version 1, or version+1 on the
    existing row (tree/put prim).  Returns the new version. *)
 let path_put p ~path ~value_hash ~owner =
@@ -756,6 +874,32 @@ let path_put_cas p ~path ~value_hash ~owner ~expected_version ~expected_hash =
             | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
             | [] -> classify ()
             | n -> store_error "path_put_cas: RETURNING gave %d rows" (List.length n)))
+
+(* route delete (M11 routes.borg): remove a path row; [expected_version]
+   pins the optimistic version like path_put_cas (None = unconditional).
+   `Ok v carries the version of the row as deleted; `Absent / `Conflict
+   are answers, never exceptions. *)
+let path_delete p ~path ~expected_version =
+  let h = path_hash path in
+  match expected_version with
+  | None ->
+      Db.q ~params:[ p_str h ] p
+        "DELETE FROM tree_paths WHERE path_hash = $1 RETURNING version"
+      >>= (function
+            | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
+            | [] -> Lwt.return `Absent
+            | n -> store_error "path_delete: RETURNING gave %d rows" (List.length n))
+  | Some n ->
+      Db.q ~params:[ p_str h; p_int64 n ] p
+        "DELETE FROM tree_paths WHERE path_hash = $1 AND version = $2 \
+         RETURNING version"
+      >>= (function
+            | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
+            | [] -> (
+                path_get p ~path >>= function
+                | None -> Lwt.return `Absent
+                | Some _ -> Lwt.return `Conflict)
+            | n -> store_error "path_delete: RETURNING gave %d rows" (List.length n))
 
 (* prefix range scan: every path starting with [prefix], byte-wise
    ordered.  [prefix] must be non-empty (the whole-namespace read is an

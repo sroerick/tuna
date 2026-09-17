@@ -1,0 +1,62 @@
+(project tuna-routes
+ (doc "Tuna book chapter: routes as paths - endpoints become data in the path index. A route is a tree_paths entry under the reserved route/ namespace whose value is a JSON record naming a program and/or a byte-value template. Research question: for a substrate whose path index + prefix grants already are an ACL'd routing table, does data-first routing beat handler-code routing?")
+ (status implemented)
+ (convention ocaml-dune)
+ (section routes
+  (doc "Publishing an endpoint is a store write - journaled, versioned (CAS), grant-gated, rewritable - with no rebuild and no redeploy. New OCaml only when the prim surface itself grows.")
+  (status implemented)
+  (subsection laws
+   (status implemented)
+   (details
+    (doc (|
+      1. ROUTES ARE DATA. route/<site-path> maps site path /<site-path>
+         to a record byte value: {"method": GET or POST or any,
+         "template":hash or null,"program":hash or null,"content_type":str,
+         "grant_prefix":str or null}. Writes go through the normal path
+         put/cas/delete ops; the ops chain audits every change.
+      2. STATIC WINS. Reserved surfaces (Pages, /api/*, /health,
+         /login, /logout) match first, always. Publishing a route whose
+         site-path collides with a reserved path is a journaled denial.
+         Reserved list is pinned here, not in code, and may only grow
+         by book change: api, health, login, logout, frag, grants,
+         programs, runs, repl, value, route, static.
+      3. THE ROUTE RECORD IS THE CAPABILITY. Template routes serve
+         bytes to any caller, anonymous included - a public site needs
+         it. Program routes execute the stored program as a
+         daemon-attributed run whose only capability is the record's
+         own grant_prefix; the visitor carries nothing. Authenticated
+         invokers get their identity on the run row.
+      4. RESULT CONTRACT. A program route's run must end in a value
+         hash (+ the record's content_type); anything else answers 500
+         with the run id in the body. Debuggability beats silence.
+      5. DISPATCH. Match record method against request method; no
+         match -> next candidate; nothing matches -> plain 404 (routes
+         serve anonymous by design; no login redirect). |))))
+  (subsection surface
+   (status implemented)
+   (details
+    (doc (|
+      POST /api/route/put    {path, record, expected_version?} -> {ok, version, value_hash}
+      POST /api/route/delete {path, expected_version}
+      GET  /api/route/get?path=...      GET /api/route/list?prefix=...
+      Dispatch lives in the server boundary after the static matchers;
+      grants on publish/delete follow the existing prefix-grant model
+      (admin bypass). |))))
+  (subsection acceptance
+   (status implemented)
+   (details
+    (doc (|
+      1. PUBLISH WITHOUT REDEPLOY. A template route published via the
+         API serves byte-identical content to an anonymous caller
+         through the public front with the record's content_type.
+      2. PROGRAM ROUTE. A stored program runs per request: journaled,
+         attributable run row; the request context reaches the program
+         as inputs; result bytes are served per the contract.
+      3. SHADOW REFUSED. Publishing a route over a reserved path is a
+         journaled denial; the static surface still answers.
+      4. CAPABILITY CHECK. Publish/delete without a covering grant is a
+         journaled denial.
+      5. LIFECYCLE. Deleted route answers 404 immediately; rewind over
+         a prefix containing route/ restores the prior route table
+         exactly (rewind-as-fold covers routes because routes are
+         paths). |))))))

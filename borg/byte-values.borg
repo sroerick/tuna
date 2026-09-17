@@ -1,0 +1,63 @@
+(project tuna-byte-values
+ (doc "Tuna book chapter: byte values - the value store grows a raw-byte kind so text (HTML, JSON, templates, media) never travels through tree encoding. Ternary remains the only form of code. Research question: can two content kinds share one hash namespace without the substrate laws noticing?")
+ (status implemented)
+ (convention ocaml-dune)
+ (section byte-values
+  (doc "Values are content-addressed primitives; the path index stays derived and never leaks into the value store. 0008 adds byte_values(hash, bytes): hash = sha256 over the exact stored bytes, lowercase hex - the same address law as tree_values, different payload kind.")
+  (status implemented)
+  (subsection laws
+   (status implemented)
+   (details
+    (doc (|
+      1. ONE NAMESPACE, TWO KINDS. tree_values.ternary and
+         byte_values.bytes are both addressed by sha256 of their exact
+         stored content. Readers probe both stores by hash; where the
+         distinction matters (value/get, route templates) the caller
+         states the expected kind. Kinds do not coalesce: content that
+         is simultaneously valid ternary and wanted as bytes lives in
+         both tables. No kind column on tree_paths.
+      2. HASH-GATED READS, CAPABILITY-GATED WRITES. value/get needs
+         only a valid bearer identity - the hash is the capability
+         (unguessable, 256-bit). value/put requires the caller to hold
+         at least one unrevoked grant (a write capability on the
+         store); admins exempt.
+      3. CAPS, NOT EXCEPTIONS. Payload cap (default 1 MiB, env
+         TUNA_VALUE_MAX_BYTES) is a journaled denial answer, never a
+         raised error, matching v1 prim conventions.
+      4. TERNARY STAYS CODE-ONLY. No tree-language string encoding
+         grows to smuggle text: a template or document is a byte value
+         referenced by hash. The unary-bloat thesis is falsified the
+         first time a byte form is larger than its tree-encoded twin. |))))
+  (subsection surface
+   (status implemented)
+   (details
+    (doc (|
+      Prims (boundary, journaled, grant-checked like tree prims):
+        value/put  args = base64(bytes) -> {hash, kind bytes, len}
+        value/get  args = hash[, kind]  -> {bytes base64, hash, len}
+        value/len  args = hash          -> {len}   (cheap existence probe)
+      JSON agent surface (Bearer):
+        POST /api/value/put     {"bytes_b64": ...}   -> {hash, len}
+        GET  /api/value/:hash[?kind=bytes or tree]      -> payload + headers
+      Dedup: put of already-stored bytes is a no-op returning the same
+      hash (INSERT ... ON CONFLICT DO NOTHING semantics). The 0-byte
+      value is legal and addressable. |))))
+  (subsection acceptance
+   (status implemented)
+   (details
+    (doc (|
+      1. ROUND-TRIP. put/get round-trips byte-identical for: empty,
+         1-byte, high-bit bytes, a 100 KiB HTML page, and a value whose
+         bytes happen to be valid ternary (kind stays disjoint).
+      2. ADDRESS LAW. For a fixed corpus, every returned hash equals an
+         independent sha256 of the exact bytes (no canonicalization
+         drift between the prim path and the API path).
+      3. BLOAT INVERSION. The byte form of a real HTML page is strictly
+         smaller than its unary/ternary tree encoding - recorded as a
+         ratio in the test output. If the ratio ever inverts, the
+         chapter's thesis fails and this is a finding.
+      4. JOURNAL COMPLETENESS. Every value op (including cap denials
+         and absent reads) journals an op row; denial rows carry
+         NULL-effect per the tree_ops convention.
+      5. DEDUP. Double put returns one row and one hash; storage does
+         not grow. |))))))

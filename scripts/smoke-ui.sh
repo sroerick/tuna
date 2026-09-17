@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # M8+M9 acceptance smoke: exercise the whole htmx UI (server-rendered
 # pages, session-cookie auth, htmx fragments, no-JS degradation) plus
 # the M9 REPL (dictionary rounds, structural commands) against a live
