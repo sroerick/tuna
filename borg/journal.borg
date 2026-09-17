@@ -1,3 +1,17 @@
+(* agent note (|M10 loop (acceptance): retention-gc is now PARTIAL —
+   the semantics the book demands are implemented and accepted by
+   scripts/verify-7-gc-tombstones.sh: POST /api/runs/:id/gc deletes
+   the journal inside one transaction and leaves the CITED tombstone
+   (journal_gced_at + journal_gced_policy, verify_status='gced'); the
+   sweep verdict is 'gced' with the policy in its reason — GONE never
+   reads as VERIFIED.  PII redaction is an explicit chain break: the
+   row's payload is nulled, the chain walk FAILS at that seq (visible
+   break), the run re-verifies and reports ANSWER-UNKNOWN (failed) —
+   never silently-trusted.  OPEN: the automatic policy knob (per
+   caller/identity keep-N-days scheduling) — v0 GC is an explicit
+   admin-supplied-policy endpoint, which is why this stays partial
+   rather than implemented.|) *)
+
 (project tuna-journal
    (* agent note (|M7 (prim-boundary loop): row-schema, recorded-
       environment, and counterfactual-edits are now IMPLEMENTED.
@@ -110,7 +124,7 @@
 
   (subsection retention-gc
    (doc "Retention, garbage collection, and PII")
-   (status planned)
+   (status partial)
    (details
     (doc (|
          Three pressures priced up front:

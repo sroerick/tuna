@@ -135,6 +135,8 @@ let expect_verified_ok run_id = function
       Alcotest.failf "expected verified, diverged: %s" d.Rp.reason
   | Rp.Unverifiable msg ->
       Alcotest.failf "run %s unverifiable: %s" run_id msg
+  | Rp.Gone msg ->
+      Alcotest.failf "run %s gced (retention GC): %s" run_id msg
 
 let test_grant_prefix_boundary () =
   setup () >>= fun p ->

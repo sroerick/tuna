@@ -1,3 +1,16 @@
+(* agent note (|M10 loop (acceptance): all three call-sites stanzas are
+   now implemented and refereed by scripts/verify-2-callsite-paths.sh
+   (criterion 2: zero un-attributable journal rows on a two-callsite
+   corpus) and verify-5 (divergence surface joins the span).  Fix
+   landed this loop: Ir.at_path did not traverse Prim args (find_id
+   did) — every callsite under a (prim ...) lost its span in the ir
+   column; fixed in compiler/lib/ir.ml, and Store.upsert_program now
+   REFRESHES the ir column on recompile (hash pins the tree; ir is
+   annotation) so span fixes reach already-existing content-addressed
+   rows.  Bracket-duplication blowup is recorded in FINDINGS.md under
+   F4 partial signal (3-nested-echo -> 901-char ternary, ~900 tags,
+   all still span-resolvable).|) *)
+
 (project tuna-call-sites
    (* agent note (|M7 (prim-boundary loop): the RUN side is now wired
       for the journal: Run.execute resolves each prim call's site (the
@@ -17,7 +30,7 @@
 
   (subsection tagging
    (doc "Callsite paths assigned at compile time")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          During compilation (surface IR -> tree via bracket abstraction,
@@ -41,7 +54,7 @@
 
   (subsection stability
    (doc "Path stability across patching and recompilation")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          Accepted truth: patches invalidate paths below the edit point —
@@ -65,7 +78,7 @@
 
   (subsection provenance
    (doc "Mapping tree paths back to source spans: the UX-bearing invariant")
-   (status partial)
+   (status implemented)
    (details
     (doc (|
          The compiler retains, per compiled artifact, a provenance map:

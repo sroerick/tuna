@@ -42,6 +42,8 @@ module P = Patch
 module B = Tuna_compiler.Bracket
 module Db = Tuna_store.Db
 module Store = Tuna_store.Store
+(* Run is a sibling module of this library (tuna_server): referenced
+   directly as Run.* below — the span join + gc route use it. *)
 
 type auth = { auth_id : string; auth_name : string; auth_is_admin : bool }
 
@@ -366,31 +368,57 @@ let post_run pool auth req =
 
 (* run-row level verify response; the divergence is addressed structure,
    not prose (replay.divergence-surface) *)
-let verdict_json run_id (v : Replay.verdict) : J.t =
+(* verdict_json: the addressed divergence surface (replay.divergence-
+   surface), joined through call-sites.provenance: a Diverged verdict
+   with a non-empty callsite path also carries the source span from the
+   program's retained provenance map.  GC'd runs report "gced" —
+   GONE with the cited policy, never verified, never failed-on-merits. *)
+let verdict_json pool ~(program_hash : string) (run_id : string)
+    (v : Replay.verdict) : J.t Lwt.t =
+  let span_of path =
+    if path = "" then Lwt.return None
+    else
+      Store.fetch_program pool program_hash
+      >>= (function
+            | None -> Lwt.return None
+            | Some p -> Lwt.return (Run.ir_span p.Store.p_ir path))
+  in
   match v with
   | Replay.Verified _ ->
-      `Assoc [ ("run_id", `String run_id); ("verify", `String "verified") ]
+      Lwt.return (`Assoc [ ("run_id", `String run_id); ("verify", `String "verified") ])
   | Replay.Bad_chain msg ->
-      `Assoc
-        [ ("run_id", `String run_id)
-        ; ("verify", `String "failed")
-        ; ("reason", `String ("journal hash chain broken: " ^ msg)) ]
+      Lwt.return
+        (`Assoc
+          [ ("run_id", `String run_id)
+          ; ("verify", `String "failed")
+          ; ("reason", `String ("journal hash chain broken: " ^ msg)) ])
+  | Replay.Gone reason ->
+      Lwt.return
+        (`Assoc
+          [ ("run_id", `String run_id)
+          ; ("verify", `String "gced")
+          ; ("reason", `String reason) ])
   | Replay.Diverged d ->
-      `Assoc
-        [ ("run_id", `String run_id)
-        ; ("verify", `String "failed")
-        ; ("reason", `String d.Replay.reason)
-        ; ("divergence_seq", opt_int d.Replay.div_seq)
-        ; ("callsite_path", `String d.Replay.callsite_path)
-        ; ("prim", `String d.Replay.prim)
-        ; ("first_diff_path", `String d.Replay.first_diff_path)
-        ; ("recorded_hash", opt_str d.Replay.recorded_hash)
-        ; ("replayed_hash", opt_str d.Replay.replayed_hash) ]
+      span_of d.Replay.callsite_path
+      >>= fun span ->
+      Lwt.return
+        (`Assoc
+          [ ("run_id", `String run_id)
+          ; ("verify", `String "failed")
+          ; ("reason", `String d.Replay.reason)
+          ; ("divergence_seq", opt_int d.Replay.div_seq)
+          ; ("callsite_path", `String d.Replay.callsite_path)
+          ; ("span", Option.value span ~default:`Null)
+          ; ("prim", `String d.Replay.prim)
+          ; ("first_diff_path", `String d.Replay.first_diff_path)
+          ; ("recorded_hash", opt_str d.Replay.recorded_hash)
+          ; ("replayed_hash", opt_str d.Replay.replayed_hash) ])
   | Replay.Unverifiable msg ->
-      `Assoc
-        [ ("run_id", `String run_id)
-        ; ("verify", `String "unverifiable")
-        ; ("reason", `String msg) ]
+      Lwt.return
+        (`Assoc
+          [ ("run_id", `String run_id)
+          ; ("verify", `String "unverifiable")
+          ; ("reason", `String msg) ])
 
 (* GET /api/runs/:id — auto-verify on fetch: an unverified finished run
    is replay-verified inline and the verdict recorded (verify_status). *)
@@ -426,12 +454,14 @@ let verify_sweep pool _auth req =
   | Some "1" ->
       Store.list_runs pool ~caller:None ~program:None ~limit:200 ()
       >>= fun rs ->
-      let rec go acc = function
+    let rec go acc = function
         | [] -> Lwt.return (List.rev acc)
             | r :: rest -> (
                 Replay.verify_and_record pool ~run_id:r.Store.r_id
                   ~deadline:(Run.deadline_now ()) ()
-                >>= fun v -> go (verdict_json r.Store.r_id v :: acc) rest)
+                >>= fun v ->
+                verdict_json pool ~program_hash:r.Store.r_program_hash r.Store.r_id v
+                >>= fun j -> go (j :: acc) rest)
       in
       go [] rs >>= fun vs ->
        (j_ok (`Assoc [ ("verified", `List vs) ]))
@@ -581,11 +611,14 @@ let fork_journal pool _auth req =
               | None ->
                   fork pool ~parent_run_id:run_id ~edits
                   >>= fun (row, njs, v) ->
+                  verdict_json pool ~program_hash:row.Store.r_program_hash
+                    row.Store.r_id v
+                  >>= fun vj ->
                   j_ok ~code:201
                     (`Assoc
                       [ ("run", run_json row)
                       ; ("forked_from", `String run_id)
-                      ; ("verify", verdict_json row.Store.r_id v)
+                      ; ("verify", vj)
                       ; ("journal", `List (List.map journal_json njs)) ])))
 
 (* -- REPL (M9): the agent surface of the round-based REPL ------------- *)
@@ -653,7 +686,19 @@ let post_grant pool auth req =
   | Error msg ->  (j_err msg)
   | Ok j -> (
       let prim = get_string_opt j "prim" in
-      let attenuation = get_string_opt j "args_attenuation" in
+      (* attenuation is a JSON predicate stored as text.  Accept BOTH
+         shapes: an object ({"max_ternary":1}) is inlined verbatim; a
+         string is used as-is (pre-M10 callers).  An object is what the
+         docs and the UI show, and silently defaulting an object to the
+         admit-all "{}" would mint a WEAKER-LOOKING grant that is
+         actually STRONGER — never do that. *)
+      let attenuation =
+        match List.assoc_opt "args_attenuation" (match j with `Assoc kvs -> kvs | _ -> [])
+        with
+        | Some (`String s) -> Some s
+        | Some v -> Some (J.to_string v)
+        | None -> None
+      in
       match prim with
       | None ->  (j_err "missing \"prim\"")
       | Some prim ->
@@ -1104,6 +1149,25 @@ let dispatch_route pool req =
           Dream.respond ~code:r.Routes.code
             ~headers:(("Content-Type", r.Routes.content_type) :: r.Routes.headers)
             r.Routes.body))
+(* POST /api/runs/:id/gc — retention GC (journal.retention-gc): delete
+   the run's journal rows behind the cited tombstone.  Verifiers report
+   GONE for this run afterwards, never VERIFIED.  Body: {"policy": str}. *)
+let gc_run pool _auth req =
+  let id = Dream.param req "id" in
+  body_json req >>= function
+  | Error msg ->  (j_err msg)
+  | Ok j -> (
+      let policy = match get_string_opt j "policy" with Some p -> p | None -> "" in
+      if policy = "" then (j_err "gc requires a cited retention \"policy\"")
+      else
+        Store.fetch_run pool id
+        >>= (function
+              | None -> j_err ~code:404 "unknown run id"
+              | Some _ ->
+                  Store.gc_journal pool ~run_id:id ~policy ()
+                  >>= (function
+                        | None -> (j_err ~code:500 "gc lost the run row")
+                        | Some r -> (j_ok ~code:200 (run_json r)))))
 
 (* -- router / server ------------------------------------------------- *)
 
@@ -1117,6 +1181,7 @@ let api_routes pool =
     ; Dream.get "/api/runs" (with_auth pool (list_runs pool))
     ; Dream.get "/api/runs/verify" (with_auth pool (verify_sweep pool))
     ; Dream.get "/api/runs/:id" (with_auth pool (get_run pool))
+    ; Dream.post "/api/runs/:id/gc" (with_auth pool (gc_run pool))
     ; Dream.get "/api/journals/:run_id" (with_auth pool (get_journal pool))
     ; Dream.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))

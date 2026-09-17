@@ -77,17 +77,23 @@ let fetch_program p hash =
   | _ -> store_error "multiple program rows for hash %s" hash )
 
 (* get-or-create by hash: hash is content-addressed so conflicting
-   content is impossible by construction; first insert wins for the
-   ir/created_by metadata. *)
+   content is impossible by construction; first insert wins for
+   created_by, but the ir column REFRESHES when the recompile carries
+   provenance: the hash pins the compiled tree, the ir is annotation
+   (compiler span fixes must reach already-existing rows — caught by
+   acceptance criterion 2, where a pre-fix row's spans were None
+   forever).  A ternary-only re-upsert (ir=null) keeps the old ir. *)
 let upsert_program p ~hash ~ternary ~ir ~created_by =
   Db.q_unit
     ~params:[ p_str hash
             ; p_str ternary
-            ; V.of_string (Option.value ir ~default:"null")
+            ; (match ir with Some s -> V.of_string s | None -> V.null)
             ; p_opt created_by ]
     p
     "INSERT INTO programs (hash, ternary, ir, created_by) \
-     VALUES ($1, $2, $3::jsonb, $4::uuid) ON CONFLICT (hash) DO NOTHING"
+     VALUES ($1, $2, $3::jsonb, $4::uuid) \
+     ON CONFLICT (hash) DO UPDATE \
+       SET ir = COALESCE(EXCLUDED.ir, programs.ir)"
   >>= fun () ->
   Db.q ~params:[ p_str hash ] p select_program
   >>= fun rows ->
@@ -566,6 +572,64 @@ let check_grant p ~id ~caller ?(paths = []) () :
       | Some prefix, ps ->
           if List.for_all (prefix_match prefix) ps then Lwt.return `Ok
           else Lwt.return `Prefix_denied)
+
+(* -- retention (journal.retention-gc, M10) --------------------------- *)
+
+(* GC one run's journal, leaving the CITED TOMBSTONE the book demands:
+   journal rows are deleted and the run row carries journal_gced_at +
+   journal_gced_policy + verify_status 'gced' — a verifier that looks
+   at this run later reports GONE, never VERIFIED (the journal is what
+   made verification possible; without it the run is simply
+   unverifiable-by-retention, not confirmed).  Runs as one transaction
+   so the delete and the tombstone cannot split apart. *)
+let gc_journal p ~run_id ~policy () =
+  (* simple_query only: a parameterized extended-protocol query cannot
+     span BEGIN/COMMIT.  Policy/run-id are short admin-supplied text;
+     escape single quotes by doubling. *)
+  let esc s = String.concat "''" (String.split_on_char '\'' s) in
+  let sql =
+    Printf.sprintf
+      "BEGIN; \
+       DELETE FROM journals WHERE run_id = '%s'::uuid; \
+       UPDATE runs SET journal_gced_at = now(), journal_gced_policy = '%s', \
+         verify_status = 'gced', verified_at = now() WHERE id = '%s'::uuid; \
+       COMMIT;"
+      (esc run_id) (esc policy) (esc run_id)
+  in
+  Db.with_pool p (fun c -> Db.Pg.simple_query c sql)
+  >>= fun _ -> fetch_run p run_id
+
+(* Was this run's journal GC'd?  Some policy = GONE (tombstone cited). *)
+let fetch_gc_tombstone p run_id =
+  Db.q
+    ~params:[ p_str run_id ]
+    p
+    "SELECT journal_gced_policy FROM runs \
+     WHERE id = $1::uuid AND journal_gced_at IS NOT NULL"
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] -> Lwt.return (Some (opt_text r 0))
+  | _ -> store_error "runs: multiple rows for one id"
+
+(* PII redaction is an EXPLICIT chain break (journal.retention-gc): the
+   row's payload is replaced by a policy-citing redacted tombstone.
+   row_hash is deliberately left stale — the walk fails at that seq,
+   which is the visible break.  The run's verify_status is cleared so
+   the next fetch re-verifies and surfaces the break (a stale VERIFIED
+   would be the silent-delete the book forbids). *)
+let redact_journal_row p ~run_id ~seq ~policy () =
+  Db.q_unit
+    ~params:[ p_str policy; p_str run_id; p_int seq ]
+    p
+    "UPDATE journals SET result_ternary = NULL, result_hash = NULL, \
+       error = 'redacted (chain break): ' || $1 \
+     WHERE run_id = $2::uuid AND seq = $3"
+  >>= fun () ->
+  Db.q_unit
+    ~params:[ p_str run_id ]
+    p
+    "UPDATE runs SET verify_status = NULL, verified_at = NULL \
+     WHERE id = $1::uuid"
 
 (* -- identities ------------------------------------------------------ *)
 

@@ -70,6 +70,37 @@ let site_paths (ir_json : string option) : (int * string) list =
       | _ -> []
       | exception _ -> [])
 
+(* callsite path -> source span json (call-sites.provenance): the ir
+   tags carry span {off,len} per path; the divergence surface joins
+   a diverged journal row's callsite path back to the source text. *)
+let ir_spans (ir_json : string option) : (string * J.t) list =
+  match ir_json with
+  | None -> []
+  | Some s -> (
+      match J.from_string s with
+      | `Assoc kvs -> (
+          match List.assoc_opt "tags" kvs with
+          | Some (`List tags) ->
+              List.filter_map
+                (function
+                  | `Assoc kv ->
+                      let path =
+                        match List.assoc_opt "path" kv with
+                        | Some (`String p) -> Some p
+                        | _ -> None
+                      in
+                      let span = List.assoc_opt "span" kv in
+                      (match (path, span) with
+                       | Some p, Some span -> Some (p, span)
+                       | _ -> None)
+                  | _ -> None)
+                tags
+          | _ -> [])
+      | _ -> []
+      | exception _ -> [])
+
+let ir_span ir_json path = List.assoc_opt path (ir_spans ir_json)
+
 (* -- grants by prim -------------------------------------------------- *)
 
 (* Grant rows for the run: prim name -> (grant id, attenuation json
