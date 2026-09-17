@@ -26,7 +26,8 @@ let status_badge status =
   | "normal" | "verified" -> badge "ok" status
   | "running" -> badge "warn" status
   | "failed" | "error" -> badge "bad" status
-  | "fuel_exhausted" | "size_exhausted" -> badge "warn" status
+  | "fuel_exhausted" | "size_exhausted" | "deadline_exceeded" ->
+      badge "warn" status
   | _ -> badge "muted" status
 
 let verify_badge = function

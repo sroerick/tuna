@@ -388,9 +388,9 @@ let get_run pool _auth req =
   | Some r ->
       (match (r.Store.r_verify_status, r.Store.r_status) with
        | None, Store.Run_status.Running -> Lwt.return ()
-       | None, _ ->
-           Replay.verify_and_record pool ~run_id:id
-           >>= fun _ -> Lwt.return ()
+         | None, _ ->
+             Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
+             >>= fun _ -> Lwt.return ()
        | Some _, _ -> Lwt.return ())
       >>= fun () ->
       Store.fetch_run pool id
@@ -414,9 +414,10 @@ let verify_sweep pool _auth req =
       >>= fun rs ->
       let rec go acc = function
         | [] -> Lwt.return (List.rev acc)
-        | r :: rest -> (
-            Replay.verify_and_record pool ~run_id:r.Store.r_id
-            >>= fun v -> go (verdict_json r.Store.r_id v :: acc) rest)
+            | r :: rest -> (
+                Replay.verify_and_record pool ~run_id:r.Store.r_id
+                  ~deadline:(Run.deadline_now ()) ()
+                >>= fun v -> go (verdict_json r.Store.r_id v :: acc) rest)
       in
       go [] rs >>= fun vs ->
        (j_ok (`Assoc [ ("verified", `List vs) ]))
@@ -503,12 +504,13 @@ let fork pool ~parent_run_id ~(edits : (int * edit) list) =
             Store.insert_derived_journal pool ~run_id:new_id
               ~parent_run_id:parent_run_id ()
             >>= fun () ->
-            Replay.reexecute pool ~run_id:new_id
-            >>= fun v ->
-            Store.fetch_run pool new_id
-            >>= (function
-                  | None -> Lwt.fail (Failure "fork run vanished")
-                  | Some row ->
+              Replay.reexecute pool ~run_id:new_id
+                ~deadline:(Run.deadline_now ()) ()
+              >>= fun v ->
+              Store.fetch_run pool new_id
+                >>= (function
+                    | None -> Lwt.fail (Failure "fork run vanished")
+                    | Some row ->
                       Store.fetch_journals pool new_id
                       >>= fun njs ->
                       Lwt.return (row, njs, v)))

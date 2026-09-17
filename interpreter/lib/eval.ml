@@ -15,6 +15,9 @@
      every run; exhaustion is a normal result, never an exception at
      the API boundary. The budget is exact: a divergent term like
      omega halts with Fuel_exhausted at exactly [fuel] steps.
+   - A wall-clock deadline exists at the run boundary only (server env
+     TUNA_RUN_MAX_SECONDS); pure evaluation passes none, so step
+     counts stay an invariant of the calculus.
 
    Since M7 this module is the IDENTITY-monad instantiation of the
    monadic engine (Prim_eval.Make): one verbatim port of the rules
@@ -41,7 +44,7 @@ end
 
 module Engine = Prim_eval.Make (Id)
 
-type result = Engine.result = Normal of Tuna.Tree.t * int | Fuel_exhausted of int | Size_exhausted of int
+type result = Engine.result = Normal of Tuna.Tree.t * int | Fuel_exhausted of int | Size_exhausted of int | Deadline_exceeded of int
 
 (* Same API and behavior as the pre-M7 pure engine. *)
 let eval = Engine.eval

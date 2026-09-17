@@ -202,5 +202,27 @@ let () =
           (* fuel still applies across the arg fold. *)
           check_exhausted "fuel spans the arg fold" 1 true
             (result_of_run ~fuel:1 ~size_cap:1000 not_tree [ not_tree; true_tree ]);
+          (* deadline (run-boundary policy, not a calculus budget): the
+             clock is polled every 4096 applications, so a past deadline
+             aborts any long-running program at the first poll, while a
+             sub-granularity run finishes untouched. *)
+          Alcotest.test_case "past deadline aborts omega" `Quick (fun () ->
+              match
+                Tuna_interp.Eval.eval ~fuel:100_000_000 ~size_cap:100_000
+                  ~deadline:0.0 ~program:omega_f (omega_args 100_000)
+              with
+              | Tuna_interp.Eval.Deadline_exceeded s ->
+                  Alcotest.(check bool) "aborted early" true
+                    (s > 0 && s < 100_000_000)
+              | _ -> Alcotest.fail "expected Deadline_exceeded");
+          Alcotest.test_case "deadline polls lazily: tiny run finishes" `Quick (fun () ->
+              match
+                Tuna_interp.Eval.eval ~fuel:100 ~size_cap:1000
+                  ~deadline:0.0 ~program:not_tree [ true_tree ]
+              with
+              | Tuna_interp.Eval.Normal (t, s) ->
+                  Alcotest.(check bool) "tree" true (t = leaf);
+                  Alcotest.(check int) "steps" 2 s
+              | _ -> Alcotest.fail "expected Normal");
         ] );
     ]

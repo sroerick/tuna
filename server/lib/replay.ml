@@ -33,6 +33,7 @@ type outcome = Eng.result =
   | Normal of Tuna.Tree.t * int
   | Fuel_exhausted of int
   | Size_exhausted of int
+  | Deadline_exceeded of int
 
 (* replay.divergence-surface: one addressed diff, not a wall of text *)
 type divergence = {
@@ -57,15 +58,19 @@ let outcome_status = function
   | Normal _ -> "normal"
   | Fuel_exhausted _ -> "fuel_exhausted"
   | Size_exhausted _ -> "size_exhausted"
+  | Deadline_exceeded _ -> "deadline_exceeded"
 
 let outcome_ternary = function
   | Normal (t, _) -> Some (Tuna.Canon.encode t)
-  | Fuel_exhausted _ | Size_exhausted _ -> None
+  | Fuel_exhausted _ | Size_exhausted _ | Deadline_exceeded _ -> None
 
 let outcome_steps = function
-  | Normal (_, s) | Fuel_exhausted s | Size_exhausted s -> s
+  | Normal (_, s) | Fuel_exhausted s | Size_exhausted s | Deadline_exceeded s -> s
 
 let outcome_hash o = Option.map Tuna.Hash.hex_of_string (outcome_ternary o)
+
+(* wall-clock aborts are operator policy, never a calculus fact *)
+let is_deadline = function Deadline_exceeded _ -> true | _ -> false
 
 (* Structural walk: descend where child subtree hashes disagree, stop
    at the first.  Path convention: 0 = stem child, 1 = fork left,
@@ -93,8 +98,8 @@ let first_diff_path (a : Tuna.Tree.t) (b : Tuna.Tree.t) : string =
    sequentially from [rows].  Answers come from the journal (accepted
    results consumed in order); no grant check, no live host.  Returns
    (outcome, rows consumed). *)
-let execute_fed ~program ~inputs ~fuel ~size_cap (rows : S.journal list) :
-    (outcome * int) Lwt.t =
+let execute_fed ?(deadline = Float.infinity) ~program ~inputs ~fuel ~size_cap
+    (rows : S.journal list) : (outcome * int) Lwt.t =
   let arr = Array.of_list rows in
   let next = ref 0 in
   let host ~site:_ ~name ~args =
@@ -166,7 +171,7 @@ let execute_fed ~program ~inputs ~fuel ~size_cap (rows : S.journal list) :
         incr next;
         Lwt.return answer)
   in
-  Eng.eval ~host ~fuel ~size_cap ~program inputs
+  Eng.eval ~host ~fuel ~size_cap ~deadline ~program inputs
   >>= fun outcome -> Lwt.return (outcome, !next)
 
 (* -- verification ----------------------------------------------------- *)
@@ -220,9 +225,15 @@ let load_run_parts pool ~(run : S.run) :
                           >>= fun js -> Lwt.return (Ok (program, inputs, js))))))
 
 (* Verify one run row against its journal (no state written). *)
-let verify pool ~(run : S.run) : verdict Lwt.t =
+let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
   if run.S.r_status = S.Run_status.Running then
     Lwt.return (Unverifiable "run is still running")
+  else if run.S.r_status = S.Run_status.Deadline_exceeded then
+    (* replay re-runs the calculus, not the clock: a wall-clock abort
+       records operator timing, not a computational fact *)
+    Lwt.return
+      (Unverifiable
+         "deadline_exceeded run: wall-clock abort, not a calculus fact")
   else
     S.fetch_journals pool run.S.r_id
     >>= fun js ->
@@ -236,10 +247,18 @@ let verify pool ~(run : S.run) : verdict Lwt.t =
                     let nrows = List.length js' in
                     Lwt.catch
                       (fun () ->
-                        execute_fed ~program ~inputs ~fuel:run.S.r_fuel
-                          ~size_cap:run.S.r_size_cap js'
-                        >>= fun (outcome, consumed) ->
-                        if consumed < nrows then
+                          execute_fed ~program ~inputs ~fuel:run.S.r_fuel
+                            ~size_cap:run.S.r_size_cap ~deadline js'
+                          >>= fun (outcome, consumed) ->
+                          if is_deadline outcome then
+                            (* a replay-side clock abort is an operator
+                               budget, not evidence of divergence *)
+                            Lwt.return
+                              (Unverifiable
+                                 "replay exceeded the wall-clock budget \
+                                  (TUNA_RUN_MAX_SECONDS): raise it or disable \
+                                  it (0) to verify this run")
+                          else if consumed < nrows then
                           let rows = Array.of_list js' in
                           let row = rows.(consumed) in
                           Lwt.return
@@ -317,10 +336,15 @@ let verify pool ~(run : S.run) : verdict Lwt.t =
    outcome into the run row: the counterfactual execution behind fork.
    A divergent edit leaves the run in status Error with the divergence
    recorded in the returned verdict (never raised). *)
-let reexecute pool ~run_id : verdict Lwt.t =
+let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
   S.fetch_run pool run_id
   >>= (function
         | None -> Lwt.fail (Failure "unknown run")
+        | Some run when run.S.r_status = S.Run_status.Deadline_exceeded ->
+            Lwt.return
+              (Unverifiable
+                 "deadline_exceeded run: wall-clock abort, not a calculus \
+                  fact; the fork counterfactual re-runs the clock too")
         | Some run ->
             S.fetch_journals pool run_id
             >>= fun js ->
@@ -334,10 +358,10 @@ let reexecute pool ~run_id : verdict Lwt.t =
                            let nrows = List.length js' in
                            Lwt.catch
                              (fun () ->
-                               execute_fed ~program ~inputs ~fuel:run.S.r_fuel
-                                 ~size_cap:run.S.r_size_cap js'
-                               >>= fun (outcome, consumed) ->
-                               if consumed < nrows then
+                                execute_fed ~program ~inputs ~fuel:run.S.r_fuel
+                                  ~size_cap:run.S.r_size_cap ~deadline js'
+                                >>= fun (outcome, consumed) ->
+                                if consumed < nrows then
                                  let rows = Array.of_list js' in
                                  let row = rows.(consumed) in
                                  let d =
@@ -360,14 +384,28 @@ let reexecute pool ~run_id : verdict Lwt.t =
                                    | Normal _ -> S.Run_status.Normal
                                    | Fuel_exhausted _ ->
                                        S.Run_status.Fuel_exhausted
-                                   | Size_exhausted _ ->
-                                       S.Run_status.Size_exhausted
+                                  | Deadline_exceeded _ ->
+                                      S.Run_status.Deadline_exceeded
+                                  | Size_exhausted _ ->
+                                      S.Run_status.Size_exhausted
                                  in
-                                 S.update_run_result pool ~id:run_id ~status
-                                   ?result_ternary:(outcome_ternary outcome)
-                                   ?step_count:(Some (outcome_steps outcome))
-                                   ()
-                                 >>= fun () -> Lwt.return (Verified outcome))
+                                   S.update_run_result pool ~id:run_id ~status
+                                     ?result_ternary:(outcome_ternary outcome)
+                                     ?step_count:(Some (outcome_steps outcome))
+                                     ()
+                                   >>= fun () ->
+                                   if is_deadline outcome then
+                                     (* the counterfactual re-ran the clock
+                                        too; finalize the fork row the same
+                                        way the run boundary would *)
+                                     Lwt.return
+                                       (Unverifiable
+                                          "counterfactual exceeded the \
+                                           wall-clock budget \
+                                           (TUNA_RUN_MAX_SECONDS); the fork \
+                                           row is finalized as \
+                                           deadline_exceeded")
+                                   else Lwt.return (Verified outcome))
                              (function
                                | Diverged d ->
                                    S.update_run_result pool ~id:run_id
@@ -376,12 +414,12 @@ let reexecute pool ~run_id : verdict Lwt.t =
                                | e -> Lwt.fail e)))))
 
 (* Verify and WRITE verify_status ("verified" / "failed"). *)
-let verify_and_record pool ~run_id =
+let verify_and_record pool ?(deadline = Float.infinity) ~run_id () =
   S.fetch_run pool run_id
   >>= (function
         | None -> Lwt.fail (Failure "unknown run")
         | Some run ->
-            verify pool ~run
+              verify pool ~run ~deadline ()
             >>= fun v ->
             let status =
               match v with

@@ -53,7 +53,15 @@ into `schema_migrations` inside its own transaction).
 5. **Fuel & size cap.** Every run carries `fuel` (max rule firings) and
    `size_cap` (max live tree size). Exhaustion is a normal result
    (`status fuel_exhausted / size_exhausted`), never an exception,
-   watchdog, or timeout.
+   watchdog, or timeout. The run boundary additionally enforces a
+   wall-clock cap (`TUNA_RUN_MAX_SECONDS`, default 10s; 0/negative
+   disables): a run past it finalizes as `deadline_exceeded`. That is
+   operator policy at the boundary only - pure evaluation is untimed,
+   so step counts remain an invariant of the calculus. Replay and the
+   fork counterfactual carry the same cap (an aborted replay is a
+   verdict-unverifiable, never a divergence; an aborted counterfactual
+   finalizes its fork row as deadline_exceeded), and deadline_exceeded
+   rows themselves are unverifiable: the clock is not a calculus fact.
 6. **The journal is the system.** Faithful replay = re-execute
    program+inputs with prim calls answered sequentially from the run's
    journal rows. Replay must not touch the live host/network.

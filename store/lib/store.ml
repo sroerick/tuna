@@ -99,13 +99,20 @@ let upsert_program p ~hash ~ternary ~ir ~created_by =
 (* -- runs ------------------------------------------------------------ *)
 
 module Run_status = struct
-  type t = Running | Normal | Fuel_exhausted | Size_exhausted | Error
+  type t =
+    | Running
+    | Normal
+    | Fuel_exhausted
+    | Size_exhausted
+    | Deadline_exceeded  (* wall-clock abort (TUNA_RUN_MAX_SECONDS) *)
+    | Error
 
   let to_string = function
     | Running -> "running"
     | Normal -> "normal"
     | Fuel_exhausted -> "fuel_exhausted"
     | Size_exhausted -> "size_exhausted"
+    | Deadline_exceeded -> "deadline_exceeded"
     | Error -> "error"
 
   let of_string = function
@@ -113,6 +120,7 @@ module Run_status = struct
     | "normal" -> Normal
     | "fuel_exhausted" -> Fuel_exhausted
     | "size_exhausted" -> Size_exhausted
+    | "deadline_exceeded" -> Deadline_exceeded
     | "error" -> Error
     | s -> store_error "bad run status %S" s
 end

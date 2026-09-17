@@ -93,8 +93,9 @@ let view pool user req =
   | None -> L.not_found ~user "unknown run id"
   | Some r0 -> (
       (* auto-verify an unverified finished run — same rule as the API *)
-      (if r0.S.r_verify_status = None && finished r0 then
-         Replay.verify_and_record pool ~run_id:id >>= fun _ -> S.fetch_run pool id
+        (if r0.S.r_verify_status = None && finished r0 then
+           Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
+           >>= fun _ -> S.fetch_run pool id
        else Lwt.return (Some r0))
       >>= function
       | None -> L.not_found ~user "run row vanished"
@@ -160,7 +161,7 @@ let verify_post pool user req =
   >>= function
   | None -> L.not_found ~user "unknown run id"
   | Some _ -> (
-      Replay.verify_and_record pool ~run_id:id
+      Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
       >>= fun v ->
       if L.is_htmx req then Dream.html (verify_fragment v)
       else Dream.redirect req ("/runs/" ^ id))

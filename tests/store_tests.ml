@@ -233,7 +233,7 @@ let test_run_boundary () =
         | `Bad msg -> Alcotest.failf "fresh journal must verify: %s" msg)
    | _ -> Alcotest.fail "bad journal");
   (* replay identity: same engine, journal-fed -> verified, same steps *)
-  Rp.verify p ~run:row
+  Rp.verify p ~run:row ()
   >>= fun v ->
   expect_verified row.S.r_id v;
   (match v with
@@ -242,7 +242,7 @@ let test_run_boundary () =
          (Some (Rp.outcome_steps outcome))
    | _ -> ());
   (* verify_and_record writes verify_status *)
-  Rp.verify_and_record p ~run_id:row.S.r_id
+  Rp.verify_and_record p ~run_id:row.S.r_id ()
   >>= fun _ ->
   S.fetch_run p row.S.r_id
   >>= (function
@@ -274,7 +274,7 @@ let test_run_denial () =
        Alcotest.(check bool) "error journaled" true
          (Option.is_some j.S.j_error)
    | _ -> Alcotest.fail "bad journal");
-  Rp.verify p ~run:row >>= fun v -> expect_verified row.S.r_id v;
+  Rp.verify p ~run:row () >>= fun v -> expect_verified row.S.r_id v;
   Lwt.return ()
 
 (* store/get + store/put through the boundary (migration 0002 prim_kv) *)
@@ -312,7 +312,7 @@ let test_run_store_prims () =
   >>= fun (row, _js) ->
   Alcotest.(check string) "store/get returns the value" "10"
     (Option.value row.S.r_result_ternary ~default:"MISSING");
-  Rp.verify p ~run:row >>= fun v -> expect_verified row.S.r_id v;
+  Rp.verify p ~run:row () >>= fun v -> expect_verified row.S.r_id v;
   Lwt.return ()
 
 (* journal tampering is caught by the chain walk *)
@@ -337,7 +337,7 @@ let test_tamper_bad_chain () =
   >>= (function
         | None -> Alcotest.fail "run vanished"
         | Some run ->
-            Rp.verify p ~run
+            Rp.verify p ~run ()
             >>= fun v ->
             (match v with
              | Rp.Bad_chain _ -> Lwt.return ()
@@ -383,7 +383,7 @@ let test_counterfactual_fork () =
           (Option.value parent.S.r_result_ternary ~default:"")
           (Option.value derived.S.r_result_ternary ~default:"~")));
   (* history untouched: the parent still verifies *)
-  Rp.verify p ~run:parent
+  Rp.verify p ~run:parent ()
   >>= fun v ->
   expect_verified parent.S.r_id v;
   (* a divergent edit (cleared row) leaves the fork unverifiable *)

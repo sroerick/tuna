@@ -168,7 +168,7 @@ let test_grant_prefix_boundary () =
    | Some "version:1" -> ()
    | other -> Alcotest.failf "expected version:1 answer, got %s"
                 (Option.value other ~default:"undecodable"));
-  Rp.verify p ~run:row_ok >>= fun v -> expect_verified_ok row_ok.S.r_id v;
+  Rp.verify p ~run:row_ok () >>= fun v -> expect_verified_ok row_ok.S.r_id v;
   (* DENY: cross-prefix put is a journaled error answer, run continues *)
   Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
     ~program:art.C.tree

@@ -23,6 +23,8 @@ let print_result = function
       Printf.printf "fuel_exhausted - %d\n" steps
   | Tuna_interp.Eval.Size_exhausted steps ->
       Printf.printf "size_exhausted - %d\n" steps
+  | Tuna_interp.Eval.Deadline_exceeded steps ->
+      Printf.printf "deadline_exceeded - %d\n" steps
 
 let read_corpus path =
   let program = ref "" and args = ref [] and fuel = ref 1000 and cap = ref 1000 in

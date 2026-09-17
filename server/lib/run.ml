@@ -116,6 +116,25 @@ let kv_of_pool pool : Prims.kv =
           ~key_ternary:(Tuna.Canon.encode key)
           ~value_ternary:(Tuna.Canon.encode value)) }
 
+(* Run wall-clock cap (operator policy, not a calculus budget): every
+   run gets TUNA_RUN_MAX_SECONDS seconds of wall clock (default 10;
+   0/negative/unparsable disables).  Fuel is client-set and by itself
+   unbounded - a 400M-fuel run must not pin the single-threaded
+   runtime.  A deadline abort finalizes the run row as status
+   deadline_exceeded, journaled like any other exhaustion. *)
+let run_max_seconds () =
+  match Sys.getenv_opt "TUNA_RUN_MAX_SECONDS" with
+  | None -> Some 10.0
+  | Some s -> (
+      match float_of_string_opt s with
+      | Some v when v > 0.0 -> Some v
+      | _ -> None)
+
+let deadline_now () =
+  match run_max_seconds () with
+  | Some secs -> Unix.gettimeofday () +. secs
+  | None -> Float.infinity
+
 (* -- the host -------------------------------------------------------- *)
 
 (* Execute a run: insert the row, evaluate with the prim host, journal
@@ -146,6 +165,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
   in
   let kv = kv_of_pool pool in
   let allowlist = Prims.allowlist_from_env () in
+  let deadline = deadline_now () in
   let host ~site ~name ~args =
     let t0 = Unix.gettimeofday () in
     let args_ternary = Tuna.Canon.encode args in
@@ -233,7 +253,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
      | _ -> Lwt.return ())
       >>= fun () -> Lwt.return answer
   in
-  Eng.eval ~host ~fuel ~size_cap ~program inputs
+  Eng.eval ~host ~fuel ~size_cap ~deadline ~program inputs
   >>= fun result ->
   let status, result_ternary, steps =
     match result with
@@ -241,8 +261,9 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
         ( S.Run_status.Normal
         , Some (Tuna.Canon.encode t)
         , s )
-    | Eng.Fuel_exhausted s -> (S.Run_status.Fuel_exhausted, None, s)
-    | Eng.Size_exhausted s -> (S.Run_status.Size_exhausted, None, s)
+      | Eng.Fuel_exhausted s -> (S.Run_status.Fuel_exhausted, None, s)
+      | Eng.Size_exhausted s -> (S.Run_status.Size_exhausted, None, s)
+      | Eng.Deadline_exceeded s -> (S.Run_status.Deadline_exceeded, None, s)
   in
   S.update_run_result pool ~id:run_id ~status ?result_ternary:result_ternary
     ?step_count:(Some steps) ()

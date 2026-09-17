@@ -42,11 +42,35 @@ module Make (M : MONAD) = struct
     | Normal of t * int  (* normal form, steps taken *)
     | Fuel_exhausted of int  (* steps taken before fuel ran out *)
     | Size_exhausted of int  (* steps taken before size_cap was hit *)
+    | Deadline_exceeded of int
+        (* wall-clock budget (operator policy at the run boundary), not
+           a calculus budget: steps taken before the deadline passed *)
 
-  type budget = { mutable fuel : int; mutable steps : int; size_cap : int }
+  type budget =
+    { mutable fuel : int
+    ; mutable steps : int
+    ; size_cap : int
+    ; mutable ops : int  (* applications entered; gates the clock poll *)
+    ; deadline : float  (* absolute Unix time; infinity = no deadline *)
+    }
 
   exception Fuel_out
   exception Size_out
+  exception Deadline_out
+
+  (* Wall-clock deadline (AGENTS.md rule 5 addendum): polled every
+     [deadline_granularity] applications so the clock read stays off
+     the hot path.  Pure evaluation passes no deadline (infinity) and
+     pays one integer compare per [deadline_granularity] ops - step
+     counts and evaluation order are untouched. *)
+  let deadline_granularity = 4096
+
+  let check_deadline b =
+    b.ops <- b.ops + 1;
+    if b.ops land (deadline_granularity - 1) = 0
+       && b.deadline <> Float.infinity
+       && Unix.gettimeofday () > b.deadline
+    then raise Deadline_out
 
   let check_size b t = if size t > b.size_cap then raise Size_out
 
@@ -57,6 +81,7 @@ module Make (M : MONAD) = struct
     b.steps <- b.steps + 1
 
   let rec apply b host a c =
+    check_deadline b;
     match Tuna.Cprim.shape a with
     | Some (name, site) -> prim_call b host ~site ~name c
     | None -> (
@@ -115,8 +140,8 @@ module Make (M : MONAD) = struct
   let eval ?(host : host =
               fun ~site:_ ~name:_ ~args:_ ->
                 M.return (`Error "no prim host at this boundary"))
-      ~fuel ~size_cap ~program args : result M.t =
-    let b = { fuel; steps = 0; size_cap } in
+      ?(deadline = Float.infinity) ~fuel ~size_cap ~program args : result M.t =
+    let b = { fuel; steps = 0; size_cap; ops = 0; deadline } in
     let rec go acc = function
       | [] -> M.return acc
       | arg :: rest ->
@@ -131,5 +156,6 @@ module Make (M : MONAD) = struct
       (function
         | Fuel_out -> M.return (Fuel_exhausted b.steps)
         | Size_out -> M.return (Size_exhausted b.steps)
+        | Deadline_out -> M.return (Deadline_exceeded b.steps)
         | e -> M.bind (M.return ()) (fun () -> raise e))
 end
