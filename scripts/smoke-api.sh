@@ -23,6 +23,12 @@ AUTH="Authorization: Bearer $TOKEN"
 
 jget() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
 
+# psql (steps 9 and 13) lives outside the opam switch (~/pg/bin, see
+# dev.sh) - resolve it the same way test-store.sh does.
+PSQL=psql
+command -v psql >/dev/null 2>&1 || PSQL="$HOME/pg/bin/psql"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$HOME/pg/lib"
+
 curl_code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
 echo "[1] /health open, db up"
@@ -104,7 +110,7 @@ echo "[9] fork of a run WITH journal rows: edits apply + chain rebuilt"
 # seed a journal via SQL is not part of the API (prims land in M7); instead
 # verify the fork's derived_journals bookkeeping:
 FORK_ID=$(echo "$FORK" | jget "d['run']['id']")
-psql -h /tmp -p 5434 -U tuna -d tuna -tAc \
+"$PSQL" -h /tmp -p 5434 -U tuna -d tuna -tAc \
   "SELECT parent_run_id FROM derived_journals WHERE run_id='$FORK_ID'" \
   | grep -q "$RUN_ID" || fail "derived_journals row missing"
 
@@ -157,7 +163,7 @@ COPY=$(curl -sf -X POST -H "$AUTH" --data-binary '{"edits":[]}' \
 echo "$COPY" | jget "d['verify']['verify']" | grep -q verified || fail "faithful fork must verify"
 
 echo "[13] M7: journal tampering caught (out-of-band SQL edit)"
-psql -h /tmp -p 5434 -U tuna -d tuna -q -c \
+"$PSQL" -h /tmp -p 5434 -U tuna -d tuna -q -c \
   "UPDATE journals SET result_ternary='0' WHERE run_id='$PRIM_RUN_ID' AND seq=0" >/dev/null
 TV=$(curl -sf -H "$AUTH" "$BASE/api/runs/verify?all=1")
 echo "$TV" | grep -q '"verify":"failed"' || fail "tampered journal must fail verification"

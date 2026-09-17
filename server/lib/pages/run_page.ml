@@ -103,10 +103,12 @@ let view pool user req =
        else Lwt.return (Some r0))
       >>= function
       | None -> L.not_found ~user "run row vanished"
-      | Some r -> (
-          S.fetch_journals pool id
-          >>= fun js ->
-          let running = not (finished r) in
+        | Some r -> (
+            S.fetch_journals pool id
+            >>= fun js ->
+            S.fetch_run_trace pool id
+            >>= fun ts ->
+            let running = not (finished r) in
           L.page ~user ~title:"tuna — run"
             (Printf.sprintf
                {|<h2>run %s…</h2>
@@ -115,6 +117,7 @@ let view pool user req =
 <tr><th>program</th><td>%s</td></tr>
 <tr><th>status</th><td>%s</td></tr>
 <tr><th>steps</th><td>%s</td></tr>
+<tr><th>trace</th><td>%s</td></tr>
 <tr><th>fuel / cap</th><td>%d / %d</td></tr>
 <tr><th>result</th><td>%s</td></tr>
 <tr><th>verify</th><td>%s %s</td></tr>
@@ -128,7 +131,16 @@ let view pool user req =
                (L.verify_badge r.S.r_verify_status)
                (L.link_program r.S.r_program_hash)
                (S.Run_status.to_string r.S.r_status)
-               (match r.S.r_step_count with Some s -> string_of_int s | None -> "—")
+                 (match r.S.r_step_count with Some s -> string_of_int s | None -> "—")
+                 (match ts with
+                  | Some s ->
+                      Printf.sprintf
+                        {|<a href="/runs/%s/trace">%d events</a> <span class="muted">(raw %d · charged %d · hits %d%s%s)</span>|}
+                        r.S.r_id s.S.t_recorded s.S.t_raw_firings s.S.t_charged
+                        s.S.t_memo_hits
+                        (if s.S.t_loop then " · loop" else "")
+                        (if s.S.t_truncated then " · truncated" else "")
+                  | None -> {|<span class="muted">untraced</span>|})
                r.S.r_fuel r.S.r_size_cap
                (match r.S.r_result_ternary with
                 | Some t -> L.code_block t
@@ -156,6 +168,92 @@ let journal_frag pool user req =
           (Printf.sprintf
              {|<h2>journal of run %s…</h2><section>%s</section><p><a href="/runs/%s">back to run</a></p>|}
              (L.esc (L.short_hash r.S.r_id)) html r.S.r_id))
+
+
+(* The firing-trace page (borg/trace.borg): summary + capped event
+   pages, server-rendered with plain links (no JS needed).  The trace is
+   observability only — the run row's numbers and verdict remain the
+   authoritative statement; the trace just shows the firings behind
+   them, one row at a time. *)
+let trace_page pool user req =
+  let id = Dream.param req "id" in
+  let page_size =
+    match Dream.query req "limit" with
+    | Some s -> (
+        match int_of_string_opt s with
+        | Some v when v > 0 && v <= 1000 -> v
+        | _ -> 200)
+    | None -> 200
+  in
+  let after =
+    match Dream.query req "after" with
+    | Some s -> (
+        match int_of_string_opt s with Some v when v >= 0 -> v | _ -> -1)
+    | None -> -1
+  in
+  S.fetch_run pool id
+  >>= function
+  | None -> L.not_found ~user "unknown run id"
+  | Some r -> (
+      S.fetch_run_trace pool id
+      >>= function
+      | None -> L.not_found ~user "run has no trace"
+      | Some ts ->
+          S.fetch_trace_events pool id ~after_seq:after ~limit:page_size
+          >>= fun evs ->
+          let ev_row (e : S.trace_event) =
+            Printf.sprintf
+              {|<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>|}
+              e.S.v_seq (L.esc e.S.v_kind) (L.esc e.S.v_rule) (L.esc e.S.v_fun)
+              (L.esc e.S.v_arg) (L.esc e.S.v_note)
+          in
+          let nav =
+            let first =
+              if after >= 0 then
+                Printf.sprintf {|<a href="/runs/%s/trace">first page</a> |} id
+              else ""
+            in
+            let next =
+              if List.length evs = page_size then
+                let last =
+                  match List.rev evs with e :: _ -> e.S.v_seq | [] -> after
+                in
+                Printf.sprintf {|<a href="/runs/%s/trace?after=%d">next page</a>|}
+                  id (last + 1)
+              else ""
+            in
+            first ^ next
+          in
+          L.page ~user ~title:"tuna — trace"
+            (Printf.sprintf
+               {|<h2>trace of run %s…</h2>
+<p>%s <a href="/runs/%s">back to run</a></p>
+<table>
+<tr><th>semantics</th><td>%s</td></tr>
+<tr><th>raw firings / charged</th><td>%d / %d</td></tr>
+<tr><th>memo hits / dirty re-executions</th><td>%d / %d</td></tr>
+<tr><th>loop</th><td>%s</td></tr>
+<tr><th>events recorded</th><td>%d%s</td></tr>
+</table>
+<section><h3>events</h3>
+<table>
+<tr><th>seq</th><th>kind</th><th>rule</th><th>fun</th><th>arg</th><th>note</th></tr>
+%s
+</table>
+<p>%s</p></section>|}
+               (L.esc (L.short_hash r.S.r_id))
+               (L.status_badge (S.Run_status.to_string r.S.r_status))
+               r.S.r_id
+               (L.esc ts.S.t_semantics)
+               ts.S.t_raw_firings ts.S.t_charged
+               ts.S.t_memo_hits ts.S.t_dirty_firings
+               (if ts.S.t_loop then "detected (in-flight re-entry)" else "no")
+               ts.S.t_recorded
+               (if ts.S.t_truncated then
+                  {| <span class="muted">(truncated at the cap)</span>|}
+                else "")
+               (String.concat "" (List.map ev_row evs))
+               nav))
 
 (* Verify button POST: run the replay verifier now, surface the verdict
    (fragment for htmx; redirect back to the run page for plain forms). *)

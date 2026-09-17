@@ -26,6 +26,12 @@ TOKEN="${TUNA_SMOKE_TOKEN:-}"
 [ -n "$TOKEN" ] || fail "no token: set TUNA_SMOKE_TOKEN or boot the server"
 
 jget() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
+
+# psql (step 16's out-of-band tamper) lives outside the opam switch
+# (~/pg/bin, see dev.sh) - resolve it the same way test-store.sh does.
+PSQL=psql
+command -v psql >/dev/null 2>&1 || PSQL="$HOME/pg/bin/psql"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$HOME/pg/lib"
 curl_code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
 echo "[1] /health open; static assets served"
@@ -185,7 +191,7 @@ THASH=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" \
 TRUN=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" \
   -d "{\"program_hash\":\"$THASH\",\"inputs\":[\"10\"],\"grants\":[\"$TGRANT\"]}" "$BASE/api/runs" \
   | jget "d['run']['id']") || fail "tamper-test run"
-psql -h /tmp -p "${TUNA_DB_PORT:-5434}" -U "${TUNA_DB_USER:-tuna}" -d "${TUNA_DB_NAME:-tuna}" -q \
+"$PSQL" -h /tmp -p "${TUNA_DB_PORT:-5434}" -U "${TUNA_DB_USER:-tuna}" -d "${TUNA_DB_NAME:-tuna}" -q \
   -c "UPDATE journals SET result_ternary = '22102000' WHERE run_id='$TRUN' AND seq=0" \
   || fail "out-of-band journal tamper"
 curl -sf -b "$JAR" -H 'HX-Request: true' -X POST "$BASE/runs/$TRUN/verify" \

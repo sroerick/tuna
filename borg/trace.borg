@@ -1,0 +1,152 @@
+(project tuna-trace
+ (* agent note (|2026-09-17, F1 follow-through.  The firing-repeat pilot
+    measured the crown's redundancy out-of-band: a probe with the v1
+    gate replaced by a counter (scratch-firing/, untracked).  This
+    chapter makes per-run firing evidence a first-class stored fact:
+    an opt-in event log over the counted firings, replay-adjacent but
+    never part of a run's verdict.  Push stays roerick's call.|) *)
+ (doc "Tuna book chapter: trace - the firing-event collector: opt-in, capped observability over the counted firings. A trace is a reading of a run, not a second opinion about it: the counting law is untouched.")
+ (status implemented)
+ (convention ocaml-dune)
+ (section observation-only
+  (doc "Traced and untraced runs agree on every number")
+  (status implemented)
+  (details
+   (doc (|
+        The collector observes; it never influences.  An event is noted
+        AFTER the counting law has spoken, so recording touches no
+        fuel, no steps, no evaluation order, no clock poll.  A traced
+        run and an untraced run of the same program+inputs produce the
+        same normal form and the same step count - a tested invariant
+        (trace suite: form equality + step equality under both laws),
+        not a hope.
+
+        This is the rule-4 boundary again, pointed at reading: the
+        count stays canonical under the law that produced the run
+        row; the trace just shows the firings behind the number.
+       |))))
+ (section event-kinds
+  (doc "fire / charge / dirty / loop; hits are counters, never events")
+  (status implemented)
+  (details
+   (doc (|
+        v0: every counted firing emits a [fire] event - one event per
+        step, recorded = steps.  Events carry the triage arm that
+        fired (fork(stem,_), fork(fork,_)/leaf, wrapper, ...), so a
+        v0 trace reads as the rule sequence, not just a count.
+
+        v1: [charge] events are the memo table filling - one per
+        counted step.  Memo HITS are aggregated counters (tr_hits),
+        never events: the crown family fires 2M times for ~26k
+        distinct pairs, and the event log would be the 2M-row story.
+        The counters tell it instead: raw = charged + hits (+1 when a
+        loop fired).
+
+        [dirty] marks a firing that answered a prim inside and
+        therefore re-executes (sharing.borg's prim-exemption law made
+        visible per firing: grant re-checks and journal rows fire on
+        every occurrence, and the trace shows each one).
+
+        [loop] closes a divergent run: in-flight re-entry, note
+        "in-flight re-entry", carrying the offending (fun, arg)
+        pair.  The run answers Loop at omega = 3 steps; the event is
+        the last one recorded.
+       |))))
+ (section digests
+  (doc "16-hex prefixes of the memo law's content digests")
+  (status implemented)
+  (details
+   (doc (|
+        Event fun/arg fields carry 16-hex prefixes of the SAME
+        structural content digests the v1 memo keys use (sha256 over
+        the canonical ternary form), so a trace reads against
+        tree_values and replay.
+
+        Cost: v1 events reuse the digests the memo law already
+        computed for its keys - free.  Pure-v0 traces digest on
+        demand, and only for small trees, bounding display cost on
+        the canonical side.  Both share one per-trace cache keyed on
+        physical node identity (persistent trees share subterm
+        objects exactly when the sharing is real); a cache miss
+        hashes the node once.  Correctness never depends on the
+        physical fast path - physically-distinct-but-equal subtrees
+        just hash twice.
+       |))))
+ (section caps-and-counters
+  (doc "The cap bounds the RECORDING, never the accounting")
+  (status implemented)
+  (details
+   (doc (|
+        tr_cap bounds RECORDED events only.  The counters (raw
+        firings, hits, dirty re-executions, loop flag) count the
+        whole run regardless; when the cap bites, the truncated flag
+        says so and the head of the story is what got kept (seq
+        stays dense and ordered - pages replay from seq 0).
+
+        Server ceiling: TUNA_TRACE_MAX_EVENTS (default 50,000).  A
+        request asks for less, never more: trace:true takes the
+        server cap, trace_cap:N is clamped to it.  Absent, false,
+        or a non-positive trace_cap records no trace - absence is
+        the safe default, not an error.
+       |))))
+ (section surface
+  (doc "API + run page: read-only traces on the run surface")
+  (status implemented)
+  (details
+   (doc (|
+        POST /api/runs takes optional trace / trace_cap (JSON, next
+        to semantics).  GET /api/runs/:id/trace?after=&limit= returns
+        the summary + seq-ordered event pages (limit default 200,
+        max 1000); 404 when the run has no trace - an untraced run
+        and an unknown id are indistinguishable on purpose, there is
+        no trace-shaped lie to tell about either.
+
+        The run page grows a trace row ("21 events (raw 26 · charged
+        21 · hits 5)", muted "untraced" otherwise) and /runs/:id/trace
+        renders the summary table + event rows with plain next-page
+        links, no JS.  Session auth as usual.
+
+        The REPL surface takes no trace field.  Traces are a
+        run-surface feature; a traced REPL round is one POST /api/runs
+        away.  Replay and the verifier ignore traces entirely: the
+        run row's numbers and the journal chain remain the
+        authoritative verdict; a missing or tampered trace cannot
+        change either.
+       |))))
+ (section storage
+  (doc "0010: summary row + event rows, events first")
+  (status implemented)
+  (details
+   (doc (|
+        Migration 0010: run_traces (PK run_id, ON DELETE CASCADE:
+        traces die with their run) and trace_events (PK (run_id,
+        seq)).  The summary carries the counters and flags; events
+        carry kind, rule, both digest prefixes, note.
+
+        Insert order is the integrity rule: events FIRST, summary
+        row LAST - a partial insert never advertises a trace whose
+        head events are missing (fetch is keyed on the summary).
+        Events insert in chunks of 400 rows per statement, under the
+        65535-parameter ceiling.  Bulk data, GC-able under the
+        journals' retention policy when one exists.
+       |))))
+ (section f1-instrument
+  (doc "What the trace is for: eyes on the engine split")
+  (status implemented)
+  (details
+   (doc (|
+        The F1 pilot measured repeat-rate from the v0 side with an
+        out-of-band counter; the measurement died with the probe
+        process.  The trace makes the same evidence a stored,
+        queryable fact per run: how many distinct firings the memo
+        law charged, where hits short-circuited subtrees, which
+        firings re-executed under the dirty rule, whether the run
+        re-entered itself.
+
+        The engine call itself stays where it has been: demand-memo
+        port vs v1-loop is roerick's decision, and this chapter
+        takes no side.  It only insists that whichever engine runs,
+        its firings can be read afterwards - the crown's 25,813
+        charged steps and the plateau behind them should be a row
+        you can SELECT, not a number in a conversation.
+       |)))))

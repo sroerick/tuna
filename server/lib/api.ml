@@ -62,6 +62,9 @@ let get_string_opt j k =
 
 let get_int_opt j k = match member_opt k j with Some (`Int i) -> Some i | _ -> None
 
+let get_bool_opt j k =
+  match member_opt k j with Some (`Bool b) -> Some b | _ -> None
+
 let get_list j k : J.t list =
   match member_opt k j with Some (`List l) -> l | _ -> []
 
@@ -341,7 +344,17 @@ let post_run pool auth req =
         (* run semantics (borg/sharing.borg): absent = canonical v0; an
            unknown value is a 400 from execute_run, not a silent default *)
         let semantics = Option.value (get_string_opt j "semantics") ~default:"v0" in
-      match get_string_opt j "program_hash" with
+          (* trace (borg/trace.borg): opt-in per-firing event log over
+             the counted firings.  "trace": true asks for the server-
+             max cap; "trace_cap": N asks for a specific (clamped) cap;
+             absent = untraced, and a trace never changes the numbers. *)
+          let trace_cap =
+            match (get_bool_opt j "trace", get_int_opt j "trace_cap") with
+            | Some true, _ -> Run.trace_max_events ()
+            | _, Some c when c > 0 -> c
+            | _ -> 0
+          in
+        match get_string_opt j "program_hash" with
       | None ->  (j_err "missing \"program_hash\"")
       | Some program_hash -> (
           let inputs_rev =
@@ -357,9 +370,9 @@ let post_run pool auth req =
           | Error msg ->  (j_err msg)
           | Ok rev ->
               let input_trees = List.rev rev in
-                Run.execute_run pool ~caller:auth.auth_id ~program_hash
-                  ~input_trees ~grant_ids:(strings_of j "grants") ~fuel
-                  ~semantics ~size_cap ()
+                  Run.execute_run pool ~caller:auth.auth_id ~program_hash
+                    ~input_trees ~grant_ids:(strings_of j "grants") ~fuel
+                    ~semantics ~trace_cap ~size_cap ()
               >>= (function
                     | Error (code, msg) -> j_err ~code msg
                     | Ok (row, js) ->
@@ -449,6 +462,61 @@ let get_run pool _auth req =
                (`Assoc
                  [ ("run", run_json r)
                  ; ("journal", `List (List.map journal_json js)) ]))
+
+
+(* -- run traces (borg/trace.borg) ------------------------------------- *)
+
+let trace_json (s : Store.trace_summary) : J.t =
+  `Assoc
+    [ ("semantics", `String s.Store.t_semantics)
+    ; ("raw_firings", `Int s.Store.t_raw_firings)
+    ; ("charged", `Int s.Store.t_charged)
+    ; ("memo_hits", `Int s.Store.t_memo_hits)
+    ; ("dirty_firings", `Int s.Store.t_dirty_firings)
+    ; ("loop_detected", `Bool s.Store.t_loop)
+    ; ("recorded", `Int s.Store.t_recorded)
+    ; ("truncated", `Bool s.Store.t_truncated) ]
+
+let trace_event_json (e : Store.trace_event) : J.t =
+  `Assoc
+    [ ("seq", `Int e.Store.v_seq)
+    ; ("kind", `String e.Store.v_kind)
+    ; ("rule", `String e.Store.v_rule)
+    ; ("fun", `String e.Store.v_fun)
+    ; ("arg", `String e.Store.v_arg)
+    ; ("note", `String e.Store.v_note) ]
+
+(* GET /api/runs/:id/trace?after=&limit= — the firing trace: summary +
+   capped event pages, seq-ordered.  404 when the run has no trace (an
+   untraced run or an unknown id).  Observability only: the events are
+   notes ABOUT the run row's numbers, never part of its verdict. *)
+let get_run_trace pool _auth req =
+  let id = Dream.param req "id" in
+  let after =
+    match Dream.query req "after" with
+    | Some s -> (
+        match int_of_string_opt s with Some v when v >= 0 -> v | _ -> -1)
+    | None -> -1
+  in
+  let limit =
+    match Dream.query req "limit" with
+    | Some s -> (
+        match int_of_string_opt s with
+        | Some v when v > 0 && v <= 1000 -> v
+        | _ -> 200)
+    | None -> 200
+  in
+  Store.fetch_run_trace pool id
+  >>= function
+  | None -> j_err ~code:404 "run has no trace"
+  | Some s ->
+      Store.fetch_trace_events pool id ~after_seq:after ~limit
+      >>= fun evs ->
+      j_ok
+        (`Assoc
+          [ ("run_id", `String id)
+          ; ("trace", trace_json s)
+          ; ("events", `List (List.map trace_event_json evs)) ])
 
 (* GET /api/runs/verify?all=1 — the verification sweeper: replay-verify
    every finished run (cap 200, newest first).  Without all=1, returns
@@ -1184,6 +1252,7 @@ let api_routes pool =
     ; Dream.post "/api/runs" (with_auth pool (post_run pool))
     ; Dream.get "/api/runs" (with_auth pool (list_runs pool))
     ; Dream.get "/api/runs/verify" (with_auth pool (verify_sweep pool))
+    ; Dream.get "/api/runs/:id/trace" (with_auth pool (get_run_trace pool))
     ; Dream.get "/api/runs/:id" (with_auth pool (get_run pool))
     ; Dream.post "/api/runs/:id/gc" (with_auth pool (gc_run pool))
     ; Dream.get "/api/journals/:run_id" (with_auth pool (get_journal pool))

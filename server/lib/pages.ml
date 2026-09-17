@@ -11,9 +11,10 @@
      GET  /programs/:hash
      POST /programs/:hash/patch    CAS structural patch
      POST /programs/:hash/run       run with inputs (+grants)
-     GET  /runs/:id
-     GET  /runs/:id/journal       journal tick fragment
-     POST /runs/:id/verify         replay-verify button
+      GET  /runs/:id
+      GET  /runs/:id/journal       journal tick fragment
+      GET  /runs/:id/trace         firing trace (borg/trace.borg)
+      POST /runs/:id/verify         replay-verify button
      GET  /grants
      POST /grants/mint
      POST /grants/:id/revoke
@@ -38,7 +39,8 @@ let routes pool =
     ; (`Post, "/programs/:hash/patch", Program.patch_post pool)
     ; (`Post, "/programs/:hash/run", Program.run_post pool)
     ; (`Get, "/runs/:id", Run_page.view pool)
-    ; (`Get, "/runs/:id/journal", Run_page.journal_frag pool)
+      ; (`Get, "/runs/:id/journal", Run_page.journal_frag pool)
+      ; (`Get, "/runs/:id/trace", Run_page.trace_page pool)
     ; (`Post, "/runs/:id/verify", Run_page.verify_post pool)
     ; (`Get, "/grants", Grants.view pool)
     ; (`Post, "/grants/mint", Grants.mint pool)

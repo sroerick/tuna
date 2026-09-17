@@ -231,6 +231,137 @@ let list_runs p ?(caller = None) ?(program = None) ?(limit = 50) () =
      ORDER BY created_at DESC LIMIT $3"
   >>= fun rows -> Lwt.return (List.map run_of_row rows)
 
+
+(* -- run traces (borg/trace.borg): opt-in per-firing observability ----
+
+   A trace is a capped event log over a run's counted firings plus a
+   summary row.  Recording never affects step counts, fuel, or
+   evaluation order; the summary row's presence marks a traced run
+   (events are bulk data, GC-able under the journals' retention policy
+   when one exists). *)
+
+type trace_summary = {
+  t_run_id : string
+; t_semantics : string
+; t_raw_firings : int  (* firing-gate entries, both laws *)
+; t_charged : int  (* counted steps (v0: every firing; v1: distinct) *)
+; t_memo_hits : int  (* v1 only *)
+; t_dirty_firings : int  (* v1 only *)
+; t_loop : bool
+; t_recorded : int  (* events actually stored *)
+; t_truncated : bool
+}
+
+type trace_event = {
+  v_seq : int
+; v_kind : string  (* fire | charge | dirty | loop *)
+; v_rule : string
+; v_fun : string  (* 16-hex content-digest prefix *)
+; v_arg : string  (* 16-hex content-digest prefix *)
+; v_note : string
+}
+
+(* 7 bind params per row; 400 rows per statement stays far under the
+   server's 65535-parameter ceiling. *)
+let trace_rows_per_statement = 400
+
+let insert_run_trace p ~run_id (s : trace_summary) (events : trace_event list)
+    =
+  let rec take k acc = function
+    | [] -> (List.rev acc, [])
+    | x :: rest when k = 1 -> (List.rev (x :: acc), rest)
+    | x :: rest -> take (k - 1) (x :: acc) rest
+  in
+  let rec chunks = function
+    | [] -> []
+    | lst ->
+        let head, tail = take trace_rows_per_statement [] lst in
+        head :: chunks tail
+  in
+  let rec insert_chunks = function
+    | [] -> Lwt.return ()
+    | evs :: rest ->
+        let params =
+          List.concat_map
+            (fun e ->
+              [ p_str run_id; p_int e.v_seq; p_str e.v_kind; p_str e.v_rule
+              ; p_str e.v_fun; p_str e.v_arg; p_str e.v_note ])
+            evs
+        in
+        let row_sql i =
+          let base = 7 * i in
+          Printf.sprintf "($%d,$%d,$%d,$%d,$%d,$%d,$%d)" (base + 1)
+            (base + 2) (base + 3) (base + 4) (base + 5) (base + 6) (base + 7)
+        in
+        let values = String.concat "," (List.mapi (fun i _ -> row_sql i) evs) in
+        Db.q_unit
+          ~params p
+          (Printf.sprintf
+             "INSERT INTO trace_events (run_id, seq, kind, rule, fun_prefix, \
+              arg_prefix, note) VALUES %s"
+             values)
+        >>= fun () -> insert_chunks rest
+  in
+  (* events first, summary row LAST: a partial insert never advertises
+     a trace whose head events are missing *)
+  insert_chunks (chunks events)
+  >>= fun () ->
+  Db.q_unit
+    ~params:[
+      p_str run_id
+    ; p_str s.t_semantics
+    ; p_int64 (Int64.of_int s.t_raw_firings)
+    ; p_int64 (Int64.of_int s.t_charged)
+    ; p_int64 (Int64.of_int s.t_memo_hits)
+    ; p_int64 (Int64.of_int s.t_dirty_firings)
+    ; p_bool s.t_loop
+    ; p_int s.t_recorded
+    ; p_bool s.t_truncated ]
+    p
+    "INSERT INTO run_traces (run_id, semantics, raw_firings, charged, \
+     memo_hits, dirty_firings, loop_detected, recorded, truncated) \
+     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9) \
+     ON CONFLICT (run_id) DO NOTHING"
+
+let fetch_run_trace p run_id =
+  Db.q
+    ~params:[ p_str run_id ] p
+    "SELECT run_id::text, semantics, raw_firings, charged, memo_hits, \
+     dirty_firings, loop_detected, recorded, truncated FROM run_traces \
+     WHERE run_id = $1::uuid"
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] ->
+      Lwt.return
+        (Some
+           { t_run_id = text r 0 "run_traces.run_id"
+           ; t_semantics = text r 1 "run_traces.semantics"
+           ; t_raw_firings = int r 2 "run_traces.raw_firings"
+           ; t_charged = int r 3 "run_traces.charged"
+           ; t_memo_hits = int r 4 "run_traces.memo_hits"
+           ; t_dirty_firings = int r 5 "run_traces.dirty_firings"
+           ; t_loop = bool r 6 "run_traces.loop_detected"
+           ; t_recorded = int r 7 "run_traces.recorded"
+           ; t_truncated = bool r 8 "run_traces.truncated" })
+  | _ -> store_error "multiple trace summary rows for run %s" run_id
+
+let fetch_trace_events p run_id ~after_seq ~limit =
+  Db.q
+    ~params:[ p_str run_id; p_int after_seq; p_int limit ]
+    p
+    "SELECT seq, kind, rule, fun_prefix, arg_prefix, note FROM trace_events \
+     WHERE run_id = $1::uuid AND seq > $2 ORDER BY seq LIMIT $3"
+  >>= fun rows ->
+  Lwt.return
+    (List.map
+       (fun r ->
+         { v_seq = int r 0 "trace_events.seq"
+         ; v_kind = text r 1 "trace_events.kind"
+         ; v_rule = text r 2 "trace_events.rule"
+         ; v_fun = text r 3 "trace_events.fun_prefix"
+         ; v_arg = text r 4 "trace_events.arg_prefix"
+         ; v_note = text r 5 "trace_events.note" })
+       rows)
 (* -- journals -------------------------------------------------------- *)
 
 type journal_event = {

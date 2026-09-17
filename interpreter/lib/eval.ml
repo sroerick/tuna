@@ -55,6 +55,8 @@ type mode = Engine.mode = Canonical | Sharing
 
 (* Same API and behavior as the pre-M7 pure engine.  [~mode:Sharing]
    opts into the distinct-work law (borg/sharing.borg): memoized
-   firings, distinct step counts, finite [Loop] divergence. *)
-let eval ?host ?deadline ?(mode = Canonical) ~fuel ~size_cap ~program args =
-  Engine.eval ?host ?deadline ~mode ~fuel ~size_cap ~program args
+   firings, distinct step counts, finite [Loop] divergence.  [~trace]
+   attaches a firing-event collector (borg/trace.borg): observation
+   only, step counts untouched. *)
+let eval ?host ?deadline ?(mode = Canonical) ?trace ~fuel ~size_cap ~program args =
+  Engine.eval ?host ?deadline ~mode ?trace ~fuel ~size_cap ~program args

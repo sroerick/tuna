@@ -175,6 +175,18 @@ let deadline_now () =
   | Some secs -> Unix.gettimeofday () +. secs
   | None -> Float.infinity
 
+(* Trace event cap (borg/trace.borg, operator policy): the server-side
+   ceiling on RECORDED trace events per run.  A request may ask for
+   less; never more.  Default 50000; 0/negative/unparsable keeps the
+   default.  Counters (raw/hit/dirty/loop) are uncapped regardless. *)
+let trace_max_events () =
+  match Sys.getenv_opt "TUNA_TRACE_MAX_EVENTS" with
+  | None -> 50_000
+  | Some s -> (
+      match int_of_string_opt s with
+      | Some v when v > 0 -> v
+      | _ -> 50_000)
+
 (* Compile-time reduction is request-boundary work too (repl eval/def
    and source program upload): same shape as the run cap, its own knob
    so a big run budget does not silently license a big compile.
@@ -206,7 +218,8 @@ let mode_of_semantics = function
   | s -> invalid_arg (Printf.sprintf "unknown semantics %S" s)
 
 let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
-    ?(parent_run_id = None) ?(semantics = "v0") ~fuel ~size_cap () =
+    ?(parent_run_id = None) ?(semantics = "v0") ?(trace_cap = 0) ~fuel
+    ~size_cap () =
   let input_hashes = List.map Tuna.Hash.hex_of_tree inputs in
   let rec store_inputs = function
     | [] -> Lwt.return ()
@@ -339,8 +352,13 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
      | _ -> Lwt.return ())
       >>= fun () -> Lwt.return answer
   in
-  Eng.eval ~host ~mode:(mode_of_semantics semantics) ~fuel ~size_cap ~deadline
-    ~program inputs
+    let trace =
+      if trace_cap > 0 then
+        Some (Eng.new_trace ~cap:(min trace_cap (trace_max_events ())) ())
+      else None
+    in
+    Eng.eval ~host ~mode:(mode_of_semantics semantics) ~fuel ~size_cap ~deadline
+      ~program ?trace inputs
   >>= fun result ->
   let status, result_ternary, steps =
     match result with
@@ -355,8 +373,39 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
   in
   S.update_run_result pool ~id:run_id ~status ?result_ternary:result_ternary
     ?step_count:(Some steps) ()
-  >>= fun () ->
-  S.fetch_run pool run_id
+    >>= fun () ->
+    (match trace with
+     | None -> Lwt.return ()
+     | Some tr ->
+         let summary : S.trace_summary =
+           { S.t_run_id = run_id
+           ; S.t_semantics = semantics
+           ; S.t_raw_firings = tr.Eng.tr_raw
+           ; S.t_charged = steps
+           ; S.t_memo_hits = tr.Eng.tr_hits
+           ; S.t_dirty_firings = tr.Eng.tr_dirty
+           ; S.t_loop = tr.Eng.tr_loop
+           ; S.t_recorded = tr.Eng.tr_next
+           ; S.t_truncated = tr.Eng.tr_truncated }
+         in
+         let evs =
+           let out = ref [] in
+           Queue.iter
+             (fun (e : Eng.trace_event) ->
+               out :=
+                 { S.v_seq = e.Eng.e_seq
+                 ; S.v_kind = Eng.kind_string e.Eng.e_kind
+                 ; S.v_rule = e.Eng.e_rule
+                 ; S.v_fun = e.Eng.e_fun
+                 ; S.v_arg = e.Eng.e_arg
+                 ; S.v_note = e.Eng.e_note }
+                 :: !out)
+             tr.Eng.tr_events;
+           List.rev !out
+         in
+         S.insert_run_trace pool ~run_id summary evs)
+    >>= fun () ->
+    S.fetch_run pool run_id
   >>= function
   | None -> Lwt.fail (Failure "run row vanished")
   | Some row -> S.fetch_journals pool run_id >>= fun js -> Lwt.return (row, js)
@@ -368,14 +417,16 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
    the M9 REPL's journaled rounds (parent_run_id chains the per-session
    transcript). *)
 let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
-    ?(parent_run_id = None) ?(semantics = "v0") ~size_cap () :
+    ?(parent_run_id = None) ?(semantics = "v0") ?(trace_cap = 0) ~size_cap () :
     (S.run * S.journal list, int * string) result Lwt.t =
   if fuel < 1 || size_cap < 1 then
     Lwt.return (Error (400, "fuel and size_cap must be >= 1"))
-  else if not (semantics_ok semantics) then
-    Lwt.return
-      (Error (400, Printf.sprintf "unknown semantics %S (v0 | v1)" semantics))
-  else
+  else if trace_cap < 0 then
+    Lwt.return (Error (400, "trace_cap must be >= 0"))
+    else if not (semantics_ok semantics) then
+      Lwt.return
+        (Error (400, Printf.sprintf "unknown semantics %S (v0 | v1)" semantics))
+    else
       let rec check gs =
         match gs with
         | [] -> Lwt.return None
@@ -411,8 +462,9 @@ let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
                                      "stored program unparseable (offset %d: %s)"
                                      off msg ))
                           | Ok program ->
-                              execute pool ~caller ~grant_ids ~program_hash
-                                ~program ~ir_json:prog.S.p_ir ~inputs:input_trees
-                                ~parent_run_id ~semantics ~fuel ~size_cap ()
+                                execute pool ~caller ~grant_ids ~program_hash
+                                  ~program ~ir_json:prog.S.p_ir ~inputs:input_trees
+                                  ~parent_run_id ~semantics ~trace_cap ~fuel
+                                  ~size_cap ()
                               >>= fun (row, js) -> Lwt.return (Ok (row, js))))))
 

@@ -14,6 +14,16 @@
  (name sharing_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
+(executable
+ (name trace_tests)
+ (libraries tuna tuna_interp tuna_compiler alcotest))
+
+(rule
+ (alias runtest)
+ (deps trace_tests.exe)
+ (action
+  (run %{exe:trace_tests.exe})))
+
 (rule
  (alias runtest)
  (deps sharing_tests.exe)

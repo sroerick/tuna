@@ -32,9 +32,17 @@
    evaluation answered a prim is never memoized (the dirty rule: grant
    liveness and journal audit need every textual call to re-execute);
    purity is decided by a monotonic host tick, so dirt propagates to
-   enclosing firings exactly.  The memo is per-run state — prim
-   answers are per-run facts (grants, kv, allowlist), so a cross-run
-   table would cache a lie. *)
+    enclosing firings exactly.  The memo is per-run state — prim
+    answers are per-run facts (grants, kv, allowlist), so a cross-run
+    table would cache a lie.
+
+    Trace (borg/trace.borg): an optional, capped, per-firing event log
+    over the counted firings.  Recording never touches fuel, steps,
+    evaluation order, or the clock poll — an event is noted AFTER the
+    counting law has spoken, so a traced run and an untraced run of the
+    same program+inputs agree on every number.  v1 charge/dirty/loop
+    events reuse the digests the memo law already computed (free); pure
+    v0 fire events digest small trees only, for a bounded display cost. *)
 
 module type MONAD = sig
   type 'a t
@@ -86,6 +94,76 @@ module Make (M : MONAD) = struct
   ; mutable host_tick : int  (* monotonic count of host answers *)
   }
 
+  (* -- trace (borg/trace.borg): opt-in, capped firing observability --- *)
+
+  type trace_kind = Kfire | Kcharge | Kdirty | Kloop
+
+  let kind_string = function
+    | Kfire -> "fire"
+    | Kcharge -> "charge"
+    | Kdirty -> "dirty"
+    | Kloop -> "loop"
+
+  type trace_event = {
+    e_seq : int
+  ; e_kind : trace_kind
+  ; e_rule : string  (* triage arm; "" when not applicable *)
+  ; e_fun : string  (* 16-hex content-digest prefix; "" when n/a *)
+  ; e_arg : string  (* 16-hex content-digest prefix; "" when n/a *)
+  ; e_note : string
+  }
+
+  type trace = {
+    mutable tr_cap : int  (* max RECORDED events; counters are uncapped *)
+  ; mutable tr_next : int  (* next event seq *)
+  ; mutable tr_truncated : bool
+  ; mutable tr_raw : int  (* firing-gate entries = raw firings, both laws *)
+  ; mutable tr_hits : int  (* v1 memo hits; never recorded as events *)
+  ; mutable tr_dirty : int  (* v1 dirty re-executions *)
+  ; mutable tr_loop : bool
+  ; tr_events : trace_event Queue.t
+  ; tr_digests : string Phys_map.t  (* display digest cache, trace-local *)
+  }
+
+  let new_trace ?(cap = 50_000) () =
+    { tr_cap = cap; tr_next = 0; tr_truncated = false; tr_raw = 0
+    ; tr_hits = 0; tr_dirty = 0; tr_loop = false
+    ; tr_events = Queue.create (); tr_digests = Phys_map.create 4096 }
+
+  (* Display digest: the SAME structural content law the v1 memo keys
+     use, cached per physical node.  v1 events reuse the memo law's
+     already-computed digests (free); pure-v0 traces digest on demand
+     here, small trees only. *)
+  let rec trace_digest tr t =
+    match Phys_map.find_opt tr.tr_digests t with
+    | Some d -> d
+    | None ->
+        let raw =
+          match t with
+          | Leaf -> Digestif.SHA256.digest_string "\x00"
+          | Stem a -> Digestif.SHA256.digest_string ("\x01" ^ trace_digest tr a)
+          | Fork (a, c) ->
+              Digestif.SHA256.digest_string
+                ("\x02" ^ trace_digest tr a ^ trace_digest tr c)
+        in
+        let d = Digestif.SHA256.to_raw_string raw in
+        Phys_map.replace tr.tr_digests t d;
+        d
+
+  let hex16 raw =
+    String.sub (Digestif.SHA256.to_hex (Digestif.SHA256.of_raw_string raw)) 0 16
+
+  (* The triage arm [dispatch_firing] will take, recorded on fire/charge
+     events so a trace reads as the rule sequence, not just a count. *)
+  let triage_name a c =
+    match (a, c) with
+    | Fork (Leaf, _), _ -> "fork(leaf,_)"
+    | Fork (Stem _, _), _ -> "fork(stem,_)"
+    | Fork (Fork _, _), Leaf -> "fork(fork,_)/leaf"
+    | Fork (Fork _, _), Stem _ -> "fork(fork,_)/stem"
+    | Fork (Fork _, _), Fork _ -> "fork(fork,_)/fork"
+    | _ -> "wrapper"
+
   type budget =
     { mutable fuel : int
     ; mutable steps : int
@@ -93,6 +171,7 @@ module Make (M : MONAD) = struct
     ; mutable ops : int  (* applications entered; gates the clock poll *)
     ; deadline : float  (* absolute Unix time; infinity = no deadline *)
     ; sharing : sharing option  (* v1 state; None = canonical v0 *)
+    ; trace : trace option  (* borg/trace.borg: None = untraced *)
     }
 
   exception Fuel_out
@@ -121,6 +200,27 @@ module Make (M : MONAD) = struct
     if b.fuel = 0 then raise Fuel_out;
     b.fuel <- b.fuel - 1;
     b.steps <- b.steps + 1
+
+  (* Note one trace event if under the cap; past the cap, flip
+     [truncated] and record nothing more.  An emit NEVER precedes the
+     counting law for the same firing — [fire] (the step) always speaks
+     first. *)
+  let emit b kind rule fd ad note =
+    match b.trace with
+    | None -> ()
+    | Some tr ->
+        if tr.tr_next < tr.tr_cap then begin
+          Queue.add
+            { e_seq = tr.tr_next
+            ; e_kind = kind
+            ; e_rule = rule
+            ; e_fun = (match fd with Some d -> hex16 d | None -> "")
+            ; e_arg = (match ad with Some d -> hex16 d | None -> "")
+            ; e_note = note }
+            tr.tr_events;
+          tr.tr_next <- tr.tr_next + 1
+        end
+        else tr.tr_truncated <- true
 
   (* v1 content digest, cached per physical node; raw 32-byte string. *)
   let rec digest_of s t =
@@ -152,18 +252,48 @@ module Make (M : MONAD) = struct
      with nothing in between, and v0 could only report that as fuel
      exhaustion after burning the whole budget. *)
   let share_gate b a c =
+    (match b.trace with Some tr -> tr.tr_raw <- tr.tr_raw + 1 | None -> ());
     match b.sharing with
-    | None -> fire b; `Fresh 0
+    | None ->
+        fire b;
+        (* v0 display digests: small trees only — the trace must never
+           turn a cheap untraced run into an unbounded digest job *)
+        (match b.trace with
+         | Some tr ->
+             let digest_small t =
+               if size t <= 4096 then Some (trace_digest tr t) else None
+             in
+             let note =
+               if size a <= 4096 && size c <= 4096 then ""
+               else "tree too large to digest (display omitted)"
+             in
+             emit b Kfire (triage_name a c) (digest_small a) (digest_small c) note
+         | None -> ());
+        `Fresh 0
     | Some s -> (
         let key = (digest_of s a, digest_of s c) in
         match Hashtbl.find_opt s.answers key with
-        | Some answer -> `Hit answer
+        | Some answer ->
+            (match b.trace with
+             | Some tr -> tr.tr_hits <- tr.tr_hits + 1
+             | None -> ());
+            `Hit answer
         | None -> (
             match Hashtbl.find_opt s.inflight key with
-            | Some _ -> raise Loop_out
+            | Some _ ->
+                (* genuine divergence: note the offending pair, then the
+                   loop law answers it finitely at the boundary *)
+                (match b.trace with
+                 | Some tr ->
+                     tr.tr_loop <- true;
+                     emit b Kloop "" (Some (fst key)) (Some (snd key))
+                       "in-flight re-entry"
+                 | None -> ());
+                raise Loop_out
             | None ->
                 fire b;
                 Hashtbl.replace s.inflight key s.host_tick;
+                emit b Kcharge (triage_name a c) (Some (fst key)) (Some (snd key)) "";
                 `Fresh s.host_tick))
 
   (* v1 finalize: leave the in-flight set; memoize the answer iff the
@@ -176,6 +306,15 @@ module Make (M : MONAD) = struct
         let key = (digest_of s a, digest_of s c) in
         Hashtbl.remove s.inflight key;
         if s.host_tick = tick0 then Hashtbl.replace s.answers key r
+        else
+          (* the dirty rule: a prim answered inside, so this firing
+             re-executes on every occurrence and never memoizes *)
+          (match b.trace with
+           | Some tr ->
+               tr.tr_dirty <- tr.tr_dirty + 1;
+               emit b Kdirty "" (Some (fst key)) (Some (snd key))
+                 "prim answered inside; re-executes"
+           | None -> ())
 
   let rec apply b host a c =
     check_deadline b;
@@ -253,11 +392,11 @@ module Make (M : MONAD) = struct
 
      Everything that can raise (budget checks, the host) happens
      inside a bind callback so [catch] sees it for both monads. *)
-  let eval ?(host : host =
-              fun ~site:_ ~name:_ ~args:_ ->
-                M.return (`Error "no prim host at this boundary"))
-      ?(deadline = Float.infinity) ?(mode = Canonical) ~fuel ~size_cap ~program
-      args : result M.t =
+    let eval ?(host : host =
+                fun ~site:_ ~name:_ ~args:_ ->
+                  M.return (`Error "no prim host at this boundary"))
+        ?(deadline = Float.infinity) ?(mode = Canonical) ?trace ~fuel
+        ~size_cap ~program args : result M.t =
     let sharing =
       match mode with
       | Canonical -> None
@@ -268,7 +407,9 @@ module Make (M : MONAD) = struct
             ; inflight = Hashtbl.create 64
             ; host_tick = 0 }
     in
-    let b = { fuel; steps = 0; size_cap; ops = 0; deadline; sharing } in
+      let b =
+        { fuel; steps = 0; size_cap; ops = 0; deadline; sharing; trace }
+      in
     let rec go acc = function
       | [] -> M.return acc
       | arg :: rest ->

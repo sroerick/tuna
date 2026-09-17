@@ -11,11 +11,11 @@
     canonical-only, and v1 step counts are not comparable to v0 and
     not claimed to be.|) *)
  (doc "Tuna book chapter: sharing - the distinct-work semantics (v1): memoized firings, finite loop answers, prim exemption, and per-version replay. One evaluator, two accounting laws.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section counting-law
   (doc "What a step is under v1")
-  (status planned)
+  (status implemented)
   (details
    (doc (|
         v0 counts every firing of a triage rule (AGENTS.md rule 4).  v1
@@ -46,7 +46,7 @@
        |))))
  (section loop-law
   (doc "In-flight re-entry is divergence, answered finitely")
-  (status planned)
+  (status implemented)
   (details
    (doc (|
         Under leftmost-innermost firing, re-entering a firing (f, x)
@@ -69,7 +69,7 @@
        |))))
  (section prim-exemption
   (doc "Side-effecting work never memoizes (the dirty rule)")
-  (status planned)
+  (status implemented)
   (details
    (doc (|
         A prim call is a host event, not a calculus step: the gate
@@ -96,7 +96,7 @@
        |))))
  (section semantics-version
   (doc "The run row says which law produced its numbers")
-  (status planned)
+  (status implemented)
   (details
    (doc (|
         runs gains a semantics column (migration 0009): text, NOT
@@ -113,7 +113,7 @@
        |))))
  (section replay-per-version
   (doc "Verify replays the row under its own law")
-  (status planned)
+  (status implemented)
   (details
    (doc (|
         Faithful replay reads the run row's semantics and re-executes
@@ -134,7 +134,7 @@
        |))))
  (section costs-and-limits
   (doc "What v1 costs and what it does not cover")
-  (status planned)
+  (status implemented)
   (details
    (doc (|
         Hashing: memo keys are content hashes (sha256 over canonical
