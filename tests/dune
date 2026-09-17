@@ -10,6 +10,16 @@
  (name prim_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
+(executable
+ (name sharing_tests)
+ (libraries tuna tuna_interp tuna_compiler alcotest))
+
+(rule
+ (alias runtest)
+ (deps sharing_tests.exe)
+ (action
+  (run %{exe:sharing_tests.exe})))
+
 ; (dropped: a stale dbg debug executable left over from an earlier loop)
 (executable
  (name store_tests)

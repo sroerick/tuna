@@ -108,6 +108,7 @@ module Run_status = struct
   type t =
     | Running
     | Normal
+    | Loop  (* v1 distinct-work law: a firing re-entered in flight (borg/sharing.borg) *)
     | Fuel_exhausted
     | Size_exhausted
     | Deadline_exceeded  (* wall-clock abort (TUNA_RUN_MAX_SECONDS) *)
@@ -116,6 +117,7 @@ module Run_status = struct
   let to_string = function
     | Running -> "running"
     | Normal -> "normal"
+    | Loop -> "loop"
     | Fuel_exhausted -> "fuel_exhausted"
     | Size_exhausted -> "size_exhausted"
     | Deadline_exceeded -> "deadline_exceeded"
@@ -124,6 +126,7 @@ module Run_status = struct
   let of_string = function
     | "running" -> Running
     | "normal" -> Normal
+    | "loop" -> Loop
     | "fuel_exhausted" -> Fuel_exhausted
     | "size_exhausted" -> Size_exhausted
     | "deadline_exceeded" -> Deadline_exceeded
@@ -145,12 +148,13 @@ type run = {
 ; r_parent_run_id : string option
 ; r_verify_status : string option
 ; r_created_at : string option
+; r_semantics : string  (* 'v0' canonical | 'v1' distinct-work (0009) *)
 }
 
 let select_run =
   "SELECT id::text, program_hash, input_hashes, fuel, size_cap, result_hash, \
    result_ternary, step_count, status, caller::text, parent_run_id::text, \
-   verify_status, created_at::text FROM runs WHERE id = $1::uuid"
+   verify_status, created_at::text, semantics FROM runs WHERE id = $1::uuid"
 
 let run_of_row r =
   { r_id = text r 0 "run.id"
@@ -165,21 +169,23 @@ let run_of_row r =
   ; r_caller = opt_text r 9
   ; r_parent_run_id = opt_text r 10
   ; r_verify_status = opt_text r 11
-  ; r_created_at = opt_text r 12 }
+  ; r_created_at = opt_text r 12
+  ; r_semantics = text r 13 "run.semantics" }
 
 let insert_run p ~program_hash ?(inputs = []) ?(caller = None) ?(parent_run_id = None)
-    ~fuel ~size_cap () =
+    ?(semantics = "v0") ~fuel ~size_cap () =
   Db.q
     ~params:[ p_str program_hash
             ; p_text_list inputs
             ; p_int64 (Int64.of_int fuel)
             ; p_int64 (Int64.of_int size_cap)
             ; p_opt caller
-            ; p_opt parent_run_id ]
+            ; p_opt parent_run_id
+            ; p_str semantics ]
     p
     "INSERT INTO runs (program_hash, input_hashes, fuel, size_cap, caller, \
-     parent_run_id, status) VALUES ($1, $2, $3, $4, $5::uuid, $6::uuid, \
-     'running') RETURNING id::text"
+     parent_run_id, status, semantics) VALUES ($1, $2, $3, $4, $5::uuid, \
+     $6::uuid, 'running', $7) RETURNING id::text"
   >>= fun rows ->
   (match rows with
   | [ r ] -> Lwt.return (text r 0 "run.id")
@@ -217,9 +223,9 @@ let list_runs p ?(caller = None) ?(program = None) ?(limit = 50) () =
   Db.q
     ~params:[ p_opt caller; p_opt program; p_int limit ]
     p
-    "SELECT id::text, program_hash, input_hashes, fuel, size_cap, result_hash, \
+     "SELECT id::text, program_hash, input_hashes, fuel, size_cap, result_hash, \
      result_ternary, step_count, status, caller::text, parent_run_id::text, \
-     verify_status, created_at::text FROM runs \
+     verify_status, created_at::text, semantics FROM runs \
      WHERE ($1::uuid IS NULL OR caller = $1::uuid) \
        AND ($2::text IS NULL OR program_hash = $2) \
      ORDER BY created_at DESC LIMIT $3"

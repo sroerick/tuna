@@ -200,6 +200,70 @@ let expect_verified _run_id = function
   | Rp.Unverifiable msg -> Alcotest.failf "expected verified, unverifiable: %s" msg
   | Rp.Gone msg -> Alcotest.failf "expected verified, gone: %s" msg
 
+(* Sharing semantics v1 (borg/sharing.borg): a run row records the
+   accounting law that produced its numbers; replay re-executes under
+   that law.  The T-family at depth 3 does 30 raw firings canonically
+   and 8 distinct ones under v1 — same normal form, verifiable row. *)
+let rec t_src d =
+  if d = 0 then "(lambda (z) z)"
+  else
+    Printf.sprintf "(lambda (z) (%s (%s z)))" (t_src (d - 1)) (t_src (d - 1))
+
+let test_run_sharing_v1 () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"sharing-root" ~token:"sharing-token" ()
+  >>= fun me ->
+  seed_program p ~caller:(Some me.S.i_id)
+    (Printf.sprintf "(lambda (w) (%s w))" (t_src 3))
+  >>= fun (hash, art) ->
+  let ii = (C.compile_source "(lambda (z) z)").C.tree in
+  let input = ii in
+  (* canonical reference: 30 raw firings for depth 3 *)
+  (match
+     Tuna_interp.Eval.eval ~fuel:100_000_000 ~size_cap:1_000_000
+       ~program:art.C.tree [ input ]
+   with
+   | Tuna_interp.Eval.Normal (_, s0) ->
+       Alcotest.(check int) "v0 raw firings at depth 3" 30 s0
+   | _ -> Alcotest.fail "expected a canonical normal form");
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:None ~inputs:[ input ] ~semantics:"v1"
+    ~fuel:100_000_000 ~size_cap:1_000_000 ()
+  >>= fun (row, _js) ->
+  Alcotest.(check string) "semantics recorded on the row" "v1" row.S.r_semantics;
+  Alcotest.(check string) "status normal" "normal"
+    (S.Run_status.to_string row.S.r_status);
+  Alcotest.(check int) "v1 distinct firings at depth 3" 8
+    (Option.value row.S.r_step_count ~default:0);
+  (* replay honors the row's version: journal-fed v1 re-execution
+     verifies against the recorded distinct-work count *)
+  S.fetch_run p row.S.r_id
+  >>= (function
+        | None -> Alcotest.fail "run vanished"
+        | Some run ->
+            Rp.verify p ~run ~deadline:Float.infinity ()
+            >>= fun v -> expect_verified run.S.r_id v; Lwt.return ())
+  >>= fun () ->
+  (* the loop law: M M under v1 is a finite Loop run, and the row
+     still verifies (loop replays to loop, same steps) *)
+  seed_program p ~caller:(Some me.S.i_id) "(lambda (x) (x x))"
+  >>= fun (mhash, mart) ->
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[] ~program_hash:mhash
+    ~program:mart.C.tree ~ir_json:None ~inputs:[ mart.C.tree ] ~semantics:"v1"
+    ~fuel:1000 ~size_cap:1_000_000 ()
+  >>= fun (looprow, _) ->
+  Alcotest.(check string) "loop status" "loop"
+    (S.Run_status.to_string looprow.S.r_status);
+  Alcotest.(check (option int)) "loop steps pinned" (Some 3) looprow.S.r_step_count;
+  Alcotest.(check bool) "no result tree for a loop" true
+    (Option.is_none looprow.S.r_result_ternary);
+  S.fetch_run p looprow.S.r_id
+  >>= (function
+        | None -> Alcotest.fail "run vanished"
+        | Some run ->
+            Rp.verify p ~run ~deadline:Float.infinity ()
+            >>= fun v -> expect_verified run.S.r_id v; Lwt.return ())
+
 (* The canonical M7 effectful program: echo the input, then negate it.
    Journal: exactly one boundary row (echo), carrying the grant and the
    callsite tree path resolved from the compiled provenance. *)
@@ -520,8 +584,10 @@ let () =
              ; lwt "grant denial journaled, replay verifies" test_run_denial
              ; lwt "store/get+put through the boundary" test_run_store_prims
              ; lwt "journal tamper -> bad chain" test_tamper_bad_chain
-             ; lwt "counterfactual fork re-executes" test_counterfactual_fork
-             ] )
+              ; lwt "counterfactual fork re-executes" test_counterfactual_fork
+              ; lwt "v1 sharing: distinct-work row verifies under its own law"
+                  test_run_sharing_v1
+              ] )
          ; ( "m10"
            , [ lwt "gc leaves a cited tombstone; verifier reports GONE"
                  test_gc_tombstone

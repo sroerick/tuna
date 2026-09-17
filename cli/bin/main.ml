@@ -19,6 +19,8 @@ let read_file path =
 let print_result = function
   | Tuna_interp.Eval.Normal (t, steps) ->
       Printf.printf "normal %s %d\n" (Tuna.Canon.encode t) steps
+  | Tuna_interp.Eval.Loop steps ->
+      Printf.printf "loop - %d\n" steps
   | Tuna_interp.Eval.Fuel_exhausted steps ->
       Printf.printf "fuel_exhausted - %d\n" steps
   | Tuna_interp.Eval.Size_exhausted steps ->
@@ -72,14 +74,22 @@ let compile_cmd path =
       exit 1
 
 let eval_compiled_cmd argv off =
-  (* argv.(off) = program ternary, then args, with optional --fuel/--cap *)
+  (* argv.(off) = program ternary, then args, with optional
+     --fuel/--cap/--semantics (v0 canonical | v1 distinct-work) *)
   let fuel = ref 10000 and cap = ref 10000 and rest = ref [] in
+  let mode = ref Tuna_interp.Eval.Canonical in
   let rec go i =
     if i >= Array.length argv then ()
     else
       match argv.(i) with
       | "--fuel" -> fuel := int_of_string argv.(i + 1); go (i + 2)
       | "--cap" -> cap := int_of_string argv.(i + 1); go (i + 2)
+      | "--semantics" ->
+          mode :=
+            (match argv.(i + 1) with
+             | "v1" -> Tuna_interp.Eval.Sharing
+             | _ -> Tuna_interp.Eval.Canonical);
+          go (i + 2)
       | arg -> rest := arg :: !rest; go (i + 1)
   in
   go (off + 1); (* argv.(off) is the program; args start after it *)
@@ -91,7 +101,8 @@ let eval_compiled_cmd argv off =
         exit 2
   in
   let args = List.rev_map Tuna.Canon.parse !rest in
-  print_result (Tuna_interp.Eval.eval ~fuel:!fuel ~size_cap:!cap ~program args)
+  print_result
+    (Tuna_interp.Eval.eval ~fuel:!fuel ~size_cap:!cap ~mode:!mode ~program args)
 
 let () =
   match Sys.argv.(1) with

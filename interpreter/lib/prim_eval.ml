@@ -19,7 +19,22 @@
    position, the host answers: [`Ok tree] becomes the value, [`Error
    msg] becomes the canonical error tree (Stem (Cstr.encode msg)) so
    the calculus keeps computing deterministically.  Prim calls may
-   also appear purely as data (a gate tree is inert until applied). *)
+   also appear purely as data (a gate tree is inert until applied).
+
+   Modes (borg/sharing.borg): one engine, two accounting laws.
+   [Canonical] is v0: every firing costs a step, exactly as above.
+   [Sharing] is v1, the distinct-work law: a firing is the
+   (fun-tree, arg-tree) pair keyed by content digest; the FIRST firing
+   of a pair costs a step and records its answer, every later firing
+   of the same pair is a free memo hit, and re-entering a pair that is
+   still in flight is genuine divergence under leftmost-innermost —
+   reported finitely as [Loop], never by burning fuel.  A firing whose
+   evaluation answered a prim is never memoized (the dirty rule: grant
+   liveness and journal audit need every textual call to re-execute);
+   purity is decided by a monotonic host tick, so dirt propagates to
+   enclosing firings exactly.  The memo is per-run state — prim
+   answers are per-run facts (grants, kv, allowlist), so a cross-run
+   table would cache a lie. *)
 
 module type MONAD = sig
   type 'a t
@@ -40,11 +55,36 @@ module Make (M : MONAD) = struct
 
   type result =
     | Normal of t * int  (* normal form, steps taken *)
+    | Loop of int  (* v1: firing re-entered in flight; steps taken *)
     | Fuel_exhausted of int  (* steps taken before fuel ran out *)
     | Size_exhausted of int  (* steps taken before size_cap was hit *)
     | Deadline_exceeded of int
         (* wall-clock budget (operator policy at the run boundary), not
            a calculus budget: steps taken before the deadline passed *)
+
+  type mode = Canonical | Sharing
+
+  (* Digests are carried as RAW 32-BYTE STRINGS, not Digestif.SHA256.t:
+     the digest module's [t] is abstract behind its signature, so each
+     Hashtbl.Make application would mint an incompatible key type and
+     the pair key could never flow between the tables.  Strings keep
+     the tables plain and the equality content-based. *)
+  module Phys_map = Hashtbl.Make (struct
+      type t = Tuna.Tree.t
+
+      let equal = ( == )
+      let hash = Hashtbl.hash
+    end)
+
+  type sharing = {
+    node_digests : string Phys_map.t
+        (* physical node -> raw content digest, once per object *)
+  ; answers : (string * string, t) Hashtbl.t
+        (* firing pair -> completed answer *)
+  ; inflight : (string * string, int) Hashtbl.t
+        (* firing pair -> host tick at entry (loop + purity bookkeeping) *)
+  ; mutable host_tick : int  (* monotonic count of host answers *)
+  }
 
   type budget =
     { mutable fuel : int
@@ -52,11 +92,13 @@ module Make (M : MONAD) = struct
     ; size_cap : int
     ; mutable ops : int  (* applications entered; gates the clock poll *)
     ; deadline : float  (* absolute Unix time; infinity = no deadline *)
+    ; sharing : sharing option  (* v1 state; None = canonical v0 *)
     }
 
   exception Fuel_out
   exception Size_out
   exception Deadline_out
+  exception Loop_out  (* v1: a firing re-entered while still in flight *)
 
   (* Wall-clock deadline (AGENTS.md rule 5 addendum): polled every
      [deadline_granularity] applications so the clock read stays off
@@ -80,6 +122,61 @@ module Make (M : MONAD) = struct
     b.fuel <- b.fuel - 1;
     b.steps <- b.steps + 1
 
+  (* v1 content digest, cached per physical node; raw 32-byte string. *)
+  let rec digest_of s t =
+    match Phys_map.find_opt s.node_digests t with
+    | Some d -> d
+    | None ->
+        let d =
+          match t with
+          | Leaf ->
+              Digestif.SHA256.digest_string "\x00"
+              |> Digestif.SHA256.to_raw_string
+          | Stem a ->
+              Digestif.SHA256.digest_string
+                ("\x01" ^ digest_of s a)
+              |> Digestif.SHA256.to_raw_string
+          | Fork (a, c) ->
+              Digestif.SHA256.digest_string
+                ("\x02" ^ digest_of s a ^ digest_of s c)
+              |> Digestif.SHA256.to_raw_string
+        in
+        Phys_map.replace s.node_digests t d;
+        d
+
+  (* v1 memo gate on the firing (a, c): [`Hit answer] replays a
+     completed pair for free; [`Fresh tick0] means the pair was just
+     counted (fuel + step) and marked in flight.  Re-entering a pair
+     that is still in flight is divergence (Loop_out) — under
+     leftmost-innermost the computation recurses on its own subproblem
+     with nothing in between, and v0 could only report that as fuel
+     exhaustion after burning the whole budget. *)
+  let share_gate b a c =
+    match b.sharing with
+    | None -> fire b; `Fresh 0
+    | Some s -> (
+        let key = (digest_of s a, digest_of s c) in
+        match Hashtbl.find_opt s.answers key with
+        | Some answer -> `Hit answer
+        | None -> (
+            match Hashtbl.find_opt s.inflight key with
+            | Some _ -> raise Loop_out
+            | None ->
+                fire b;
+                Hashtbl.replace s.inflight key s.host_tick;
+                `Fresh s.host_tick))
+
+  (* v1 finalize: leave the in-flight set; memoize the answer iff the
+     firing was clean — no host answer inside it (the dirty rule, the
+     prim-exemption law of borg/sharing.borg). *)
+  let share_finish b a c ~tick0 r =
+    match b.sharing with
+    | None -> ()
+    | Some s ->
+        let key = (digest_of s a, digest_of s c) in
+        Hashtbl.remove s.inflight key;
+        if s.host_tick = tick0 then Hashtbl.replace s.answers key r
+
   let rec apply b host a c =
     check_deadline b;
     match Tuna.Cprim.shape a with
@@ -96,36 +193,55 @@ module Make (M : MONAD) = struct
             let r = Fork (a1, c) in
             check_size b r;
             M.return r
-        | Fork (Leaf, a1) ->
-            (* triage rule fork(leaf,x) -> x *)
-            fire b;
-            M.return a1
-        | Fork (Stem a1, a2) ->
-            (* triage rule fork(stem,_): inner a1 first, then a2, then
-               the outer *)
-            fire b;
-            M.bind (apply b host a1 c) (fun l ->
-                M.bind (apply b host a2 c) (fun r -> apply b host l r))
-        | Fork (Fork (a1, a2), a3) ->
-            (* triage rule fork(fork,_) *)
-            fire b;
-            (match c with
-             | Leaf -> M.return a1
-             | Stem u -> apply b host a2 u
-             | Fork (u, v) ->
-                 M.bind (apply b host a3 u) (fun l -> apply b host l v)))
+        | Fork _ -> (
+            (* triage firing: v0 counts it and dispatches; v1 asks the
+               memo gate first (counting-law). *)
+            match share_gate b a c with
+            | `Hit answer -> M.return answer
+            | `Fresh tick0 ->
+                M.bind (dispatch_firing b host a c) (fun r ->
+                    share_finish b a c ~tick0 r;
+                    M.return r)))
+
+  (* The three triage arms, verbatim (post-gate). *)
+  and dispatch_firing b host a c =
+    match a with
+    | Fork (Leaf, a1) ->
+        (* triage rule fork(leaf,x) -> x *)
+        M.return a1
+    | Fork (Stem a1, a2) ->
+        (* triage rule fork(stem,_): inner a1 first, then a2, then
+           the outer *)
+        M.bind (apply b host a1 c) (fun l ->
+            M.bind (apply b host a2 c) (fun r -> apply b host l r))
+    | Fork (Fork (a1, a2), a3) ->
+        (* triage rule fork(fork,_) *)
+        (match c with
+         | Leaf -> M.return a1
+         | Stem u -> apply b host a2 u
+         | Fork (u, v) ->
+             M.bind (apply b host a3 u) (fun l -> apply b host l v))
+    | _ -> assert false (* wrapper arms are handled in [apply] *)
 
   (* A prim call: the args tree is passed AS REDUCED BY THE STRATEGY
      (trees are values; there is no separate argument normalizer in
      the calculus).  The host's answer becomes the value of the
-     application; errors become the canonical error tree. *)
+     application; errors become the canonical error tree.  Every host
+     answer bumps the v1 host tick — the firing turns dirty and its
+     answer will not be memoized. *)
   and prim_call b host ~site ~name c =
     M.bind (M.return ()) (fun () ->
         M.bind (host ~site ~name ~args:c) (function
           | `Ok r ->
+              (match b.sharing with
+               | Some s -> s.host_tick <- s.host_tick + 1
+               | None -> ());
               check_size b r;
               M.return r
           | `Error msg ->
+              (match b.sharing with
+               | Some s -> s.host_tick <- s.host_tick + 1
+               | None -> ());
               let e = Stem (Tuna.Cstr.encode msg) in
               check_size b e;
               M.return e))
@@ -140,8 +256,19 @@ module Make (M : MONAD) = struct
   let eval ?(host : host =
               fun ~site:_ ~name:_ ~args:_ ->
                 M.return (`Error "no prim host at this boundary"))
-      ?(deadline = Float.infinity) ~fuel ~size_cap ~program args : result M.t =
-    let b = { fuel; steps = 0; size_cap; ops = 0; deadline } in
+      ?(deadline = Float.infinity) ?(mode = Canonical) ~fuel ~size_cap ~program
+      args : result M.t =
+    let sharing =
+      match mode with
+      | Canonical -> None
+      | Sharing ->
+          Some
+            { node_digests = Phys_map.create 4096
+            ; answers = Hashtbl.create 4096
+            ; inflight = Hashtbl.create 64
+            ; host_tick = 0 }
+    in
+    let b = { fuel; steps = 0; size_cap; ops = 0; deadline; sharing } in
     let rec go acc = function
       | [] -> M.return acc
       | arg :: rest ->
@@ -155,6 +282,7 @@ module Make (M : MONAD) = struct
         M.bind (go program args) (fun t -> M.return (Normal (t, b.steps))))
       (function
         | Fuel_out -> M.return (Fuel_exhausted b.steps)
+        | Loop_out -> M.return (Loop b.steps)
         | Size_out -> M.return (Size_exhausted b.steps)
         | Deadline_out -> M.return (Deadline_exceeded b.steps)
         | e -> M.bind (M.return ()) (fun () -> raise e))

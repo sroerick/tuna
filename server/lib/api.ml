@@ -143,7 +143,8 @@ let run_json (r : Store.run) : J.t =
     ; ("caller", opt_str r.r_caller)
     ; ("parent_run_id", opt_str r.r_parent_run_id)
     ; ("verify_status", opt_str r.r_verify_status)
-    ; ("created_at", opt_str r.r_created_at) ]
+    ; ("created_at", opt_str r.r_created_at)
+    ; ("semantics", `String r.r_semantics) ]
 
 let journal_json (j : Store.journal) : J.t =
   `Assoc
@@ -335,8 +336,11 @@ let post_run pool auth req =
   body_json req >>= function
   | Error msg ->  (j_err msg)
   | Ok j ->
-      let fuel = Option.value (get_int_opt j "fuel") ~default:10_000 in
-      let size_cap = Option.value (get_int_opt j "size_cap") ~default:10_000 in
+        let fuel = Option.value (get_int_opt j "fuel") ~default:10_000 in
+        let size_cap = Option.value (get_int_opt j "size_cap") ~default:10_000 in
+        (* run semantics (borg/sharing.borg): absent = canonical v0; an
+           unknown value is a 400 from execute_run, not a silent default *)
+        let semantics = Option.value (get_string_opt j "semantics") ~default:"v0" in
       match get_string_opt j "program_hash" with
       | None ->  (j_err "missing \"program_hash\"")
       | Some program_hash -> (
@@ -353,9 +357,9 @@ let post_run pool auth req =
           | Error msg ->  (j_err msg)
           | Ok rev ->
               let input_trees = List.rev rev in
-              Run.execute_run pool ~caller:auth.auth_id ~program_hash
-                ~input_trees ~grant_ids:(strings_of j "grants") ~fuel
-                ~size_cap ()
+                Run.execute_run pool ~caller:auth.auth_id ~program_hash
+                  ~input_trees ~grant_ids:(strings_of j "grants") ~fuel
+                  ~semantics ~size_cap ()
               >>= (function
                     | Error (code, msg) -> j_err ~code msg
                     | Ok (row, js) ->

@@ -44,7 +44,17 @@ end
 
 module Engine = Prim_eval.Make (Id)
 
-type result = Engine.result = Normal of Tuna.Tree.t * int | Fuel_exhausted of int | Size_exhausted of int | Deadline_exceeded of int
+type result = Engine.result =
+    Normal of Tuna.Tree.t * int
+  | Loop of int
+  | Fuel_exhausted of int
+  | Size_exhausted of int
+  | Deadline_exceeded of int
 
-(* Same API and behavior as the pre-M7 pure engine. *)
-let eval = Engine.eval
+type mode = Engine.mode = Canonical | Sharing
+
+(* Same API and behavior as the pre-M7 pure engine.  [~mode:Sharing]
+   opts into the distinct-work law (borg/sharing.borg): memoized
+   firings, distinct step counts, finite [Loop] divergence. *)
+let eval ?host ?deadline ?(mode = Canonical) ~fuel ~size_cap ~program args =
+  Engine.eval ?host ?deadline ~mode ~fuel ~size_cap ~program args

@@ -21,12 +21,15 @@ let eval_ter src (dict : (string * Tuna.Tree.t) list) ~inputs ~fuel =
       | Ok program -> (
             match Tuna_interp.Eval.eval ~fuel ~size_cap:1_000_000 ~program inputs with
             | Tuna_interp.Eval.Normal (t, steps) -> `Normal (Tuna.Canon.encode t, steps)
-            | Tuna_interp.Eval.Fuel_exhausted s -> `Fuel s
-            | Tuna_interp.Eval.Size_exhausted s -> `Size s
-            (* pure replay tests pass no deadline; the wall-clock abort
-               is a run-boundary policy *)
-            | Tuna_interp.Eval.Deadline_exceeded _ ->
-                failwith "deadline_exceeded in a pure evaluation"))
+              | Tuna_interp.Eval.Fuel_exhausted s -> `Fuel s
+              | Tuna_interp.Eval.Size_exhausted s -> `Size s
+              (* pure replay tests pass no deadline and run canonical;
+                 the v1-only [Loop] abort is a run-boundary law *)
+              | Tuna_interp.Eval.Loop _ -> failwith "loop in a pure canonical evaluation"
+              (* pure replay tests pass no deadline; the wall-clock abort
+                 is a run-boundary policy *)
+              | Tuna_interp.Eval.Deadline_exceeded _ ->
+                  failwith "deadline_exceeded in a pure evaluation"))
 
 let test_parse_command () =
   let show (c : Tuna_server.Repl_cmd.command) =

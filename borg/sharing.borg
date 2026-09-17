@@ -1,0 +1,157 @@
+(project tuna-sharing
+ (* agent note (|2026-09-17, F1 follow-through: the crown growth
+    experiment measured no-sharing reduction cost at exactly
+    2^(d+1)-2 steps for the T-family (T0=I, Ti = lam z. T(i-1) (T(i-1) z))
+    while the result stayed 5 nodes - the exponential is in the
+    FIRING count, not the answer.  Roerick's F1 call is the engine
+    split; this chapter is the optimized side: a second run
+    semantics, recorded as a run-row version, verifiable under its
+    own law.  The canonical engine stays the normative counter: the
+    differential corpus and three-engine step-count agreement remain
+    canonical-only, and v1 step counts are not comparable to v0 and
+    not claimed to be.|) *)
+ (doc "Tuna book chapter: sharing - the distinct-work semantics (v1): memoized firings, finite loop answers, prim exemption, and per-version replay. One evaluator, two accounting laws.")
+ (status planned)
+ (convention ocaml-dune)
+ (section counting-law
+  (doc "What a step is under v1")
+  (status planned)
+  (details
+   (doc (|
+        v0 counts every firing of a triage rule (AGENTS.md rule 4).  v1
+        counts every DISTINCT firing: a firing is the pair (fun-tree,
+        arg-tree) identified by content hash (sha256 over the canonical
+        ternary form, the same address law as tree_values).  The first
+        firing of a pair costs one step and one fuel and records its
+        answer in a per-run memo table; every later firing of the SAME
+        pair is a memo hit - it returns the recorded answer and costs
+        nothing.  Fuel is therefore the distinct-work budget: a v1 run
+        with fuel N performs at most N distinct firings, however many
+        raw firings the term contains.
+
+        Everything else is v0 verbatim: same triage rules, same
+        leftmost-innermost order, wrapper applications free, prim calls
+        free at the gate, same size_cap checks at the same points.
+        The memo table is per-run state - never shared across runs,
+        because prim answers are per-run facts (grant state, kv rows,
+        the allowlist) and a cross-run table would cache a lie.
+
+        Consequence (the honest one): a v1 step count is not a v0 step
+        count and neither is reducible to the other.  The T-family
+        closed term compiles+evaluates in 2^(d+1)-2 raw firings but
+        O(d) distinct ones; omega never finishes under v0 and is a
+        finite loop answer under v1 (loop-law below).  This is the F1
+        split recorded as a semantics VERSION, not hidden as an
+        optimization: the run row says which law produced its numbers.
+       |))))
+ (section loop-law
+  (doc "In-flight re-entry is divergence, answered finitely")
+  (status planned)
+  (details
+   (doc (|
+        Under leftmost-innermost firing, re-entering a firing (f, x)
+        that is still in flight means the computation recurses on its
+        own subproblem with nothing in between - genuine divergence,
+        and v0 can only report it as fuel exhaustion after burning the
+        whole budget.  v1 detects it at the first re-entry: the
+        in-flight set holds every key whose firing has started but not
+        completed; hitting one aborts evaluation with a new result
+        variant Loop (steps taken so far) and run status "loop".
+
+        The answer is finite and deterministic: omega terminates after
+        a couple of steps with status loop instead of
+        fuel_exhausted after N.  Detection costs no fuel.  The abort
+        law matches the other exhaustions exactly: a budget-shaped
+        result at the boundary, journaled normally, replayed
+        deterministically.  No expressive power is lost relative to
+        v0 - every term that loops under v1 burns fuel forever under
+        v0, so v1's loop set is a subset of v0's exhaustion set.
+       |))))
+ (section prim-exemption
+  (doc "Side-effecting work never memoizes (the dirty rule)")
+  (status planned)
+  (details
+   (doc (|
+        A prim call is a host event, not a calculus step: the gate
+        application goes to the host every time, exactly as in v0, and
+        is never a memo key.  The stronger rule is about COMPOSITE
+        firings: if a prim was answered anywhere inside a firing's
+        evaluation, that firing's answer is not memoized - it
+        re-executes on every occurrence, re-answering its prims.
+
+        The reason is grant liveness, not replay: the run boundary
+        re-checks every prim call against live grant state (revoked
+        mid-run bites per call) and journals every call as the audit
+        trail.  A memoized firing containing a prim would silently
+        skip the re-check and the journal row on its second occurrence
+        - a weakening of the grant model dressed up as an
+        optimization.  Dirty firings pay for their effects every time;
+        clean firings (pure calculus, the common case and the whole
+        point of the crown family) memoize freely.
+
+        Replay identity survives on either reading - the journal-fed
+        replay consumes prim answers in the same order as the original
+        run precisely BECAUSE dirty firings never memoize - but the
+        dirty rule stands on the grant law alone.
+       |))))
+ (section semantics-version
+  (doc "The run row says which law produced its numbers")
+  (status planned)
+  (details
+   (doc (|
+        runs gains a semantics column (migration 0009): text, NOT
+        NULL, DEFAULT 'v0'.  'v0' is the canonical law (raw firing
+        count, the only law that ever produced a row before this
+        migration).  'v1' is the distinct-work law above.  Every
+        existing row reads as v0 without backfill.
+
+        A run request carries an optional semantics field; absent
+        means v0, an unknown value is a 400.  The REPL surface takes
+        the same field.  The engine takes the mode from the row, not
+        from ambient configuration: a row is self-describing, and no
+        server restart can change what its numbers mean.
+       |))))
+ (section replay-per-version
+  (doc "Verify replays the row under its own law")
+  (status planned)
+  (details
+   (doc (|
+        Faithful replay reads the run row's semantics and re-executes
+        under that law with the journal-fed host; the four identity
+        checks are unchanged in shape (result hash, step count,
+        per-seq journal answers consumed in order, hash chain).  A v0
+        row verifies against the canonical engine; a v1 row verifies
+        against the memoized engine; both are identity proofs, each
+        within its own law.
+
+        Not claimed, on purpose: cross-engine step-count equality.
+        That was v0's invariant under a single engine and it stays
+        true where it was true - the differential corpus and the
+        three-engine harness remain canonical-only.  F1's predicted
+        consequence ("optimized-unverifiable") is weaker than what
+        shipped: the split exists, and verification followed the row
+        instead of dying.
+       |))))
+ (section costs-and-limits
+  (doc "What v1 costs and what it does not cover")
+  (status planned)
+  (details
+   (doc (|
+        Hashing: memo keys are content hashes (sha256 over canonical
+        form).  Computing one per firing from scratch would be
+        quadratic in the tree; the engine keeps a side table keyed on
+        physical node identity (persistent trees share subterm objects
+        exactly when the sharing we are harvesting is real) and pays
+        each distinct node object one canonical encode + digest.
+        Physically-distinct-but-equal subtrees just hash twice;
+        correctness never depends on the physical fast path.
+
+        Scope: this chapter covers the RUN engine.  Compile-time
+        reduction stays canonical (raw counting under the wall-clock
+        cap) - the crown experiment also showed the COMPILE artifact
+        doubling per def level, so full crown economics need sharing
+        to reach the artifact/tree representation too; that is future
+        work, recorded here so the absence is legible.  The memo
+        table costs O(distinct answers) memory per run.
+       |))))
+)

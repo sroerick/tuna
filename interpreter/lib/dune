@@ -1,4 +1,4 @@
 (library
  (name tuna_interp)
  (modules eval prim_eval)
- (libraries tuna unix))
+ (libraries tuna unix digestif))

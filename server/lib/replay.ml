@@ -31,6 +31,7 @@ module S = Tuna_store.Store
 
 type outcome = Eng.result =
   | Normal of Tuna.Tree.t * int
+  | Loop of int
   | Fuel_exhausted of int
   | Size_exhausted of int
   | Deadline_exceeded of int
@@ -57,16 +58,21 @@ type verdict =
 
 let outcome_status = function
   | Normal _ -> "normal"
+  | Loop _ -> "loop"
   | Fuel_exhausted _ -> "fuel_exhausted"
   | Size_exhausted _ -> "size_exhausted"
   | Deadline_exceeded _ -> "deadline_exceeded"
 
 let outcome_ternary = function
   | Normal (t, _) -> Some (Tuna.Canon.encode t)
-  | Fuel_exhausted _ | Size_exhausted _ | Deadline_exceeded _ -> None
+  | Loop _ | Fuel_exhausted _ | Size_exhausted _ | Deadline_exceeded _ -> None
 
 let outcome_steps = function
-  | Normal (_, s) | Fuel_exhausted s | Size_exhausted s | Deadline_exceeded s -> s
+  | Normal (_, s)
+  | Loop s
+  | Fuel_exhausted s
+  | Size_exhausted s
+  | Deadline_exceeded s -> s
 
 let outcome_hash o = Option.map Tuna.Hash.hex_of_string (outcome_ternary o)
 
@@ -99,8 +105,8 @@ let first_diff_path (a : Tuna.Tree.t) (b : Tuna.Tree.t) : string =
    sequentially from [rows].  Answers come from the journal (accepted
    results consumed in order); no grant check, no live host.  Returns
    (outcome, rows consumed). *)
-let execute_fed ?(deadline = Float.infinity) ~program ~inputs ~fuel ~size_cap
-    (rows : S.journal list) : (outcome * int) Lwt.t =
+let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ~program
+    ~inputs ~fuel ~size_cap (rows : S.journal list) : (outcome * int) Lwt.t =
   let arr = Array.of_list rows in
   let next = ref 0 in
   let host ~site:_ ~name ~args =
@@ -172,7 +178,7 @@ let execute_fed ?(deadline = Float.infinity) ~program ~inputs ~fuel ~size_cap
         incr next;
         Lwt.return answer)
   in
-  Eng.eval ~host ~fuel ~size_cap ~deadline ~program inputs
+  Eng.eval ~host ~mode ~fuel ~size_cap ~deadline ~program inputs
   >>= fun outcome -> Lwt.return (outcome, !next)
 
 (* -- verification ----------------------------------------------------- *)
@@ -257,13 +263,31 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
         load_run_parts pool ~run
         >>= (function
               | Error msg -> Lwt.return (Unverifiable msg)
-              | Ok (program, inputs, js') -> (
-                    let nrows = List.length js' in
-                    Lwt.catch
-                      (fun () ->
-                          execute_fed ~program ~inputs ~fuel:run.S.r_fuel
-                            ~size_cap:run.S.r_size_cap ~deadline js'
-                          >>= fun (outcome, consumed) ->
+                | Ok (program, inputs, js') -> (
+                      (* per-version replay (borg/sharing.borg): the row
+                         names the accounting law that produced its
+                         numbers; this build re-executes under it, or
+                         refuses a future version as unverifiable. *)
+                      let mode =
+                        match run.S.r_semantics with
+                        | "v0" -> Ok Eng.Canonical
+                        | "v1" -> Ok Eng.Sharing
+                        | s -> Error s
+                      in
+                      let nrows = List.length js' in
+                      (match mode with
+                       | Error s ->
+                           Lwt.return
+                             (Unverifiable
+                                (Printf.sprintf
+                                   "unknown semantics version %S for this build"
+                                   s))
+                       | Ok mode ->
+                      Lwt.catch
+                        (fun () ->
+                            execute_fed ~mode ~program ~inputs ~fuel:run.S.r_fuel
+                              ~size_cap:run.S.r_size_cap ~deadline js'
+                            >>= fun (outcome, consumed) ->
                           if is_deadline outcome then
                             (* a replay-side clock abort is an operator
                                budget, not evidence of divergence *)
@@ -344,7 +368,7 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                           else Lwt.return (Verified outcome))
                       (function
                         | Diverged d -> Lwt.return (Diverged d)
-                        | e -> Lwt.fail e)))))
+                          | e -> Lwt.fail e))))))
 
 (* Re-execute a (derived) run against its own journal and WRITE the
    outcome into the run row: the counterfactual execution behind fork.
@@ -368,14 +392,30 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
                  load_run_parts pool ~run
                  >>= (function
                        | Error msg -> Lwt.return (Unverifiable msg)
-                       | Ok (program, inputs, js') ->
-                           let nrows = List.length js' in
-                           Lwt.catch
-                             (fun () ->
-                                execute_fed ~program ~inputs ~fuel:run.S.r_fuel
-                                  ~size_cap:run.S.r_size_cap ~deadline js'
-                                >>= fun (outcome, consumed) ->
-                                if consumed < nrows then
+                         | Ok (program, inputs, js') ->
+                             (* the counterfactual re-executes under the
+                                row's own law, same as verify *)
+                             let mode =
+                               match run.S.r_semantics with
+                               | "v0" -> Ok Eng.Canonical
+                               | "v1" -> Ok Eng.Sharing
+                               | s -> Error s
+                             in
+                             (match mode with
+                              | Error s ->
+                                  Lwt.return
+                                    (Unverifiable
+                                       (Printf.sprintf
+                                          "unknown semantics version %S for this build"
+                                          s))
+                              | Ok mode ->
+                             let nrows = List.length js' in
+                             Lwt.catch
+                               (fun () ->
+                                  execute_fed ~mode ~program ~inputs ~fuel:run.S.r_fuel
+                                    ~size_cap:run.S.r_size_cap ~deadline js'
+                                  >>= fun (outcome, consumed) ->
+                                  if consumed < nrows then
                                  let rows = Array.of_list js' in
                                  let row = rows.(consumed) in
                                  let d =
@@ -396,6 +436,7 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
                                  let status =
                                    match outcome with
                                    | Normal _ -> S.Run_status.Normal
+                                   | Loop _ -> S.Run_status.Loop
                                    | Fuel_exhausted _ ->
                                        S.Run_status.Fuel_exhausted
                                   | Deadline_exceeded _ ->
@@ -425,7 +466,7 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
                                    S.update_run_result pool ~id:run_id
                                      ~status:S.Run_status.Error ()
                                    >>= fun () -> Lwt.return (Diverged d)
-                               | e -> Lwt.fail e)))))
+                                 | e -> Lwt.fail e))))))
 
 (* Verify and WRITE verify_status ("verified" / "failed" / "gced"). *)
 let verify_and_record pool ?(deadline = Float.infinity) ~run_id () =

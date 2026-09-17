@@ -193,14 +193,20 @@ let compile_deadline_now () =
   | Some secs -> Unix.gettimeofday () +. secs
   | None -> Float.infinity
 
-(* -- the host -------------------------------------------------------- *)
+(* Run semantics (borg/sharing.borg): the row names the accounting
+   law.  'v0' = canonical (a step per triage firing); 'v1' = the
+   distinct-work law (memoized firings, prim-containing firings never
+   memoized, in-flight re-entry = Loop).  Unknown values are a request
+   error at the boundary; execute itself trusts the validated row. *)
+let semantics_ok = function "v0" | "v1" -> true | _ -> false
 
-(* Execute a run: insert the row, evaluate with the prim host, journal
-   every boundary event, update the row, return (row, journals).
-   Input trees are content-addressed into the programs table so replay
-   can recover them from their hashes (run rows store input HASHES). *)
+let mode_of_semantics = function
+  | "v0" -> Eng.Canonical
+  | "v1" -> Eng.Sharing
+  | s -> invalid_arg (Printf.sprintf "unknown semantics %S" s)
+
 let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
-    ?(parent_run_id = None) ~fuel ~size_cap () =
+    ?(parent_run_id = None) ?(semantics = "v0") ~fuel ~size_cap () =
   let input_hashes = List.map Tuna.Hash.hex_of_tree inputs in
   let rec store_inputs = function
     | [] -> Lwt.return ()
@@ -213,7 +219,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
   store_inputs inputs
   >>= fun () ->
   S.insert_run pool ~program_hash ~inputs:input_hashes ~caller:(Some caller)
-    ~parent_run_id ~fuel ~size_cap ()
+    ~parent_run_id ~semantics ~fuel ~size_cap ()
   >>= fun run_id ->
   grant_map pool grant_ids
   >>= fun gmap ->
@@ -333,7 +339,8 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
      | _ -> Lwt.return ())
       >>= fun () -> Lwt.return answer
   in
-  Eng.eval ~host ~fuel ~size_cap ~deadline ~program inputs
+  Eng.eval ~host ~mode:(mode_of_semantics semantics) ~fuel ~size_cap ~deadline
+    ~program inputs
   >>= fun result ->
   let status, result_ternary, steps =
     match result with
@@ -341,6 +348,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
         ( S.Run_status.Normal
         , Some (Tuna.Canon.encode t)
         , s )
+      | Eng.Loop s -> (S.Run_status.Loop, None, s)
       | Eng.Fuel_exhausted s -> (S.Run_status.Fuel_exhausted, None, s)
       | Eng.Size_exhausted s -> (S.Run_status.Size_exhausted, None, s)
       | Eng.Deadline_exceeded s -> (S.Run_status.Deadline_exceeded, None, s)
@@ -360,10 +368,13 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
    the M9 REPL's journaled rounds (parent_run_id chains the per-session
    transcript). *)
 let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
-    ?(parent_run_id = None) ~size_cap () :
+    ?(parent_run_id = None) ?(semantics = "v0") ~size_cap () :
     (S.run * S.journal list, int * string) result Lwt.t =
   if fuel < 1 || size_cap < 1 then
     Lwt.return (Error (400, "fuel and size_cap must be >= 1"))
+  else if not (semantics_ok semantics) then
+    Lwt.return
+      (Error (400, Printf.sprintf "unknown semantics %S (v0 | v1)" semantics))
   else
       let rec check gs =
         match gs with
@@ -399,9 +410,9 @@ let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
                                    Printf.sprintf
                                      "stored program unparseable (offset %d: %s)"
                                      off msg ))
-                        | Ok program ->
-                            execute pool ~caller ~grant_ids ~program_hash
-                              ~program ~ir_json:prog.S.p_ir ~inputs:input_trees
-                              ~parent_run_id ~fuel ~size_cap ()
-                            >>= fun (row, js) -> Lwt.return (Ok (row, js))))))
+                          | Ok program ->
+                              execute pool ~caller ~grant_ids ~program_hash
+                                ~program ~ir_json:prog.S.p_ir ~inputs:input_trees
+                                ~parent_run_id ~semantics ~fuel ~size_cap ()
+                              >>= fun (row, js) -> Lwt.return (Ok (row, js))))))
 
