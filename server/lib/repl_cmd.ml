@@ -165,8 +165,10 @@ let err_ msg : round_result Lwt.t = Lwt.return (Error (400, msg))
 
 (* -- journaled rounds (eval / def) ------------------------------------ *)
 
-let compile_with_dict ~dictionary src =
-  B.compile_source ~dictionary src
+let compile_with_dict ?(fuel = B.default_compile_fuel)
+    ?(size_cap = B.default_compile_size_cap) ?(deadline = Float.infinity)
+    ~dictionary src =
+  B.compile_source ~fuel ~size_cap ~deadline ~dictionary src
 
 (* Compile the artifact, upsert it, run it through the run boundary,
    and chain the run row to the identity's previous round. *)
@@ -196,21 +198,32 @@ let run_outcome kind (row : S.run) program_hash =
     ()
 
 let do_eval pool ~caller ~grant_ids ~dictionary ~input_trees ~fuel ~size_cap
-    src =
-  match compile_with_dict ~dictionary src with
-  | exception Tuna_compiler.Ir.Error (p, msg) ->
-      err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
-  | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
-  | artifact -> (
-      journaled_round pool ~caller ~artifact ~input_trees ~grant_ids ~fuel
-        ~size_cap ()
-      >>= (function
-            | Error (code, msg) -> Lwt.return (Error (code, msg))
-            | Ok (row, _js, phash) ->
-                Lwt.return (Ok (run_outcome "eval" row phash))))
+    ?(compile_fuel = B.default_compile_fuel)
+    ?(compile_size_cap = B.default_compile_size_cap)
+    ?(compile_deadline = Float.infinity) src =
+    match
+      compile_with_dict ~fuel:compile_fuel ~size_cap:compile_size_cap
+        ~deadline:compile_deadline ~dictionary src
+    with
+    | exception Tuna_compiler.Ir.Error (p, msg) ->
+        err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
+    | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
+    | artifact -> (
+        journaled_round pool ~caller ~artifact ~input_trees ~grant_ids ~fuel
+          ~size_cap ()
+        >>= (function
+              | Error (code, msg) -> Lwt.return (Error (code, msg))
+              | Ok (row, _js, phash) ->
+                  Lwt.return (Ok (run_outcome "eval" row phash))))
 
-let do_def pool ~caller ~dictionary name src =
-  match compile_with_dict ~dictionary src with
+let do_def pool ~caller ~dictionary
+    ?(compile_fuel = B.default_compile_fuel)
+    ?(compile_size_cap = B.default_compile_size_cap)
+    ?(compile_deadline = Float.infinity) name src =
+  match
+    compile_with_dict ~fuel:compile_fuel ~size_cap:compile_size_cap
+      ~deadline:compile_deadline ~dictionary src
+  with
   | exception Tuna_compiler.Ir.Error (p, msg) ->
       err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
   | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
@@ -417,9 +430,15 @@ let parse_inputs (inputs : string list) :
   go [] (List.filter (fun s -> String.trim s <> "") inputs)
 
 (* Read the identity's dictionary, parse the command, execute it.
-   [inputs] / [grant_ids] / [fuel] / [size_cap] apply to eval rounds.
-   Errors are values, never exceptions. *)
-let execute pool ~caller ~command ~inputs ~grant_ids ~fuel ~size_cap () :
+   [inputs] / [grant_ids] / [fuel] / [size_cap] apply to eval rounds;
+   [compile_fuel] / [compile_size_cap] / [compile_deadline] bound the
+   compile-time reduction phase (defaults: bracket.ml's, untimed — the
+   server passes the TUNA_COMPILE_MAX_SECONDS clock).  Errors are
+   values, never exceptions. *)
+let execute pool ~caller ~command ~inputs ~grant_ids ~fuel ~size_cap
+    ?(compile_fuel = B.default_compile_fuel)
+    ?(compile_size_cap = B.default_compile_size_cap)
+    ?(compile_deadline = Float.infinity) () :
     round_result Lwt.t =
   Lwt.catch
     (fun () ->
@@ -444,13 +463,16 @@ let execute pool ~caller ~command ~inputs ~grant_ids ~fuel ~size_cap () :
        | Ok dictionary ->
       match parse_command command with
       | exception Parse_error msg -> err_ msg
-      | Eval src -> (
-          (match parse_inputs inputs with
-           | Error msg -> err_ msg
-           | Ok input_trees ->
-               do_eval pool ~caller ~grant_ids ~dictionary ~input_trees ~fuel
-                 ~size_cap src))
-      | Def (name, src) -> do_def pool ~caller ~dictionary name src
+        | Eval src -> (
+            (match parse_inputs inputs with
+             | Error msg -> err_ msg
+             | Ok input_trees ->
+                 do_eval pool ~caller ~grant_ids ~dictionary ~input_trees ~fuel
+                   ~size_cap ~compile_fuel ~compile_size_cap ~compile_deadline
+                   src))
+        | Def (name, src) ->
+            do_def pool ~caller ~dictionary ~compile_fuel ~compile_size_cap
+              ~compile_deadline name src
       | Undef name -> do_undef pool ~caller name
       | Get (path, h) -> do_get pool ~caller path h
       | Patch (path, t, h) -> do_patch pool ~caller path t h

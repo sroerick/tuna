@@ -1,4 +1,4 @@
 (library
  (name tuna_compiler)
  (modules sexp ir bracket provenance)
- (libraries tuna))
+ (libraries tuna unix))

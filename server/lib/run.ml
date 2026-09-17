@@ -135,6 +135,24 @@ let deadline_now () =
   | Some secs -> Unix.gettimeofday () +. secs
   | None -> Float.infinity
 
+(* Compile-time reduction is request-boundary work too (repl eval/def
+   and source program upload): same shape as the run cap, its own knob
+   so a big run budget does not silently license a big compile.
+   TUNA_COMPILE_MAX_SECONDS (default 10; 0/negative/unparsable
+   disables); fuel stays the coarse ceiling on top. *)
+let compile_max_seconds () =
+  match Sys.getenv_opt "TUNA_COMPILE_MAX_SECONDS" with
+  | None -> Some 10.0
+  | Some s -> (
+      match float_of_string_opt s with
+      | Some v when v > 0.0 -> Some v
+      | _ -> None)
+
+let compile_deadline_now () =
+  match compile_max_seconds () with
+  | Some secs -> Unix.gettimeofday () +. secs
+  | None -> Float.infinity
+
 (* -- the host -------------------------------------------------------- *)
 
 (* Execute a run: insert the row, evaluate with the prim host, journal

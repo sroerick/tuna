@@ -211,15 +211,29 @@ let post_program pool auth req =
               >>= fun _row ->
                (j_ok ~code:201 (`Assoc [ ("hash", `String hash) ])))
       | None, Some src -> (
+          (* compile budget: per-request override, plus the request clock
+             (TUNA_COMPILE_MAX_SECONDS) so a big ceiling cannot pin the
+             single-threaded runtime *)
+          let compile_fuel =
+            Option.value (get_int_opt j "compile_fuel")
+              ~default:B.default_compile_fuel
+          in
+          let compile_size_cap =
+            Option.value (get_int_opt j "compile_size_cap")
+              ~default:B.default_compile_size_cap
+          in
           match
             (try
-               Ok (B.compile_source src)
+               Ok
+                 (B.compile_source src ~fuel:compile_fuel
+                    ~size_cap:compile_size_cap
+                    ~deadline:(Run.compile_deadline_now ()))
              with
              | Tuna_compiler.Ir.Error (p, msg) ->
                  Error ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
              | B.Compile_failed msg -> Error ("compile failed: " ^ msg))
           with
-          | Error msg ->  (j_err msg)
+            | Error msg ->  (j_err msg)
           | Ok art ->
               let ir = J.to_string (ir_json_of_artifact art) in
               let hash = art.B.hash_hex in
@@ -607,17 +621,27 @@ let post_repl pool auth req =
         | Some c -> Some c
         | None -> get_string_opt j "term"
       in
-      let fuel = Option.value (get_int_opt j "fuel") ~default:1_000_000 in
-      let size_cap =
-        Option.value (get_int_opt j "size_cap") ~default:1_000_000
-      in
-      match command with
-      | None -> (j_err "missing \"command\" (or \"term\")")
-      | Some command ->
-          Repl_cmd.execute pool ~caller:auth.auth_id ~command ~fuel
-            ~size_cap ~inputs:(strings_of j "inputs")
-            ~grant_ids:(strings_of j "grants")
-            ()
+        let fuel = Option.value (get_int_opt j "fuel") ~default:1_000_000 in
+        let size_cap =
+          Option.value (get_int_opt j "size_cap") ~default:1_000_000
+        in
+        let compile_fuel =
+          Option.value (get_int_opt j "compile_fuel")
+            ~default:B.default_compile_fuel
+        in
+        let compile_size_cap =
+          Option.value (get_int_opt j "compile_size_cap")
+            ~default:B.default_compile_size_cap
+        in
+        match command with
+        | None -> (j_err "missing \"command\" (or \"term\")")
+        | Some command ->
+            Repl_cmd.execute pool ~caller:auth.auth_id ~command ~fuel
+              ~size_cap ~compile_fuel ~compile_size_cap
+              ~compile_deadline:(Run.compile_deadline_now ())
+              ~inputs:(strings_of j "inputs")
+              ~grant_ids:(strings_of j "grants")
+              ()
           >>= function
           | Error (code, msg) -> (j_err ~code msg)
           | Ok o -> (j_ok (`Assoc [ ("round", outcome_json o) ])))

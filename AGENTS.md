@@ -62,6 +62,12 @@ into `schema_migrations` inside its own transaction).
    verdict-unverifiable, never a divergence; an aborted counterfactual
    finalizes its fork row as deadline_exceeded), and deadline_exceeded
    rows themselves are unverifiable: the clock is not a calculus fact.
+   Compile-time reduction (repl eval/def, source program upload) has
+   its own budget: default 1e8 firings, per-request `compile_fuel` /
+   `compile_size_cap` on /api/repl + /api/programs, and the same clock
+   policy under its own knob `TUNA_COMPILE_MAX_SECONDS` (default 10s;
+   0 disables) - a compile past it is a 400 "compile failed", never a
+   pinner.
 6. **The journal is the system.** Faithful replay = re-execute
    program+inputs with prim calls answered sequentially from the run's
    journal rows. Replay must not touch the live host/network.

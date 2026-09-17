@@ -113,7 +113,13 @@ type tagged =
   | TStem of int * tagged
   | TFork of int * tagged * tagged
 
-type budget = { mutable fuel : int; mutable steps : int; size_cap : int }
+type budget = {
+  mutable fuel : int
+      (* coarse ceiling (triage firings); the clock below is the fine one *)
+; mutable steps : int
+; size_cap : int
+; deadline : float  (* absolute Unix time; infinity = untimed (pure/tests) *)
+}
 
 exception Compile_failed of string
 
@@ -130,7 +136,19 @@ let fire b =
   if b.fuel = 0 then
     raise (Compile_failed "compile-time reduction exceeded the fuel budget");
   b.fuel <- b.fuel - 1;
-  b.steps <- b.steps + 1
+  b.steps <- b.steps + 1;
+  (* wall-clock poll every 4096 firings (run-boundary policy, mirrors
+     the interpreter's deadline poll): request-boundary compiles get
+     TUNA_COMPILE_MAX_SECONDS, pure/test compiles pass infinity and
+     never touch the clock *)
+  if b.fuel land 4095 = 0
+     && b.deadline <> Float.infinity
+     && Unix.gettimeofday () > b.deadline
+  then
+    raise
+      (Compile_failed
+         "compile-time evaluation exceeded the wall-clock budget \
+          (TUNA_COMPILE_MAX_SECONDS)")
 
 (* Tagged twin of upstream Tree.apply: same match arms, same
    evaluation order. Newly built wrapper nodes are tagged with the id
@@ -202,12 +220,17 @@ type artifact = {
   steps : int;  (* triage firings during compile-time reduction *)
 }
 
-let default_compile_fuel = 1_000_000
+(* Reflective self-application (bf2 bf2 not, crown-style defs) needs
+   compile-time reduction well past 1e6 firings; the wall-clock cap at
+   the request boundary (TUNA_COMPILE_MAX_SECONDS) is what keeps the
+   bigger ceiling from becoming a pinner, so fuel stays a coarse
+   ceiling rather than the defense. *)
+let default_compile_fuel = 100_000_000
 let default_compile_size_cap = 1_000_000
 
 let compile ?(fuel = default_compile_fuel) ?(size_cap = default_compile_size_cap)
-    (ir : Ir.t) : artifact =
-  let b = { fuel; steps = 0; size_cap } in
+    ?(deadline = Float.infinity) (ir : Ir.t) : artifact =
+  let b = { fuel; steps = 0; size_cap; deadline } in
   let t = to_tagged b (elim (of_ir ir)) in
   let tree =
     let rec go = function
@@ -236,6 +259,6 @@ let compile ?(fuel = default_compile_fuel) ?(size_cap = default_compile_size_cap
 
 (* Convenience: compile surface source directly.  ?dictionary threads
    the REPL's name->tree bindings into the reader (M9). *)
-let compile_source ?fuel ?size_cap ?(dictionary : (string * Tuna.Tree.t) list = [])
-    src =
-  compile ?fuel ?size_cap (Sexp.parse ~dictionary src)
+let compile_source ?fuel ?size_cap ?deadline
+    ?(dictionary : (string * Tuna.Tree.t) list = []) src =
+  compile ?fuel ?size_cap ?deadline (Sexp.parse ~dictionary src)

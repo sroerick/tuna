@@ -126,7 +126,7 @@ let eval pool user req =
       else
         Repl_cmd.execute pool
           ~caller:user.S.i_id ~command:source ~inputs:input_list ~grant_ids:[]
-          ~fuel ~size_cap ()
+          ~fuel ~size_cap ~compile_deadline:(Run.compile_deadline_now ()) ()
         >>= (function
               | Error (_, msg) -> Dream.html (error_html msg)
               | Ok o ->

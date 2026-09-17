@@ -184,6 +184,59 @@ let provenance_lambda_tags =
 
 let provenance_tests = [ determinism; provenance_id; provenance_lambda_tags ]
 
+(* -- compile budget (fuel + wall clock) -------------------------------- *)
+
+(* Depth-d chain of identity applications: ((\y.y) ((\y.y) ...))
+   bracket-abstracts to I(I(...I)) and fires ~1 triage rule per level
+   during compile-time reduction. *)
+let rec nested_identity d =
+  if d = 0 then "(lambda (x) x)"
+  else Printf.sprintf "((lambda (y) y) %s)" (nested_identity (d - 1))
+
+let compile_budget_tests =
+  let open Tuna_compiler in
+  [ Alcotest.test_case "default compile fuel raised for reflective defs" `Quick
+      (fun () ->
+        (* 1e6 blocked crown-style reflective defs (bf2 bf2 not); the
+           default must sit well above that *)
+        Alcotest.(check int) "default fuel" 100_000_000
+          Bracket.default_compile_fuel);
+    Alcotest.test_case "fuel exhaustion is a clean compile failure" `Quick
+      (fun () ->
+        match
+          Bracket.compile_source ~fuel:0 "((lambda (x) x) (lambda (x) x))"
+        with
+        | exception Bracket.Compile_failed msg ->
+            Alcotest.(check bool) "fuel message" true
+              (String.length msg > 0 && msg.[0] = 'c')
+        | _ -> Alcotest.fail "expected Compile_failed");
+    Alcotest.test_case "past wall-clock deadline aborts the compile" `Quick
+      (fun () ->
+        (* a past deadline aborts at the first 4096-firing poll; the
+           fuel ceiling alone would let it run to completion *)
+        match
+          Bracket.compile_source ~fuel:100_000_000 ~deadline:0.0
+            (nested_identity 10_000)
+        with
+          | exception Bracket.Compile_failed msg ->
+              Alcotest.(check string) "wall-clock message"
+                "compile-time evaluation exceeded the wall-clock budget \
+                 (TUNA_COMPILE_MAX_SECONDS)"
+                msg
+        | _ -> Alcotest.fail "expected Compile_failed");
+    Alcotest.test_case "untimed compile crosses the poll boundary fine" `Quick
+      (fun () ->
+        let art =
+          Bracket.compile_source ~fuel:100_000_000 (nested_identity 10_000)
+        in
+        (* steps >= 4096 proves the clock poll point is reachable and
+           harmless when the deadline is infinite *)
+        Alcotest.(check bool) "fired past one poll window" true
+          (art.Bracket.steps >= 4096);
+        Alcotest.(check bool) "within fuel" true
+          (art.Bracket.steps < 100_000_000));
+  ]
+
 let () =
   Alcotest.run "tuna compiler"
     [
@@ -191,4 +244,5 @@ let () =
       ("compile", compile_tests);
       ("extensional", extensional_tests);
       ("provenance", provenance_tests);
+      ("compile budget", compile_budget_tests);
     ]
