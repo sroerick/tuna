@@ -9,7 +9,12 @@
     own law.  The canonical engine stays the normative counter: the
     differential corpus and three-engine step-count agreement remain
     canonical-only, and v1 step counts are not comparable to v0 and
-    not claimed to be.|) *)
+    not claimed to be.
+
+   Update 2026-09-18: the owner took the call - engine split
+   accepted, F1 recorded OBSERVED in FINDINGS.md; v0 stays the API
+   default and the memo stays per-run for now; cross-run
+   demand-memo is planned below (owner-interested, not scheduled).|) *)
  (doc "Tuna book chapter: sharing - the distinct-work semantics (v1): memoized firings, finite loop answers, prim exemption, and per-version replay. One evaluator, two accounting laws.")
  (status implemented)
  (convention ocaml-dune)
@@ -153,5 +158,37 @@
         to reach the artifact/tree representation too; that is future
         work, recorded here so the absence is legible.  The memo
         table costs O(distinct answers) memory per run.
+         |))))
+ (section demand-memo
+  (doc "Cross-run sharing of clean firings (planned; owner-interested 2026-09-18, not scheduled)")
+  (status planned)
+  (details
+   (doc (|
+        v1's memo is per-run on purpose: prim answers are per-run facts
+        (grant state, kv rows, the allowlist), so the whole table
+        stays private.  But clean firings are pure calculus - their
+        answers are functions of the content digest alone, which
+        makes them SHAREABLE across runs and, later, across
+        instances.  A cross-run demand-memo keys the same content
+        digests into a shared store: the first demander pays the full
+        firing; later demanders of the same pair reuse the recorded
+        answer.  The dirty rule hardens into a boundary law: only
+        firings whose evaluation never touched a prim may enter the
+        shared table, so grant liveness and the audit trail are
+        untouched by construction - the shared table is pure-cache
+        only.
+
+        Open with the owner: the trust model (whose cached answers
+        may a run accept - own-garden only, verified-only where a
+        cached answer must carry a replay receipt, or anyone's), the
+        price of a cache hit (free like v1's per-run hits, or a
+        metered read), and the replay story (a row that consumed
+        shared answers replays under which law when the shared table
+        has since evolved - current leaning: replay re-executes and
+        treats the shared table as a host, so identity stays
+        per-run).  Federation interplay: the shared memo is the
+        natural export surface once M12 exists; sequencing
+        demand-memo after federation keeps the trust question from
+        being answered twice.
        |))))
 )

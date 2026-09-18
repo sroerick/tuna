@@ -21,7 +21,12 @@ consequence).
 > replay identity becomes a statement about the slow engine only.
 > Thesis survives weakened.
 
-**Status: not triggered** (no optimizer exists in v0).
+**Status: OBSERVED 2026-09-18** (the optimizer arrived: sharing v1, d3c156f; live on town since 76cb59f).
+
+- The defining condition is met verbatim: sharing v1 (borg/sharing.borg) counts DISTINCT firings, keyed by sha256 content digest of the (fun, arg) pair, and its step counts diverge from v0 by design.
+- Measured: the T-family costs 2^(d+1)-2 raw firings under v0 vs O(d) distinct under v1 at the same normal form (chapter agent note + fixtures); omega is fuel_exhausted under v0 and a finite loop answer under v1 (live demos 09-17: omega loop@3, run 15c8b75c; the crown loop answers @25,813 steps where v0 burned the 132M-fuel deadline).
+- Recorded consequence, weaker than pre-registered: replay identity became a statement about the canonical engine only (differential corpus + three-engine harness stay v0-only; cross-engine step-count equality not claimed) - but the split did NOT cost verifiability. Each run row carries its semantics version (migration 0009) and replay re-executes under the row's own law; both laws verify (borg/sharing.borg replay-per-version). Thesis survives weakened, with the verification cost smaller than predicted.
+- Owner call 2026-09-18: engine split accepted; v0 stays the API default (absent semantics field = v0) and the memo stays per-run for now; cross-run demand-memo is planned in borg/sharing.borg (owner-interested, not scheduled).
 
 - v0 has one engine per mode and no optimization pass: the pure
   evaluator (`interpreter/lib/eval.ml`), the Lwt journaling twin
