@@ -1,18 +1,38 @@
 (project tuna-federation
  (doc "Tuna book chapter: federation - two tuna instances speak trees. Pre-registered as a sketch so the substrate never grows a feature that forecloses it. Thesis: the ops chain (genesis-anchored, hash-linked, prefix-folded, tamper-verified) is the replicable unit; peers exchange values by hash and converge by shipping verified ops windows, not by inventing a second protocol.")
- (status planned)
+ (* agent note (|2026-09-18, M12 opens with F1 implemented: GET
+    /api/fed/value/:hash answers {hash, kind, payload} for tree
+    (canonical ternary; a program hash resolves as its own ternary -
+    one address law) and bytes (base64).  Reads stay hash-gated
+    (byte-values law 2), so any valid bearer identity may fetch and
+    there is no new authz model; per-peer identities come from
+    TUNA_FED_PEERS at boot (absent names get a generated token printed
+    once, the root bootstrap pattern; names are lowercase alnum +
+    dashes and gate ns/<peer>/ prefixes later).  Every answer, 404s
+    included, lands in the ops chain as op "fed-value" attributed to
+    the calling identity, so a peer's fetches are visible in the
+    audited log.  Client side: scripts/fed-pull.sh rehashes the
+    payload (openssl sha256) and fails loudly on mismatch or 404 -
+    rejects are never absorbed.  Acceptance: tests/fed_tests.ml (6
+    green, own scratch db) + dev-instance e2e (bytes fetch by a peer
+    token, ops row carries the peer actor).|) *)
+ (status in-progress)
  (convention ocaml-dune)
  (section federation
-  (doc "Out of v0/v1 scope. Three phases, each independently shippable, each with pre-registered failure.")
-  (status planned)
+  (doc "Three phases, each independently shippable, each with pre-registered failure. F1 implemented 2026-09-18; F2 and F3 still out of scope.")
+  (status in-progress)
   (subsection phases
-   (status planned)
+   (status in-progress)
    (details
     (doc (|
-      F1 VALUE EXCHANGE (read-only). GET /api/fed/value/:hash returns
-         {kind, payload} for either kind; the peer rehashes on receipt
-         and trusts nothing but the hash. Per-peer bearer identities;
-         hash-gated reads (byte-values law 2) mean no new authz model.
+      F1 VALUE EXCHANGE (read-only, IMPLEMENTED 2026-09-18). GET
+         /api/fed/value/:hash returns {hash, kind, payload} for either
+         kind (tree ternary, bytes base64; a program hash resolves as
+         its own ternary); the peer rehashes on receipt and trusts
+         nothing but the hash (scripts/fed-pull.sh). Per-peer bearer
+         identities via TUNA_FED_PEERS; hash-gated reads (byte-values
+         law 2) mean no new authz model; fetches journal as op
+         "fed-value" attributed to the calling identity.
       F2 OPS-CHAIN SYNC. Pull: GET /api/fed/ops?prefix=&after_seq=
          returns op windows with op_hash linkage a peer can verify
          (mid-log windows verify internal-linkage-only, genesis anchor

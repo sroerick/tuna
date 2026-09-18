@@ -1,21 +1,26 @@
 (executable
  (name tuna_tests)
+ (modules tuna_tests)
  (libraries tuna tuna_interp alcotest))
 
 (executable
  (name compiler_tests)
+ (modules compiler_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
 (executable
  (name prim_tests)
+ (modules prim_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
 (executable
  (name sharing_tests)
+ (modules sharing_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
 (executable
  (name trace_tests)
+ (modules trace_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
 (rule
@@ -30,23 +35,26 @@
  (action
   (run %{exe:sharing_tests.exe})))
 
-; (dropped: a stale dbg debug executable left over from an earlier loop)
 (executable
  (name store_tests)
+ (modules store_tests)
  (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest-lwt
    lwt))
 
 (executable
  (name tree_substrate_tests)
+ (modules tree_substrate_tests)
  (libraries tuna tuna_compiler tuna_store tuna_server alcotest-lwt lwt))
 
 (executable
  (name m11_tests)
+ (modules m11_tests)
  (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest-lwt
    lwt))
 
 (executable
  (name repl_tests)
+ (modules repl_tests)
  (libraries tuna tuna_interp tuna_compiler tuna_server alcotest))
 
 (rule
@@ -92,9 +100,24 @@
 (rule
  (alias runtest)
  (deps m11_tests.exe ../scripts/test-store.sh (source_tree ../migrations))
+   (action
+    (bash
+     "bash %{workspace_root}/scripts/test-store.sh %{exe:m11_tests.exe} ../migrations tuna_test_m11")))
+
+; M12 federation F1 acceptance tests (value exchange): same PG gate, its
+; own scratch database so the PG suites never share one.
+ (executable
+  (name fed_tests)
+  (modules fed_tests)
+  (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif
+    alcotest-lwt lwt))
+
+(rule
+ (alias runtest)
+ (deps fed_tests.exe ../scripts/test-store.sh (source_tree ../migrations))
  (action
   (bash
-   "bash %{workspace_root}/scripts/test-store.sh %{exe:m11_tests.exe} ../migrations tuna_test_m11")))
+   "bash %{workspace_root}/scripts/test-store.sh %{exe:fed_tests.exe} ../migrations tuna_test_fed")))
 
 ; M3 differential harness: three engines (instrumented upstream copy,
 ; CL reference twin, tuna CLI) must agree on every corpus entry.

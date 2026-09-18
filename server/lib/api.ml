@@ -16,6 +16,18 @@
                                             caller's identity dictionary; eval
                                             + def rounds are journaled runs
                                             chained via repl_state)
+     GET  /api/fed/value/:hash              federation F1 value exchange:
+                                            {hash, kind, payload} for bytes
+                                            (base64), tree (canonical ternary;
+                                            a program hash resolves as its
+                                            ternary) - the peer rehashes on
+                                            receipt and trusts nothing but
+                                            the hash
+     POST /api/repl                         the REPL round (M9: eval/def/get/
+                                            patch/first-diff/dict under the
+                                            caller's identity dictionary; eval
+                                            + def rounds are journaled runs
+                                            chained via repl_state)
 
    Identity bootstrap is the server binary's job (bin/main.ml): read
    TUNA_BOOTSTRAP_TOKEN or generate one, print it, insert the root
@@ -1143,6 +1155,120 @@ let get_value pool auth req =
   >>= fun (code, content_type, body, hdrs) ->
   Dream.respond ~code ~headers:(("Content-Type", content_type) :: hdrs) body
 
+(* -- federation F1 (borg/federation.borg): value exchange --------------
+
+   GET /api/fed/value/:hash -> {"hash", "kind", "payload"}; kind bytes
+   carries a base64 payload, tree carries the canonical ternary text (a
+   program hash resolves as its own ternary - one address law).  The
+   peer rehashes on receipt and trusts nothing but the hash; reads stay
+   hash-gated (byte-values law 2), so no new authz model: any valid
+   bearer identity may fetch, and per-peer identities (TUNA_FED_PEERS)
+   attribute each fetch in the ops chain as op "fed-value".  Every
+   answer, 404s included, is journaled like value-get. *)
+
+(* 32 random bytes as hex (the same shape as bin/main.ml's root token) *)
+let random_token_hex () =
+  let ic = open_in_bin "/dev/urandom" in
+  Fun.protect
+    ~finally:(fun () -> close_in ic)
+    (fun () ->
+      let raw = really_input_string ic 32 in
+      let hex = Buffer.create 64 in
+      String.iter
+        (fun c -> Buffer.add_string hex (Printf.sprintf "%02x" (Char.code c)))
+        raw;
+      Buffer.contents hex)
+
+let fed_value_core pool ~(auth : auth) ~hash =
+  let hash = Tuna.Hash.normalize_hex hash in
+  let answer code j =
+    journal_value pool ~actor:auth.auth_id ~op:"fed-value" ~path:hash ()
+    >>= fun () -> Lwt.return (code, J.to_string j)
+  in
+  let denied code msg = answer code (`Assoc [ ("error", `String msg) ]) in
+  Store.value_fetch pool hash
+  >>= (function
+        | Some ternary ->
+            answer 200
+              (`Assoc
+                [ ("hash", `String hash)
+                ; ("kind", `String "tree")
+                ; ("payload", `String ternary) ])
+        | None -> (
+            Store.byte_value_fetch pool hash
+            >>= function
+            | Some b ->
+                answer 200
+                  (`Assoc
+                    [ ("hash", `String hash)
+                    ; ("kind", `String "bytes")
+                    ; ("payload", `String (Base64.encode_string b)) ])
+            | None -> (
+                Store.fetch_program pool hash
+                >>= function
+                | Some prog ->
+                    answer 200
+                      (`Assoc
+                        [ ("hash", `String hash)
+                        ; ("kind", `String "tree")
+                        ; ("payload", `String prog.Store.p_ternary) ])
+                | None -> denied 404 ("no value with hash " ^ hash))))
+
+let get_fed_value pool auth req =
+  fed_value_core pool ~auth ~hash:(Dream.param req "hash")
+  >>= fun (code, body) ->
+  Dream.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
+
+(* per-peer bearer identities (federation F1): TUNA_FED_PEERS lists
+   comma-separated peer names; each ABSENT name gets a generated token
+   printed ONCE (the root bootstrap pattern - only a fresh credential
+   prints).  Peer identities attribute fed traffic in the ops chain
+   today and gate ns/<peer>/ prefixes in F2.  Names are lowercase
+   alnum + dashes, 1..64 chars; anything else is a hard boot error. *)
+
+let fed_peer_name_ok name =
+  String.length name > 0
+  && String.length name <= 64
+  && String.for_all
+       (fun c ->
+         (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c = '-')
+       name
+
+let fed_peer_token_env name =
+  "TUNA_FED_PEER_TOKEN_"
+  ^ String.uppercase_ascii (String.map (fun c -> if c = '-' then '_' else c) name)
+
+let boot_fed_peers pool =
+  let names =
+    match Sys.getenv_opt "TUNA_FED_PEERS" with
+    | None | Some "" -> []
+    | Some csv ->
+        List.filter (fun n -> n <> "")
+          (List.map String.trim (String.split_on_char ',' csv))
+  in
+  let boot_one name =
+    if not (fed_peer_name_ok name) then
+      Lwt.fail (Failure ("boot: invalid TUNA_FED_PEERS name " ^ name))
+    else
+      Store.fetch_identity_by_name pool ("fed-peer-" ^ name)
+      >>= function
+      | Some _ -> Lwt.return ()
+      | None -> (
+          let token = random_token_hex () in
+          Store.bootstrap_identity pool ~is_admin:false
+            ~name:("fed-peer-" ^ name) ~token ()
+          >>= fun i ->
+          print_string (fed_peer_token_env name ^ "=" ^ token ^ "\n");
+          flush stdout;
+          Dream.log "boot: created fed peer identity %s (%s)" name i.Store.i_id;
+          Lwt.return ())
+  in
+  let rec go = function
+    | [] -> Lwt.return ()
+    | n :: rest -> boot_one n >>= fun () -> go rest
+  in
+  go names
+
 (* -- routes (M11): the routing table as data ---------------------------
 
    /api/route/* manage route/<site-path> records (routes.borg surface);
@@ -1272,6 +1398,7 @@ let api_routes pool =
       ; Dream.post "/api/ns/fork" (with_auth pool (post_ns_fork pool))
       ; Dream.post "/api/value/put" (with_auth pool (post_value_put pool))
       ; Dream.get "/api/value/:hash" (with_auth pool (get_value pool))
+      ; Dream.get "/api/fed/value/:hash" (with_auth pool (get_fed_value pool))
       ; Dream.post "/api/route/put" (with_auth pool (post_route_put pool))
       ; Dream.post "/api/route/delete" (with_auth pool (post_route_delete pool))
       ; Dream.get "/api/route/get" (with_auth pool (get_route_get pool))
@@ -1318,6 +1445,7 @@ let serve ~port ~bootstrap_token =
         Lwt.return pool
   in
   boot >>= fun pool ->
+  boot_fed_peers pool >>= fun () ->
   Dream.log "boot: identity bootstrap ok";
   Dream.serve ~interface:"127.0.0.1" ~port
     (Dream.logger
