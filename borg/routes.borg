@@ -19,7 +19,9 @@
          site-path collides with a reserved path is a journaled denial.
          Reserved list is pinned here, not in code, and may only grow
          by book change: api, health, login, logout, frag, grants,
-         programs, runs, repl, value, route, static.
+         programs, runs, repl, value, route, static, view, todo.
+         (2026-09-18: +view, +todo - the value viewer page and the
+         store-backed todo board, both under session auth.)
       3. THE ROUTE RECORD IS THE CAPABILITY. Template routes serve
          bytes to any caller, anonymous included - a public site needs
          it. Program routes execute the stored program as a

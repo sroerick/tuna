@@ -48,7 +48,7 @@ module J = Yojson.Basic
 (* routes.borg law 2, pinned list *)
 let reserved =
   [ "api"; "health"; "login"; "logout"; "frag"; "grants"; "programs"
-  ; "runs"; "repl"; "value"; "route"; "static" ]
+  ; "runs"; "repl"; "value"; "route"; "static"; "view"; "todo" ]
 
 let reserved_site_path sp =
   match String.index_opt sp '/' with

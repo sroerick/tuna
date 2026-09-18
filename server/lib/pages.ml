@@ -19,6 +19,9 @@
      POST /grants/mint
      POST /grants/:id/revoke
      GET  /repl       POST /repl/eval
+      GET  /view/:hash             value viewer (tree/bytes/program)
+      GET  /todo                   the todo board (store-backed)
+      POST /todo/add  /todo/:id/state  /todo/:id/del
 
    The JSON agent surface lives in Api (mounted alongside these routes
    by bin/main.ml). *)
@@ -46,7 +49,12 @@ let routes pool =
     ; (`Post, "/grants/mint", Grants.mint pool)
     ; (`Post, "/grants/:id/revoke", Grants.revoke pool)
     ; (`Get, "/repl", Repl.view pool)
-    ; (`Post, "/repl/eval", Repl.eval pool) ]
+      ; (`Post, "/repl/eval", Repl.eval pool)
+    ; (`Get, "/view/:hash", Value_view.view pool)
+    ; (`Get, "/todo", Todo.view pool)
+    ; (`Post, "/todo/add", Todo.add pool)
+    ; (`Post, "/todo/:id/state", Todo.set_state pool)
+    ; (`Post, "/todo/:id/del", Todo.del pool) ]
 
 let open_routes pool =
   [ Dream.get "/login" A.login_get

@@ -68,7 +68,7 @@ let nav user =
     | None -> {|<a href="/login">login</a>|}
   in
   Printf.sprintf
-    {|<nav><a href="/">runs</a> <a href="/repl">repl</a> <a href="/grants">grants</a> %s</nav>|}
+    {|<nav><a href="/">runs</a> <a href="/repl">repl</a> <a href="/grants">grants</a> <a href="/todo">todo</a> %s</nav>|}
     who
 
 (* Full document; [user] is the signed-in identity (None shows a login link). *)
