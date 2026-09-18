@@ -566,6 +566,37 @@ let test_redaction_breaks_chain () =
                         (Some "failed") run.S.r_verify_status;
                       Lwt.return ()))
 
+(* run-id resolution: full uuids pass through, hex prefixes resolve to
+   the single matching run, anything else is None (callers answer 404,
+   never a raw store error) *)
+let test_run_id_resolve () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.upsert_program p ~hash:leaf_hash ~ternary:"0" ~ir:None ~created_by:None
+  >>= fun _ ->
+  S.insert_run p ~program_hash:leaf_hash ~inputs:[ "0"; "10" ] ~caller:None
+    ~parent_run_id:None ~fuel:500 ~size_cap:100 ()
+  >>= fun run_id ->
+  S.resolve_run_id p run_id >>= fun full ->
+  Alcotest.(check (option string)) "full uuid is itself" (Some run_id) full;
+  S.resolve_run_id p (String.sub run_id 0 8) >>= fun short ->
+  Alcotest.(check (option string)) "8-hex prefix resolves" (Some run_id) short;
+  S.resolve_run_id p (String.uppercase_ascii (String.sub run_id 0 8))
+  >>= fun upper ->
+  Alcotest.(check (option string)) "uppercase prefix resolves" (Some run_id) upper;
+  S.resolve_run_id p "zzzzzzzz" >>= fun garbage ->
+  Alcotest.(check bool) "non-hex is None" true (garbage = None);
+  S.resolve_run_id p "deadbeef" >>= fun absent ->
+  Alcotest.(check bool) "absent prefix is None" true (absent = None);
+  S.resolve_run_id p "sh0rt" >>= fun too_short ->
+  Alcotest.(check bool) "under-8 is None" true (too_short = None);
+  S.fetch_run_resolved p (String.sub run_id 0 8) >>= fun got ->
+  (match got with
+   | Some (fid, r) ->
+       Alcotest.(check string) "resolved id matches" run_id fid;
+       Alcotest.(check string) "row id matches" run_id r.S.r_id
+   | None -> Alcotest.fail "expected the resolved run");
+  Lwt.return ()
+
 let () =
   match Sys.getenv_opt "TUNA_TEST_PG" with
   | None -> print_endline "store tests skipped (TUNA_TEST_PG not set)"
@@ -577,6 +608,8 @@ let () =
          ; ("identities", [ lwt "bootstrap+verify" test_identities ])
          ; ("programs", [ lwt "upsert+fetch" test_programs ])
          ; ("runs", [ lwt "insert/update/fetch/list" test_runs ])
+         ; ( "run-id-resolve"
+           , [ lwt "prefix resolves, garbage is None" test_run_id_resolve ] )
          ; ("journals", [ lwt "append+chain+tamper" test_journals ])
          ; ("grants", [ lwt "mint/check/revoke" test_grants ])
          ; ( "m7"

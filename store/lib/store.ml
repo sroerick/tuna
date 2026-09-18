@@ -210,6 +210,29 @@ let update_verify_status p ~id ~verify_status () =
     p
     "UPDATE runs SET verify_status = $1, verified_at = now() WHERE id = $2::uuid"
 
+(* run ids arrive as full uuids or hex prefixes (notes, links, and
+   humans shorten them); resolve a prefix to the single matching run.
+   None when malformed, absent, or ambiguous - callers answer 404,
+   never a raw store error. *)
+let is_hex c =
+  (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+let resolve_run_id p id =
+  let n = String.length id in
+  if n = 36 && id.[8] = '-' && id.[13] = '-' && id.[18] = '-' && id.[23] = '-'
+     && String.for_all (fun c -> c = '-' || is_hex c) id then
+    Lwt.return (Some id)
+  else if n >= 8 && n <= 32 && String.for_all is_hex id then
+    Db.q
+      ~params:[ p_str (String.lowercase_ascii id) ]
+      p
+      "SELECT id::text FROM runs WHERE id::text LIKE $1 || '%' \
+       ORDER BY created_at LIMIT 2"
+    >>= fun rows ->
+    (match rows with
+    | [ r ] -> Lwt.return (Some (text r 0 "runs.id"))
+    | _ -> Lwt.return None (* absent or ambiguous: same 404 answer *))
+  else Lwt.return None
 let fetch_run p id =
   Db.q ~params:[ p_str id ] p select_run
   >>= fun rows ->
@@ -217,6 +240,19 @@ let fetch_run p id =
   | [] -> Lwt.return None
   | [ r ] -> Lwt.return (Some (run_of_row r))
   | _ -> store_error "multiple run rows for id %s" id )
+
+(* fetch_run_resolved: fetch_run plus prefix resolution; returns the
+   canonical full id beside the row so handlers rebind the id they
+   thread to journals, traces, and replay *)
+let fetch_run_resolved p id =
+  resolve_run_id p id
+  >>= function
+  | None -> Lwt.return None
+  | Some full ->
+      fetch_run p full
+      >>= function
+      | None -> Lwt.return None (* raced a delete *)
+      | Some r -> Lwt.return (Some (full, r))
 
 (* list newest-first; caller/program filters optional *)
 let list_runs p ?(caller = None) ?(program = None) ?(limit = 50) () =

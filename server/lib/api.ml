@@ -441,10 +441,10 @@ let verdict_json pool ~(program_hash : string) (run_id : string)
    is replay-verified inline and the verdict recorded (verify_status). *)
 let get_run pool _auth req =
   let id = Dream.param req "id" in
-  Store.fetch_run pool id
+  Store.fetch_run_resolved pool id
   >>= function
   | None ->  (j_err ~code:404 "unknown run id")
-  | Some r ->
+  | Some (id, r) ->
       (match (r.Store.r_verify_status, r.Store.r_status) with
        | None, Store.Run_status.Running -> Lwt.return ()
          | None, _ ->
@@ -506,7 +506,10 @@ let get_run_trace pool _auth req =
         | _ -> 200)
     | None -> 200
   in
-  Store.fetch_run_trace pool id
+  Store.resolve_run_id pool id
+  >>= function
+  | None -> j_err ~code:404 "run has no trace"
+  | Some id -> Store.fetch_run_trace pool id
   >>= function
   | None -> j_err ~code:404 "run has no trace"
   | Some s ->
@@ -562,10 +565,10 @@ let list_runs pool _auth req =
 
 let get_journal pool _auth req =
   let run_id = Dream.param req "run_id" in
-  Store.fetch_run pool run_id
+  Store.fetch_run_resolved pool run_id
   >>= function
   | None ->  (j_err ~code:404 "unknown run id")
-  | Some _ ->
+  | Some (run_id, _) ->
       Store.fetch_journals pool run_id >>= fun js ->
       
         (j_ok
@@ -669,9 +672,9 @@ let fork_journal pool _auth req =
           (* edits are counterfactual REPLACEMENTS of recorded rows: an
              edit naming a seq the parent journal does not hold is a
              request to overwrite history that never happened -> 400 *)
-          Store.fetch_run pool run_id >>= (function
+          Store.fetch_run_resolved pool run_id >>= (function
           | None -> j_err ~code:404 "unknown run id"
-          | Some _ ->
+          | Some (run_id, _) ->
               Store.fetch_journals pool run_id >>= fun js ->
               let known = List.length js in
               match List.find_opt (fun (seq, _) -> seq >= known) edits with
@@ -1232,10 +1235,10 @@ let gc_run pool _auth req =
       let policy = match get_string_opt j "policy" with Some p -> p | None -> "" in
       if policy = "" then (j_err "gc requires a cited retention \"policy\"")
       else
-        Store.fetch_run pool id
+        Store.resolve_run_id pool id
         >>= (function
               | None -> j_err ~code:404 "unknown run id"
-              | Some _ ->
+              | Some id ->
                   Store.gc_journal pool ~run_id:id ~policy ()
                   >>= (function
                         | None -> (j_err ~code:500 "gc lost the run row")

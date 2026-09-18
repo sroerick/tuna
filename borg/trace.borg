@@ -101,6 +101,11 @@
         and an unknown id are indistinguishable on purpose, there is
         no trace-shaped lie to tell about either.
 
+        Run ids on the run surface accept full uuids or unambiguous
+        hex prefixes (the short ids notes and links carry); a
+        malformed, absent, or ambiguous id answers the same clean
+        404 - never a raw store error.
+
         The run page grows a trace row ("21 events (raw 26 · charged
         21 · hits 5)", muted "untraced" otherwise) and /runs/:id/trace
         renders the summary table + event rows with plain next-page

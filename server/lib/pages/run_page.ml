@@ -92,10 +92,10 @@ let verify_button run_id =
 
 let view pool user req =
   let id = Dream.param req "id" in
-  S.fetch_run pool id
+  S.fetch_run_resolved pool id
   >>= function
   | None -> L.not_found ~user "unknown run id"
-  | Some r0 -> (
+  | Some (id, r0) -> (
       (* auto-verify an unverified finished run — same rule as the API *)
         (if r0.S.r_verify_status = None && finished r0 then
            Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
@@ -155,10 +155,10 @@ let view pool user req =
 (* The journal tick fragment (no-JS fallback: a plain page with the table). *)
 let journal_frag pool user req =
   let id = Dream.param req "id" in
-  S.fetch_run pool id
+  S.fetch_run_resolved pool id
   >>= function
   | None -> L.not_found ~user "unknown run id"
-  | Some r -> (
+  | Some (id, r) -> (
       S.fetch_journals pool id
       >>= fun js ->
       let html = journal_div r.S.r_id js (not (finished r)) in
@@ -191,10 +191,10 @@ let trace_page pool user req =
         match int_of_string_opt s with Some v when v >= 0 -> v | _ -> -1)
     | None -> -1
   in
-  S.fetch_run pool id
+  S.fetch_run_resolved pool id
   >>= function
   | None -> L.not_found ~user "unknown run id"
-  | Some r -> (
+  | Some (id, r) -> (
       S.fetch_run_trace pool id
       >>= function
       | None -> L.not_found ~user "run has no trace"
@@ -259,10 +259,10 @@ let trace_page pool user req =
    (fragment for htmx; redirect back to the run page for plain forms). *)
 let verify_post pool user req =
   let id = Dream.param req "id" in
-  S.fetch_run pool id
+  S.fetch_run_resolved pool id
   >>= function
   | None -> L.not_found ~user "unknown run id"
-  | Some _ -> (
+  | Some (id, _) -> (
       Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
       >>= fun v ->
       if L.is_htmx req then Dream.html (verify_fragment v)
