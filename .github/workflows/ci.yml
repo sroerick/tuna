@@ -55,7 +55,7 @@ jobs:
       # (hence libffi-dev above).
       - name: opam deps
         run: |
-          pkgs="alcotest alcotest-lwt base64 digestif dream lwt pgx pgx_lwt yojson"
+          pkgs="dune alcotest alcotest-lwt base64 digestif dream lwt pgx pgx_lwt yojson"
           for attempt in 1 2 3; do
             if opam install -y --no-depexts $pkgs; then exit 0; fi
             echo "opam install attempt $attempt failed; retrying in 20s"
@@ -72,8 +72,10 @@ jobs:
           done
           pg_isready -h 127.0.0.1 -p 5434 -U tuna
 
+      # opam exec, not a bare dune: the switch bin is not guaranteed on the
+      # step PATH (run #2 died on `dune: not found`, exit 127).
       - name: battery
-        run: dune build @runtest
+        run: opam exec -- dune build @runtest
 
       - name: smoke (api + ui) against a dev server
         run: |
