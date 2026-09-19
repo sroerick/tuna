@@ -40,23 +40,29 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libev-dev libpq-dev postgresql-client sbcl openssl
+            libev-dev libpq-dev libffi-dev pkg-config postgresql-client sbcl openssl
 
       - name: ocaml 5.4.1 + opam
         uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: 5.4.1
 
-      # the repo has no .opam files (dune-project disables the generated
-      # ones), so the dev switch's roots are listed by hand - keep in sync
-      # with `opam list --roots --short` on poohstack.
+      # The repo has no .opam files (dune-project disables the generated
+      # ones), so the direct deps are listed by hand: exactly the external
+      # libraries the dune stanzas tuna builds ask for.  base/core/ppxlib_jane
+      # only appear in reference/tree-calculus/implementation, which is
+      # excluded from the build; mirage-crypto/ctypes come in through dream
+      # (hence libffi-dev above).
       - name: opam deps
-        run: >
-          opam install -y --no-depexts
-          alcotest alcotest-lwt argon2 base64 conf-libev digestif dream
-          eio_main gluten-eio httpun httpun-eio httpun-lwt-unix lambdasoup
-          lwt lwt_eio markup mirage-crypto mirage-crypto-rng pgx pgx_lwt
-          pure-html yojson
+        run: |
+          pkgs="alcotest alcotest-lwt base64 digestif dream lwt pgx pgx_lwt yojson"
+          for attempt in 1 2 3; do
+            if opam install -y --no-depexts $pkgs; then exit 0; fi
+            echo "opam install attempt $attempt failed; retrying in 20s"
+            sleep 20
+          done
+          echo "opam install failed after 3 attempts" >&2
+          exit 1
 
       - name: wait for postgres
         run: |
