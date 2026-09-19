@@ -9,24 +9,30 @@
 #   scripts/dev.sh status     # what's live
 #
 # Env (defaults below), all consumed by the server as TUNA_* too:
-#   TUNA_DATA_DIR   (default /tmp/tuna-pgsup)
-#   TUNA_DEV_DIR    (default /tmp/tuna-dev)
-#   TUNA_DB_PORT    (default 5434)
-#   TUNA_DB_NAME    (default tuna)
-#   TUNA_DB_USER    (default tuna)
-#   TUNA_HTTP_PORT  (default 18090)
+#   TUNA_DATA_DIR    (default /tmp/tuna-pgsup)
+#   TUNA_DEV_DIR     (default /tmp/tuna-dev)
+#   TUNA_DB_HOST     (default /tmp socket dir; a non-socket host is an
+#                     external PG we connect to but never start - see start_pg)
+#   TUNA_DB_PORT     (default 5434)
+#   TUNA_DB_NAME     (default tuna)
+#   TUNA_DB_USER     (default tuna)
+#   TUNA_HTTP_PORT   (default 18090)
+#   TUNA_OPAM_SWITCH (default poohstack; empty = whatever opam already has)
 
 set -e
 
 ROOT="${TUNA_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 DATA_DIR="${TUNA_DATA_DIR:-/tmp/tuna-pgsup}"
 DEV_DIR="${TUNA_DEV_DIR:-/tmp/tuna-dev}"
-SOCKET_DIR="/tmp"
+SOCKET_DIR="${TUNA_DB_HOST:-/tmp}"
 DB_PORT="${TUNA_DB_PORT:-5434}"
 DB_NAME="${TUNA_DB_NAME:-tuna}"
 DB_USER="${TUNA_DB_USER:-tuna}"
 HTTP_PORT="${TUNA_HTTP_PORT:-18090}"
-OPAMSwitch="poohstack"
+# The opam switch is machine-local (poohstack here, tuna-ocaml on town,
+# whatever CI set up): TUNA_OPAM_SWITCH overrides it; empty means "use the
+# switch opam already has selected".
+OPAM_SWITCH="${TUNA_OPAM_SWITCH-poohstack}"
 
 mkdir -p "$DEV_DIR"
 pg_pidfile="$DEV_DIR/pg.pid"
@@ -35,7 +41,11 @@ sr_pidfile="$DEV_DIR/server.pid"
 have_opam_env=0
 opam_env() {
   if [ "$have_opam_env" -eq 0 ]; then
-    eval "$(opam env --switch=$OPAMSwitch --set-switch)"
+    if [ -n "$OPAM_SWITCH" ]; then
+      eval "$(opam env --switch=$OPAM_SWITCH --set-switch)"
+    else
+      eval "$(opam env)"
+    fi
     # the no-root bootstrap put libev in ~/.local/lib — make sure the
     # linker resolves -lev regardless of the caller's shell env
     LIBEV_DIR="${TUNA_LIBEV_DIR:-$HOME/.local/lib}"
@@ -87,6 +97,21 @@ ensure_db() {
 }
 
 start_pg() {
+  # A host that is not a local socket dir is somebody else's postgres (a CI
+  # service container, the town box): connect and migrate, never initdb it.
+  case "$SOCKET_DIR" in
+    /*) : ;;
+    *)
+      if psql -h "$SOCKET_DIR" -p "$DB_PORT" -U "$DB_USER" -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+        echo "[dev] pg at $SOCKET_DIR:$DB_PORT is external (not managed here)"
+        ensure_db
+        apply_migrations
+        return
+      fi
+      echo "[dev] pg at $SOCKET_DIR:$DB_PORT unreachable" >&2
+      exit 1
+      ;;
+  esac
   if [ -f "$pg_pidfile" ] && kill -0 "$(cat "$pg_pidfile")" 2>/dev/null; then
     echo "[dev] pg already running (pid $(cat "$pg_pidfile"))"
     ensure_db
@@ -115,7 +140,7 @@ start_pg() {
 
 build_all() {
   opam_env
-  echo "[dev] building (poohstack)..."
+  echo "[dev] building (${OPAM_SWITCH:-current switch})..."
   (cd "$ROOT" && dune build @all)
 }
 

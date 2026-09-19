@@ -1,0 +1,77 @@
+# Tuna CI: build + full test battery on every push and PR.
+#
+# Mirrors the local battery (dune build @runtest) and the town promote
+# gate, minus the deploy: the PG-gated suites run against a real postgres
+# (service container, user tuna), the differential harness runs its sbcl
+# reference twin, and the two smokes run against a dev server like
+# scripts/dev.sh start does.
+#
+# The wyo push is the SECOND gate - that one deploys (tuna.git post-receive
+# -> town tuna-promote) - so this job is what has to be green before a push.
+#
+# Machine-local knobs ride in on the environment (scripts/dev.sh,
+# scripts/test-store.sh):
+#   TUNA_OPAM_SWITCH=""      use the switch setup-ocaml made current
+#   TUNA_DB_HOST=127.0.0.1   the service container, not a /tmp socket
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tuna
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5434:5432
+    env:
+      TUNA_OPAM_SWITCH: ""
+      TUNA_DB_HOST: 127.0.0.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libev-dev libpq-dev postgresql-client sbcl openssl
+
+      - name: ocaml 5.4.1 + opam
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: 5.4.1
+
+      # the repo has no .opam files (dune-project disables the generated
+      # ones), so the dev switch's roots are listed by hand - keep in sync
+      # with `opam list --roots --short` on poohstack.
+      - name: opam deps
+        run: >
+          opam install -y --no-depexts
+          alcotest alcotest-lwt argon2 base64 conf-libev digestif dream
+          eio_main gluten-eio httpun httpun-eio httpun-lwt-unix lambdasoup
+          lwt lwt_eio markup mirage-crypto mirage-crypto-rng pgx pgx_lwt
+          pure-html yojson
+
+      - name: wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            pg_isready -h 127.0.0.1 -p 5434 -U tuna && break
+            sleep 1
+          done
+          pg_isready -h 127.0.0.1 -p 5434 -U tuna
+
+      - name: battery
+        run: dune build @runtest
+
+      - name: smoke (api + ui) against a dev server
+        run: |
+          bash scripts/dev.sh start
+          bash scripts/smoke-api.sh
+          bash scripts/smoke-ui.sh
+          bash scripts/dev.sh stop

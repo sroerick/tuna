@@ -191,7 +191,7 @@ THASH=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" \
 TRUN=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" \
   -d "{\"program_hash\":\"$THASH\",\"inputs\":[\"10\"],\"grants\":[\"$TGRANT\"]}" "$BASE/api/runs" \
   | jget "d['run']['id']") || fail "tamper-test run"
-"$PSQL" -h /tmp -p "${TUNA_DB_PORT:-5434}" -U "${TUNA_DB_USER:-tuna}" -d "${TUNA_DB_NAME:-tuna}" -q \
+"$PSQL" -h "${TUNA_DB_HOST:-/tmp}" -p "${TUNA_DB_PORT:-5434}" -U "${TUNA_DB_USER:-tuna}" -d "${TUNA_DB_NAME:-tuna}" -q \
   -c "UPDATE journals SET result_ternary = '22102000' WHERE run_id='$TRUN' AND seq=0" \
   || fail "out-of-band journal tamper"
 curl -sf -b "$JAR" -H 'HX-Request: true' -X POST "$BASE/runs/$TRUN/verify" \
