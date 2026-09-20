@@ -46,14 +46,20 @@ journal views with replay-verify buttons, grants admin, REPL.
   triage-rule firing; wrapper applications are free. Runs are bounded
   by fuel (max firings) and a live-size cap — exhaustion is a normal
   result, never an exception.
-  - **Compile IS reduction**: the surface s-expr language
-    (`(lambda (x) ...)`, application, `%<ternary>` tree literals, `"..."`
-    string literals, and the `pair`/`cons` aliases) goes through bracket
-    abstraction with eta and is fully evaluated at compile time. Every
-    compiled-tree node carries the id of the IR node responsible for it —
-    the provenance map that diagnostics resolve through. `pair`/`cons`
-    compile to the leaf (extensionally the fork constructor), so
-    `(pair a b)` = `Fork (a, b)` at zero triage cost.
+    - **Compile IS reduction**: the surface s-expr language
+      (`(lambda (x) ...)`, application, `%<ternary>` tree literals, `"..."`
+      string literals, and the `pair`/`cons` aliases) goes through bracket
+      abstraction with eta and is fully evaluated at compile time. Every
+      compiled-tree node carries the id of the IR node responsible for it —
+      the provenance map that diagnostics resolve through. `pair`/`cons`
+      compile to the leaf (extensionally the fork constructor), so
+      `(pair a b)` = `Fork (a, b)` at zero triage cost.
+
+      Effects stay run-time-only with the `(runtime (prim "name" ...))`
+      form: it threads the enclosing lambda parameter through constant
+      arguments (a K combinator) so compile-IS leaves the call alone —
+      without it, a prim call whose arguments are all constants would
+      fire during compilation (prims only run inside a run).
 
 ## Surfaces
 

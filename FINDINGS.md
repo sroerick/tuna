@@ -120,11 +120,16 @@ escalated).
     prim call whose args are all constants at COMPILE time (aborts
     with "a prim call fired during compile-time evaluation") — so an
     effect's args must be threaded through a runtime variable (K-style
-    wrapper) to survive to run time. This is a genuine dialect gap.
-    First dialect slice landed in the same commit (pair/cons names +
-    "..." string literals): the appender source fell 401 -> 116 chars
-    with identical compiled behavior. F4 stays not-triggered; the
-    remaining design question is whether compile-IS should be able to
-    know a prim is effectful (the book's call-sites.provenance
-    position is that prims are data until applied) — see
-    borg/call-sites.borg.
+    wrapper) to survive to run time. That was a genuine dialect gap;
+    the first slice (pair/cons names + "..." string literals) cut the
+    appender source 401 -> 116 chars with identical behavior.
+  - The dialect gap is closed (same commit stream): a `(runtime
+    (prim ...))` form now threads the enclosing lambda parameter
+    through constant args (the same K combinator, done automatically)
+    so compile-IS leaves the call alone; effectful programs write prims
+    plainly instead of hand-threading. The runtime-form appender is
+    109 source chars (401 pre-dialect), status normal, 23 steps, replay
+    verified, 3 journal rows (now / tree/get / tree/put). F4 stays
+    not-triggered; the remaining design question is whether compile-IS
+    should know a prim is effectful (call-sites.borg: prims are data
+    until applied).

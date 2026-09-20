@@ -92,7 +92,24 @@ let reader_tests =
       compiles "lambda param shadows the pair builtin" "(lambda (pair) pair)"
         "21100";
       runs "pair applied at runtime forks" "(pair 0 0)" [] "200";
-      runs "pair applied to runtime args" "(pair %10 %110)" [] "210110";
+        runs "pair applied to runtime args" "(pair %10 %110)" [] "210110";
+      Alcotest.test_case "runtime shields a constant-args prim" `Quick (fun () ->
+          ignore
+            (Tuna_compiler.Bracket.compile_source
+               "(lambda (msg) (runtime (prim \"tree/get\" \"x\")))"));
+      Alcotest.test_case "runtime zero-arg prim appends the param" `Quick (fun () ->
+          ignore
+            (Tuna_compiler.Bracket.compile_source
+               "(lambda (msg) (runtime (prim \"now\")))"));
+      compile_error "runtime at top level needs a param" "(runtime (prim \"now\"))" ""
+        "enclosing lambda parameter";
+      compile_error "runtime requires a prim call" "(lambda (msg) (runtime msg))" ""
+        "expected a (prim";
+      Alcotest.test_case "runtime arg already depends on a param is left alone" `Quick
+        (fun () ->
+          ignore
+            (Tuna_compiler.Bracket.compile_source
+               "(lambda (pair) (runtime (prim \"echo\" pair)))"));
     ]
 
 (* ---------- compile: SK elimination with eta; compile IS reduction ---------- *)

@@ -129,15 +129,16 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
         raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found %S" what start a))
     | None -> raise (Ir.Error ([], Printf.sprintf "%s: unterminated list at offset %d" what start))
   in
-  let rec parse_term scope =
-    match peek () with
-    | None -> raise (Ir.Error ([], "unexpected end of input"))
-    | Some LP -> (
-        advance ();
-        let start = !pos - 1 in
-        match peek () with
-        | Some (Atom (_, "lambda")) -> parse_lambda start scope
-        | Some (Atom (_, "prim")) ->
+    let rec parse_term scope =
+      match peek () with
+      | None -> raise (Ir.Error ([], "unexpected end of input"))
+      | Some LP -> (
+          advance ();
+          let start = !pos - 1 in
+          match peek () with
+          | Some (Atom (_, "lambda")) -> parse_lambda start scope
+          | Some (Atom (_, "runtime")) -> parse_runtime start scope
+          | Some (Atom (_, "prim")) ->
             (* (prim "name" args...): boundary call. "prim" is reserved as
                the head atom of this form. *)
             advance ();
@@ -319,9 +320,72 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
     let lam = desugar scope (List.rev !params) in
     expect_rp start "lambda";
     let sp : Ir.span = { off = start; len = !pos - start } in
-    (match lam with
-     | Lam ({ span = _; _ } as r) -> Ir.Lam { r with span = sp }
-     | _ -> assert false)
+      (match lam with
+       | Lam ({ span = _; _ } as r) -> Ir.Lam { r with span = sp }
+       | _ -> assert false)
+
+  (* (runtime (prim "name" args...)): mark a prim call run-time-only.
+     compile-IS must not fire it while compiling — prims only execute
+     inside a run (grants + journal).  The only reliable protection is
+     to make the call depend on a lambda-bound variable (a constant-
+     args call in a closed term is what the compile guard rejects), so
+     this desugars to threading the OUTERMOST enclosing lambda param
+     through each constant argument via the K combinator: each open
+     arg a becomes ((K a) outer) — K drops outer at run time, but its
+     presence keeps the call non-closed for the compiler, exactly the
+     manual/K pattern a program without this form had to write.  A
+     zero-arg prim gets the outer param appended (now/uuid ignore
+     args).  No enclosing lambda param (top-level) is a compile error:
+     without it there is nothing to defer to. *)
+  and parse_runtime start scope =
+    advance () (* 'runtime' *);
+    let term = parse_term scope in
+    expect_rp start "runtime";
+      match term with
+      | Ir.Prim pr -> (
+        match List.rev scope with
+        | [] ->
+            raise
+              (Ir.Error
+                 ([]
+                , "runtime: a (prim ...) call needs an enclosing lambda \
+                   parameter to defer it to run time"))
+        | outer :: _ ->
+            let sp : Ir.span = { off = start; len = !pos - start } in
+            (* K = (lambda (k$1 k$2) k$1) — fresh names, can't collide *) 
+            let k_lit () =
+              Ir.Lam
+                { id = fresh (); span = sp; param = "k$1"
+                ; body =
+                    Ir.Lam
+                      { id = fresh (); span = sp; param = "k$2"
+                      ; body = Ir.Var { id = fresh (); span = sp; name = "k$1" } } }
+            in
+            let rec has_var = function
+              | Ir.Var _ -> true
+              | Ir.Lam { body; _ } -> has_var body
+              | Ir.App { fn; arg; _ } -> has_var fn || has_var arg
+              | Ir.Prim { args; _ } -> List.exists has_var args
+              | Ir.Leaf_lit _ | Ir.Tree_lit _ -> false
+            in
+            let thread arg =
+              if has_var arg then arg
+              else
+                Ir.App
+                  { id = fresh (); span = sp
+                  ; fn = Ir.App { id = fresh (); span = sp; fn = k_lit (); arg }
+                  ; arg = Ir.Var { id = fresh (); span = sp; name = outer } }
+            in
+              let args' =
+                match pr.args with
+                | [] -> [ Ir.Var { id = fresh (); span = sp; name = outer } ]
+                | _ -> List.map thread pr.args
+              in
+            Ir.Prim { pr with args = args' })
+    | _ ->
+        raise
+          (Ir.Error
+             ([], "runtime: expected a (prim \"name\" ...) call"))
   in
   let t = parse_term [] in
   (match !pending with
