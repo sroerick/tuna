@@ -70,6 +70,21 @@
  (inline
   "borg/call-sites.borg"
  )
+  (inline
+   "borg/byte-values.borg"
+  )
+  (inline
+   "borg/routes.borg"
+  )
+  (inline
+   "borg/sharing.borg"
+  )
+  (inline
+   "borg/trace.borg"
+  )
+  (inline
+   "borg/federation.borg"
+  )
  (* agent note (|2026-09-15 STORAGE SUBSTRATE WATCH (operator review
       session, PP archaeology). Pricklypear's one-tree substrate
       autopsy, tl;dr: its "everything is a tree" storage bet froze at
