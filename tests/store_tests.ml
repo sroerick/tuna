@@ -111,7 +111,7 @@ let test_journals () =
   let ev seq args result =
     { S.e_callsite_path = "/0/1"
     ; e_prim = "echo"
-    ; e_prim_contract = "1"
+    ; e_prim_contract = "2"
     ; e_grant_id = None
     ; e_args_ternary = args
     ; e_result_ternary = result
@@ -285,7 +285,7 @@ let test_run_boundary () =
   (match js with
    | [ j ] ->
        Alcotest.(check string) "prim" "echo" j.S.j_prim;
-       Alcotest.(check string) "contract pinned" "1" j.S.j_prim_contract;
+    Alcotest.(check string) "contract pinned" "2" j.S.j_prim_contract;
        Alcotest.(check (option string)) "grant spent" (Some g.S.g_id)
          j.S.j_grant_id;
        Alcotest.(check bool) "callsite path resolved" true

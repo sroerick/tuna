@@ -9,7 +9,8 @@
    only -- paths are never storage truth (tuna.borg watch note).
 
    Contract discipline (replay.prim-versioning): these prims pin
-   prim_contract "1".  Handlers here do the store work and journal their
+   prim_contract "2" (see Prims.contract — v2 = binary string codec).
+   Handlers here do the store work and journal their
    own EFFECT rows (value_hash + version) into the tree_ops chain; the
    run boundary (Run.execute) journals every tree-prim ERROR answer as a
    no-effect op row (denials, CAS conflicts, bad paths) -- journaled

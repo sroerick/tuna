@@ -123,13 +123,23 @@ escalated).
     wrapper) to survive to run time. That was a genuine dialect gap;
     the first slice (pair/cons names + "..." string literals) cut the
     appender source 401 -> 116 chars with identical behavior.
-  - The dialect gap is closed (same commit stream): a `(runtime
-    (prim ...))` form now threads the enclosing lambda parameter
-    through constant args (the same K combinator, done automatically)
-    so compile-IS leaves the call alone; effectful programs write prims
-    plainly instead of hand-threading. The runtime-form appender is
-    109 source chars (401 pre-dialect), status normal, 23 steps, replay
-    verified, 3 journal rows (now / tree/get / tree/put). F4 stays
-    not-triggered; the remaining design question is whether compile-IS
-    should know a prim is effectful (call-sites.borg: prims are data
-    until applied).
+    - The dialect gap is closed (same commit stream): a `(runtime
+      (prim ...))` form now threads the enclosing lambda parameter
+      through constant args (the same K combinator, done automatically)
+      so compile-IS leaves the call alone; effectful programs write prims
+      plainly instead of hand-threading. The runtime-form appender is
+      109 source chars (401 pre-dialect), status normal, 23 steps, replay
+      verified, 3 journal rows (now / tree/get / tree/put). F4 stays
+      not-triggered; the remaining design question is whether compile-IS
+      should know a prim is effectful (call-sites.borg: prims are data
+      until applied).
+    - The unary string codec is gone (same commit stream): Cstr now uses
+      the book's BINARY convention (marshal.ml — string = list of chars,
+      char = little-endian bit list over bools), so a byte costs O(bits)
+      nodes instead of a Stem^n chain.  prim_contract bumps "1" -> "2"
+      (every string payload changed shape; "1" rows stay self-consistent
+      but are not cross-comparable).  Measured: "log/app" 712 -> 140
+      ternary chars, "hello" 548 -> 102, and the runtime-form appender's
+      compiled ternary 2384 -> 542 (4.4x).  The byte-values pages stay
+      strictly smaller than their tree-encoded twins (bloat test
+      updated to the binary closed form).

@@ -33,14 +33,34 @@ let test_cstr () =
     | None -> Alcotest.fail "cstr decode failed"
   in
   List.iter roundtrip [ ""; "hello"; "store/get"; "é"; "\000\255" ];
-  (* decode is total: non-string trees -> None *)
+  (* decode is total: malformed trees -> None *)
   Alcotest.(check bool) "leaf decodes to empty" true
     (Tuna.Cstr.decode leaf = Some "");
-  Alcotest.(check bool) "fork-of-leaf not a string" true
-    (Tuna.Cstr.decode (fork (leaf, leaf)) = None);
-  Alcotest.(check bool) "stem not a string" true
+  (* binary convention: Fork(Leaf, Leaf) is ONE NUL char (book's
+     tree_of_int 0 = Leaf, string = list of chars) — not malformed *)
+  Alcotest.(check bool) "fork-of-leaf is a NUL byte" true
+    (Tuna.Cstr.decode (fork (leaf, leaf)) = Some "\000");
+  Alcotest.(check bool) "stem in list position not a string" true
     (Tuna.Cstr.decode (stem leaf) = None);
-  (* unary helper *)
+    (* pins the book's marshal.ml convention: 'A' = 65 = bits LSB-first
+       [1;0;0;0;0;0;1] as a bool list; the outer fork is the string's
+       char-list cons onto nil *)
+    let a = "A" in
+    Alcotest.(check bool) "'A' encodes as its binary bit list" true
+      (Tuna.Cstr.encode a
+      = fork ( fork ( stem leaf
+                    , fork ( leaf
+                           , fork ( leaf
+                                  , fork ( leaf
+                                         , fork ( leaf
+                                                , fork ( leaf
+                                                       , fork ( stem leaf, leaf ) ) ) ) ) ) )
+            , leaf ));
+    (* a 255-byte char is 8 bits deep, not a 255-deep unary chain: the
+       whole char tree serializes to well under 200 ternary chars *)
+    Alcotest.(check bool) "byte depth is O(bits)" true
+      (String.length (Tuna.Canon.encode (Tuna.Cstr.encode "\255")) < 200);
+  (* unary helper (callsite site count, separate convention) *)
   Alcotest.(check bool) "unary 3" true
     (Tuna.Cstr.unary 3 = stem (stem (stem leaf)));
   Alcotest.(check (option int)) "unary_of" (Some 3)

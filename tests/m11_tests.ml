@@ -232,28 +232,41 @@ let test_byte_dedup_and_bloat () =
             Lwt.return ()
         | _ -> Alcotest.fail "count query shape")
   >>= fun () ->
-  (* BLOAT INVERSION (byte-values.borg acceptance 3): the byte form is
-     strictly smaller than the unary/ternary tree encoding of the same
-     page.  Cstr (common/lib/cstr.ml) encodes byte b as Fork (Stem
-     (unary b), rest), so the ternary length of the page-as-string-tree
-     is 1 + sum(byte + 3) (a leaf for nil; fork + stem marker + b stems
-     + leaf per byte).  The closed form is checked against a real
-     Canon.encode on a small prefix, then applied to the 100 KiB page. *)
-  let ternary_len s =
-    let sum = ref 1 (* the final Leaf *) in
-    String.iter (fun c -> sum := !sum + Char.code c + 3) s;
-    !sum
-  in
-  let small = "<p>hi</p>" in
-  Alcotest.(check int) "closed form = real Cstr ternary length"
-    (ternary_len small)
-    (String.length (Tuna.Canon.encode (Tuna.Cstr.encode small)));
-  let tree_len = ternary_len bytes in
-  Alcotest.(check bool) "byte form strictly smaller than tree encoding" true
-    (String.length bytes < tree_len);
-  Printf.printf "bloat ratio (tree-encoding bytes / raw bytes), 100 KiB page: %.1fx\n"
-    (float_of_int tree_len /. float_of_int (String.length bytes));
-  Lwt.return ()
+   (* BLOAT INVERSION (byte-values.borg acceptance 3): the byte form is
+      strictly smaller than the binary tree encoding of the same page.
+      Cstr (common/lib/cstr.ml) is the book's binary convention: a
+      string is a list of chars; a char is a little-endian bit list over
+      bools (false = Leaf "0", true = Stem Leaf "10"), terminated by a
+      Leaf "0"; the outer char list is the same shape.  Ternary length
+      closed form: 1 (outer nil) + per char [ 1 (outer list fork "2")
+      + per bit (1 "2" + 1|2 for the bool) + 1 (char nil "0") ].  The
+      closed form is checked against a real Canon.encode on a small
+      prefix, then applied to the 100 KiB page. *)
+   let ternary_len s =
+     let char_len c =
+       let rec go v acc = if v = 0 then !acc else begin
+         acc := !acc + 1 + (if v land 1 = 1 then 2 else 1);
+         go (v lsr 1) acc
+       end
+       in
+        let l = ref 1 (* char nil "0" *) in
+        ignore (go (Char.code c) l);
+        !l
+     in
+     let sum = ref 1 (* outer nil *) in
+     String.iter (fun c -> sum := !sum + 1 + char_len c) s;
+     !sum
+   in
+   let small = "<p>hi</p>" in
+   Alcotest.(check int) "closed form = real Cstr ternary length"
+     (ternary_len small)
+     (String.length (Tuna.Canon.encode (Tuna.Cstr.encode small)));
+   let tree_len = ternary_len bytes in
+   Alcotest.(check bool) "byte form strictly smaller than tree encoding" true
+     (String.length bytes < tree_len);
+   Printf.printf "bloat ratio (tree-encoding bytes / raw bytes), 100 KiB page: %.1fx\n"
+     (float_of_int tree_len /. float_of_int (String.length bytes));
+   Lwt.return ()
 
 (* -- journal completeness: cap denial + absent read are journaled ------ *)
 

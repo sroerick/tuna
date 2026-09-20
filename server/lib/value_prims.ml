@@ -19,7 +19,8 @@
    Law 3 (CAPS, NOT EXCEPTIONS): the payload cap (TUNA_VALUE_MAX_BYTES,
    default 1 MiB) is a journaled denial answer, never a raised error.
 
-   Contract discipline (replay.prim-versioning): prim_contract "1".
+   Contract discipline (replay.prim-versioning): prim_contract "2"
+   (see Prims.contract — v2 = binary string codec).
    Handlers journal their own SUCCESS op rows into the tree_ops chain
    (op names value-put / value-get / value-len; path = the hash); every
    ERROR answer (cap denials, law-2 denials, absent reads, bad base64)

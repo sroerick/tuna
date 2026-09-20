@@ -41,11 +41,18 @@ journal views with replay-verify buttons, grants admin, REPL.
 - **Trees**: `Leaf | Stem t | Fork (t, t)`. Canonical serialization is
   the ternary string format (`0` = leaf, `1`+child = stem,
   `2`+left+right = fork); hash = sha256 of the ternary, lowercase hex.
-- **Reduction**: the olydis 2024 triage rules, verbatim port of the
-  vendored reference (`reference/tree-calculus/`). A "step" is one
-  triage-rule firing; wrapper applications are free. Runs are bounded
-  by fuel (max firings) and a live-size cap — exhaustion is a normal
-  result, never an exception.
+  - **Reduction**: the olydis 2024 triage rules, verbatim port of the
+    vendored reference (`reference/tree-calculus/`). A "step" is one
+    triage-rule firing; wrapper applications are free. Runs are bounded
+    by fuel (max firings) and a live-size cap — exhaustion is a normal
+    result, never an exception.
+  - **Strings**: the binary convention of the tree-calculus reference
+    (`marshal.ml`): a string is a list of chars, a char is a
+    little-endian bit list over bools (false = `Leaf`, true = `Stem
+    Leaf`), so a byte costs O(bits) nodes instead of a unary chain.
+    `"..."` literals and every prim string payload (paths, `now`,
+    `uuid`, http bodies, error messages) use it; `prim_contract "2"`
+    marks the codec change.
     - **Compile IS reduction**: the surface s-expr language
       (`(lambda (x) ...)`, application, `%<ternary>` tree literals, `"..."`
       string literals, and the `pair`/`cons` aliases) goes through bracket

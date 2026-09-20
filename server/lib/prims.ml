@@ -6,9 +6,13 @@
    payloads (journal.borg row-schema, grants.grant-token).
 
    Contract discipline (replay.prim-versioning): every prim pins
-   prim_contract "1".  A prim that changes behavior without a contract
-   bump is definitionally cheating; replay of contract "1" rows is
+   prim_contract "2".  A prim that changes behavior without a contract
+   bump is definitionally cheating; replay of contract "2" rows is
    unconditional either way — the journal pins what the host RETURNED.
+   v2 = the string codec moved to the binary (Barry Jay) convention
+   (Cstr), so every string payload (now/uuid/http-get results, paths,
+   error messages) changed tree shape vs contract "1"; "1" rows stay
+   self-consistent but are not cross-comparable with "2".
 
    Handlers here only compute; the boundary (Run.execute) does grant
    checks, timing, journaling, and payload caps around them. *)
@@ -17,7 +21,7 @@ open Lwt.Infix
 
 type answer = [ `Ok of Tuna.Tree.t | `Error of string ]
 
-let contract = "1"
+let contract = "2"
 
 let names =
   [ "echo"
