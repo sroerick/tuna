@@ -104,8 +104,27 @@ escalated).
   a ~100-line useful program) has not been attempted — there is no
   v1-scale useful program yet. When one exists, this file gets the
   anecdote either way.
-- Diagnostics available without reading trees: compile errors carry IR
-  paths (`tuna compile` exit 1); divergence surfaces carry seq +
-  callsite path + span + first_diff_path (`scripts/verify-5`); the
-  program page renders a box-drawing outline plus the provenance
-  table.
+  - Diagnostics available without reading trees: compile errors carry IR
+    paths (`tuna compile` exit 1); divergence surfaces carry seq +
+    callsite path + span + first_diff_path (`scripts/verify-5`); the
+    program page renders a box-drawing outline plus the provenance
+    table.
+  - 2026-09-19 F4 experiment (a real appender, live on the dev
+    instance): a message-log program (tree/put + tree/get + now,
+    journaled, replay-verified) compiled clean and ran end to end with
+    zero hand-debugging through the tree — every prim callsite resolved
+    to a source span, replay verified both runs. The friction was
+    SURFACE, not tree: no cons/pair combinator (had to inline
+    (lambda (a b) ((0 a) b))), no string literals (hand-encoded the
+    path as a unary Cstr ternary), and compile-IS reduction fires any
+    prim call whose args are all constants at COMPILE time (aborts
+    with "a prim call fired during compile-time evaluation") — so an
+    effect's args must be threaded through a runtime variable (K-style
+    wrapper) to survive to run time. This is a genuine dialect gap.
+    First dialect slice landed in the same commit (pair/cons names +
+    "..." string literals): the appender source fell 401 -> 116 chars
+    with identical compiled behavior. F4 stays not-triggered; the
+    remaining design question is whether compile-IS should be able to
+    know a prim is effectful (the book's call-sites.provenance
+    position is that prims are data until applied) — see
+    borg/call-sites.borg.

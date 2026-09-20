@@ -6,14 +6,12 @@
               | <var>                      identifier (- _ a-z A-Z 0-9, not all ternary digits)
               | 0                          leaf literal
               | %<ternary>                 literal tree by ternary encoding
+              | "..."                      string literal -> the Cstr string tree
 
-   The reader produces the IR directly (named lambdas, a source span
-   and a unique id on every node — ir.ml) and enforces closure at read
-   time: unbound variables raise Ir.Error carrying the occurrence's IR
-   path. No defines at this layer (the REPL adds a dictionary later —
-   see the ?dictionary parameter). Diagnostics address programs by IR
-   path; source spans are a human courtesy only (borg/call-sites.borg,
-   provenance). *)
+   Dialect builtins (reader-level, shadowable by a lambda param or a
+   dictionary entry): pair/cons alias the leaf, which is extensionally
+   the fork constructor (apply Leaf a = Stem a; apply (Stem a) b =
+   Fork (a, b) — both wrapper applications, zero triage steps).*)
 
 exception Lex_error of int * string
 
@@ -54,11 +52,19 @@ let lex (src : string) : token list =
       push (Atom (start, String.sub src start (!j - start)));
       i := !j
     end
-    else begin
-      let start = !i in
-      while !i < n && not (is_delim src.[!i]) do incr i done;
-      push (Atom (start, String.sub src start (!i - start)))
-    end
+      else begin
+        let start = !i in
+        if src.[start] = '"' then begin
+          (* quoted string literal: consume to the closing quote, allow
+             spaces (unlike identifiers).  Unterminated -> lex error. *)
+          incr i;
+          while !i < n && src.[!i] <> '"' do incr i done;
+          if !i >= n then raise (Lex_error (start, "unterminated string literal"));
+          incr i  (* closing quote *)
+        end else
+          while !i < n && not (is_delim src.[!i]) do incr i done;
+        push (Atom (start, String.sub src start (!i - start)))
+      end
   done;
   List.rev !toks
 
@@ -66,8 +72,8 @@ let lex (src : string) : token list =
 
 (* A variable atom: identifier characters, not all digits and not all
    ternary digits (bare digit runs are ambiguous — they must be written
-   with % to be tree literals).  Quoted strings are reserved for prim
-   names inside (prim ...) and never name variables. *)
+   with % to be tree literals).  Quoted strings lex as their own atoms
+   (prim names inside (prim ...), string literals as terms). *)
 let is_var_atom a =
   let all_ternary =
     String.length a > 0 && String.for_all (fun c -> c = '0' || c = '1' || c = '2') a
@@ -85,6 +91,15 @@ let is_var_atom a =
          || (c >= 'A' && c <= 'Z')
          || (c >= '0' && c <= '9'))
        a
+
+(* Dialect builtins (reader-level, shadowable: a lambda param or a
+   dictionary entry wins over these).  pair/cons alias the leaf, which
+   is extensionally the fork constructor: apply Leaf a = Stem a and
+   apply (Stem a) b = Fork (a, b) are both wrapper applications with
+   zero triage steps, so (pair x y) = Fork (x, y) for free. *)
+let builtin_tree = function
+  | "pair" | "cons" -> Some Tuna.Tree.Leaf
+  | _ -> None
 
 type pending_unbound = { var_id : int; name : string; off : int }
 
@@ -211,37 +226,56 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
                      ([],
                       Printf.sprintf "bad tree literal at offset %d: %s" (off + 1 + o)
                         msg)))
-        | _ ->
-            if a = "0" then
-              let sp : Ir.span = { off; len = 1 } in
-              Leaf_lit ({ id = fresh (); span = sp })
-            else if is_var_atom a then (
-              match List.find_opt (fun name -> name = a) scope with
-              | Some _ ->
-                  let sp : Ir.span = { off; len = String.length a } in
-                  Var ({ id = fresh (); span = sp; name = a })
-              | None -> (
-                  (try
-                     (* dictionary-bound name (M9): the REPL's defines are
-                        read as literal trees — compile IS reduction keeps
-                        holding, and the value's tree appears in the tags
-                        under the occurrence's own span *)
-                     let tree = Hashtbl.find dict a in
-                     let sp : Ir.span = { off; len = String.length a } in
-                     Tree_lit ({ id = fresh (); span = sp; tree })
-                   with Not_found ->
-                     let vid = fresh () in
-                     pending :=
-                       { var_id = vid; name = a; off } :: !pending;
-                     (* placeholder node; will abort after the walk below *)
-                     Var ({ id = vid; span = { off; len = String.length a }; name = a }))))
-            else
-              raise
-                (Ir.Error
-                   ([],
-                    Printf.sprintf
-                      "unexpected token %S at offset %d (tree literals need %%)" a
-                      off)))
+          | _ ->
+              if a = "0" then
+                let sp : Ir.span = { off; len = 1 } in
+                Leaf_lit ({ id = fresh (); span = sp })
+              else if
+                String.length a >= 2
+                && a.[0] = '"'
+                && a.[String.length a - 1] = '"'
+              then
+                (* string literal: the Cstr string tree (the same
+                   encoding the prim boundary decodes).  Compiled IS
+                   reduction keeps holding — the literal is already a
+                   normal form. *)
+                let s = String.sub a 1 (String.length a - 2) in
+                let sp : Ir.span = { off; len = String.length a } in
+                Tree_lit ({ id = fresh (); span = sp; tree = Tuna.Cstr.encode s })
+              else if is_var_atom a then (
+                match List.find_opt (fun name -> name = a) scope with
+                | Some _ ->
+                    let sp : Ir.span = { off; len = String.length a } in
+                    Var ({ id = fresh (); span = sp; name = a })
+                | None -> (
+                    (try
+                       (* dictionary-bound name (M9): the REPL's defines are
+                          read as literal trees — compile IS reduction keeps
+                          holding, and the value's tree appears in the tags
+                          under the occurrence's own span *)
+                       let tree = Hashtbl.find dict a in
+                       let sp : Ir.span = { off; len = String.length a } in
+                       Tree_lit ({ id = fresh (); span = sp; tree })
+                     with Not_found -> (
+                         match builtin_tree a with
+                         | Some tree ->
+                             let sp : Ir.span = { off; len = String.length a } in
+                             Tree_lit ({ id = fresh (); span = sp; tree })
+                         | None ->
+                             let vid = fresh () in
+                             pending :=
+                               { var_id = vid; name = a; off } :: !pending;
+                             (* placeholder node; will abort after the walk below *)
+                             Var
+                               ({ id = vid; span = { off; len = String.length a }
+                                ; name = a })))))
+              else
+                raise
+                  (Ir.Error
+                     ([]
+                     , Printf.sprintf
+                         "unexpected token %S at offset %d (tree literals need %%)" a
+                         off)))
   and parse_lambda start scope =
     advance () (* 'lambda' *);
     let params = ref [] in

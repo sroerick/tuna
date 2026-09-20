@@ -76,6 +76,25 @@ let reader_tests =
       "((lambda (x) (lambda (y) x)) %10 %110)" "10";
   ]
 
+  (* ---------- dialect: pair/cons aliases + string literals ---------- *)
+
+  let dialect_tests =
+    [
+      compiles "pair aliases the leaf (the fork constructor)" "pair" "0";
+      compiles "cons aliases the leaf too" "cons" "0";
+      compiles "pair builds Fork(Leaf,Leaf)" "(pair 0 0)" "200";
+      compiles "nested pair builds Fork(Fork(Leaf,Leaf),Leaf)"
+        "(pair (pair 0 0) 0)" "22000";
+      compiles "string literal is the Cstr tree of its text" "\"x\""
+        (Tuna.Canon.encode (Tuna.Cstr.encode "x"));
+      compiles "string literal with spaces lexes as one token" "\"hi there\""
+        (Tuna.Canon.encode (Tuna.Cstr.encode "hi there"));
+      compiles "lambda param shadows the pair builtin" "(lambda (pair) pair)"
+        "21100";
+      runs "pair applied at runtime forks" "(pair 0 0)" [] "200";
+      runs "pair applied to runtime args" "(pair %10 %110)" [] "210110";
+    ]
+
 (* ---------- compile: SK elimination with eta; compile IS reduction ---------- *)
 
 let compile_tests =
@@ -240,8 +259,9 @@ let compile_budget_tests =
 let () =
   Alcotest.run "tuna compiler"
     [
-      ("reader", reader_tests);
-      ("compile", compile_tests);
+        ("reader", reader_tests);
+        ("dialect", dialect_tests);
+        ("compile", compile_tests);
       ("extensional", extensional_tests);
       ("provenance", provenance_tests);
       ("compile budget", compile_budget_tests);
