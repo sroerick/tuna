@@ -130,3 +130,18 @@
   (source_tree ../scripts/diff-corpus))
  (action
   (bash "command -v sbcl >/dev/null 2>&1 && bash %{workspace_root}/scripts/verify-differential.sh || echo 'sbcl missing: differential harness skipped'")))
+
+(executable
+ (name deriv_tests)
+ (modules deriv_tests)
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server tuna_deriv
+   alcotest-lwt lwt))
+
+; derivation records (borg/deriv.borg): same PG gate, own scratch db
+; (tuna_test_deriv) so the PG suites never share one.
+(rule
+ (alias runtest)
+ (deps deriv_tests.exe ../scripts/test-store.sh (source_tree ../migrations))
+ (action
+  (bash
+   "bash %{workspace_root}/scripts/test-store.sh %{exe:deriv_tests.exe} ../migrations tuna_test_deriv")))
