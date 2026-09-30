@@ -476,6 +476,18 @@ let get_run pool _auth req =
                  ; ("journal", `List (List.map journal_json js)) ]))
 
 
+(* -- derivation records (borg/deriv.borg) ----------------------------- *)
+
+(* GET /api/runs/:id/deriv - the run's portable checkable receipt:
+   run facts + program/input trees + full journal chain, sealed by
+   Tuna_deriv.  Served VERBATIM so '| deriv-check -' verifies offline.
+   404 unknown run/missing bytes; 409 when no record exists (running,
+   wall-clock abort, error row). *)
+let get_deriv pool _auth req =
+  Deriv.of_run pool ~run_id:(Dream.param req "id")
+  >>= fun (code, body) ->
+  Dream.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
+
 (* -- run traces (borg/trace.borg) ------------------------------------- *)
 
 let trace_json (s : Store.trace_summary) : J.t =
@@ -1382,6 +1394,7 @@ let api_routes pool =
     ; Dream.get "/api/runs" (with_auth pool (list_runs pool))
     ; Dream.get "/api/runs/verify" (with_auth pool (verify_sweep pool))
     ; Dream.get "/api/runs/:id/trace" (with_auth pool (get_run_trace pool))
+    ; Dream.get "/api/runs/:id/deriv" (with_auth pool (get_deriv pool))
     ; Dream.get "/api/runs/:id" (with_auth pool (get_run pool))
     ; Dream.post "/api/runs/:id/gc" (with_auth pool (gc_run pool))
     ; Dream.get "/api/journals/:run_id" (with_auth pool (get_journal pool))
