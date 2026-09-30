@@ -1,0 +1,4 @@
+(executable
+ (name deriv_check)
+ (modules deriv_check)
+ (libraries tuna_deriv yojson))

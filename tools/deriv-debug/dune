@@ -1,0 +1,4 @@
+(executable
+ (name deriv_debug)
+ (modules deriv_debug)
+ (libraries tuna tuna_interp tuna_compiler tuna_deriv))
