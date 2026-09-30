@@ -1,0 +1,40 @@
+(project tuna-deriv-records
+ (doc "Tuna book chapter: derivation records - receipts a computation writes about itself. A derivation record is a portable, self-contained document over existing state (the run row, the full program and input bytes, and the complete hash-chained journal) sealed with one sha256 over the canonical encoding. Anyone can verify it offline, without the producing store or any trust in the producing box: fetch the pinned bytes, replay the pinned program against the pinned journal answers, compare output hashes. Research question: does a sealed-record format over the existing substrate (runs table, hash-chained journal, journal-fed Replay) make third-party checkability cheap enough to actually use?")
+ (status implemented)
+ (convention ocaml-dune)
+ (section deriv-records
+  (doc "Builder in server/lib/deriv.ml (Tuna_server.Deriv), pure lib in deriv/lib/deriv.ml (Tuna_deriv), offline checker in tools/deriv-check. GET /api/runs/:id/deriv serves the sealed record verbatim; `deriv-check -` or `deriv-check record.json` verifies it offline, exit 0 verified / 1 tampered / 2 malformed.")
+  (status implemented)
+  (subsection record-shape
+   (status implemented)
+   (details
+    (doc (|
+      The record pins, canonically encoded (tuna-deriv-v1):
+      - run facts: run id, program hash, engine/version context, terminal status, verify_status
+      - program bytes and input bytes: the exact pinned program and inputs the run charged
+      - journal: the complete hash-chained event list (prev_hash/row_hash chain, genesis 64 zeros)
+      - output: the produced value plus its content hash
+      - seal: sha256 over the canonical encoding of all of the above
+      Determinism is the useful property: same inputs + same program + same engine version must reproduce the same output hash. A record whose run ended in `error` is never built - the builder refuses at build time, because a replay-diverged row has no re-derivable outcome and a record that can never verify would be dishonest.|)
+    )
+    (status implemented))
+  )
+  (subsection chain-rule
+   (status implemented)
+   (details
+    (doc (|
+      The record's journal chain must reproduce Store.row_hash exactly: same canonical row encoding, same chaining direction, genesis prev_hash of 64 zeros. Verification walks the chain row by row (recompute each row_hash, check linkage), then re-executes the program with journal answers fed via Replay.execute_fed semantics - the same identity the replay chapter already proves server-side, now checked offline by a third party. Truncated or edited journals break the walk visibly; PII-redacted rows are explicit chain breaks (the checker reports failed, never silently-trusted), consistent with the journal chapter's GC/redaction stance.|)
+    )
+    (status implemented))
+  )
+  (subsection how-to-verify
+   (status implemented)
+   (details
+    (doc (|
+      curl -s https://<host>/api/runs/<run-id>/deriv | deriv-check -
+      Or save the JSON and run `deriv-check record.json`. Exit codes: 0 verified, 1 tampered (hash mismatch, chain break, unconsumed journal rows, replay divergence), 2 malformed. tests/ contains the golden canonical-encoding test, tamper cases (flipped output hash, wrong program hash, unconsumed rows, resealed truncation), and the reseal test proving a record seals as its own artifact; PG e2e is gated pending a dev stack (tests/README.md notes the vultr deferral).|)
+    )
+    (status implemented))
+  )
+ )
+)
