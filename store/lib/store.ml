@@ -735,13 +735,14 @@ type grant = {
 ; g_args_attenuation : string  (* yojson text *)
 ; g_path_prefix : string option  (* M10: NULL matches everything *)
 ; g_caller : string
-; g_minted_by : string option
+; g_minted_by : string option  (* the MINTING IDENTITY (0003) *)
+; g_parent_grant : string option  (* the grant this row attenuates (0012) *)
 ; g_revoked_at : string option
 }
 
 let select_grant_by_id =
   "SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
-   minted_by::text, revoked_at::text FROM grants WHERE id = $1::uuid"
+   minted_by::text, parent_grant::text, revoked_at::text FROM grants WHERE id = $1::uuid"
 
 let grant_of_row r =
   { g_id = text r 0 "grant.id"
@@ -750,19 +751,21 @@ let grant_of_row r =
   ; g_path_prefix = opt_text r 3
   ; g_caller = text r 4 "grant.caller"
   ; g_minted_by = opt_text r 5
-  ; g_revoked_at = opt_text r 6 }
+  ; g_parent_grant = opt_text r 6
+  ; g_revoked_at = opt_text r 7 }
 
 let mint_grant p ~prim ~args_attenuation ?(path_prefix = None) ~caller
-    ?(minted_by = None) () =
+    ?(minted_by = None) ?(parent_grant = None) () =
   Db.q
     ~params:[ p_str prim
             ; p_str args_attenuation
             ; p_opt path_prefix
             ; p_str caller
-            ; p_opt minted_by ]
+            ; p_opt minted_by
+            ; p_opt parent_grant ]
     p
-    "INSERT INTO grants (prim, args_attenuation, path_prefix, caller, minted_by) \
-     VALUES ($1, $2::jsonb, $3, $4::uuid, $5::uuid) RETURNING id::text"
+    "INSERT INTO grants (prim, args_attenuation, path_prefix, caller, minted_by, parent_grant) \
+     VALUES ($1, $2::jsonb, $3, $4::uuid, $5::uuid, $6::uuid) RETURNING id::text"
   >>= fun rows ->
   (match rows with
   | [ r ] ->
@@ -778,7 +781,7 @@ let mint_grant p ~prim ~args_attenuation ?(path_prefix = None) ~caller
 let list_grants p ?(limit = 100) () =
   Db.q ~params:[ p_int limit ] p
     ("SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
-      minted_by::text, revoked_at::text FROM grants ORDER BY created_at DESC LIMIT $1")
+      minted_by::text, parent_grant::text, revoked_at::text FROM grants ORDER BY created_at DESC LIMIT $1")
   >>= fun rows -> Lwt.return (List.map grant_of_row rows)
 
 let fetch_grant p id =
@@ -796,9 +799,10 @@ let revoke_grant p id =
     p
     "UPDATE grants SET revoked_at = now() WHERE id = $1::uuid AND revoked_at IS NULL"
 
-(* deny-check at a prim boundary: grant must exist, be unrevoked, and
-   belong to the claiming caller.  Recorded runs never re-check (the
-   journal answers, not the grant table).
+(* deny-check at a prim boundary: grant must exist, be unrevoked (as
+   must every ANCESTOR in its parent_grant chain — attenuation must not
+   escape revocation), and belong to the claiming caller.  Recorded
+   runs never re-check (the journal answers, not the grant table).
 
    M10 path scoping: when the call carries tree paths (the substrate
    prims + ns/fork pass every path it would read or write), the grant's
@@ -809,6 +813,25 @@ let prefix_match prefix path =
   String.length path >= String.length prefix
   && String.sub path 0 (String.length prefix) = prefix
 
+(* live-lineage walk: the grant and every parent_grant ancestor must be
+   unrevoked.  Edges only ever point from a fresh grant to an existing
+   one, so the chain is a DAG; the hop cap is belt-and-braces against
+   pathological data, not a correctness device. *)
+let lineage_live p ~max_hops =
+  let rec go hops id =
+    if hops > max_hops then Lwt.return false
+    else
+      fetch_grant p id
+      >>= function
+      | None -> Lwt.return false (* dangling lineage = dead *)
+      | Some g when g.g_revoked_at <> None -> Lwt.return false
+      | Some g -> (
+          match g.g_parent_grant with
+          | None -> Lwt.return true
+          | Some parent -> go (hops + 1) parent)
+  in
+  fun id -> go 0 id
+
 let check_grant p ~id ~caller ?(paths = []) () :
   [ `Ok | `Revoked | `Wrong_caller | `Unknown | `Prefix_denied ] Lwt.t =
   fetch_grant p id
@@ -817,12 +840,172 @@ let check_grant p ~id ~caller ?(paths = []) () :
   | Some g when g.g_revoked_at <> None -> Lwt.return `Revoked
   | Some g when g.g_caller <> caller -> Lwt.return `Wrong_caller
   | Some g -> (
-      match (g.g_path_prefix, paths) with
-      | None, _ -> Lwt.return `Ok
-      | Some _, [] -> Lwt.return `Prefix_denied
-      | Some prefix, ps ->
-          if List.for_all (prefix_match prefix) ps then Lwt.return `Ok
-          else Lwt.return `Prefix_denied)
+      (* lineage death: an ancestor revoked kills the subtree's future *)
+      (match g.g_parent_grant with
+       | None -> Lwt.return true
+       | Some parent -> lineage_live p ~max_hops:64 parent)
+      >>= function
+      | false -> Lwt.return `Revoked
+      | true -> (
+          match (g.g_path_prefix, paths) with
+          | None, _ -> Lwt.return `Ok
+          | Some _, [] -> Lwt.return `Prefix_denied
+          | Some prefix, ps ->
+              if List.for_all (prefix_match prefix) ps then Lwt.return `Ok
+              else Lwt.return `Prefix_denied))
+
+(* -- delegation-attenuation (grants.borg §delegation-attenuation) ---- *)
+
+(* The narrowing relation, host-side (grants.grant-token: attenuation
+   scoping correctness is host policy and stays a review matter).
+   [attenuation_narrower ~prim ~args_attenuation ~path_prefix parent]
+   answers whether a derived grant with those fields admits
+   no-more-than [parent].  An unknown predicate shape or malformed
+   JSON in the CHILD is never narrower (the narrowing cannot be proven,
+   so refuse); a parent row with an unknown predicate shape is
+   un-attenuable from (mint a fresh root instead). *)
+let json_obj s =
+  try
+    match Yojson.Safe.from_string s with
+    | `Assoc kvs -> Some kvs
+    | `Null -> Some [] (* admit-all, the "null" jsonb spelling *)
+    | _ -> None
+  with Yojson.Json_error _ -> None (* malformed = not a provable narrowing *)
+
+let admit_all kvs = kvs = []
+
+(* the one interpreted predicate key (run.ml attenuation_ok): a cap on
+   the encoded args length.  Anything else is an unknown shape. *)
+let max_ternary_of kvs =
+  match List.assoc_opt "max_ternary" kvs with
+  | Some `Int n -> Some n
+  | _ -> None
+
+let attenuation_narrower ~prim ~args_attenuation ~path_prefix
+    (parent : grant) : (unit, string) result =
+  (* prim: "*" narrows to anything; a named prim only to itself *)
+  if parent.g_prim <> "*" && parent.g_prim <> prim then
+    Error (Printf.sprintf "prim %S is not a narrowing of %S" prim parent.g_prim)
+  else
+    (* args predicate *)
+    match (json_obj parent.g_args_attenuation, json_obj args_attenuation) with
+    | None, _ | _, None ->
+        Error "args_attenuation must be JSON (object or null)"
+    | Some pkvs, Some ckvs -> (
+        let child_shape_ok = admit_all ckvs || max_ternary_of ckvs <> None in
+        if admit_all pkvs then
+          (* parent admits all: any well-formed known child shape narrows *)
+          if child_shape_ok then Ok ()
+          else Error "unknown args_attenuation predicate shape"
+        else
+          match max_ternary_of pkvs with
+          | None ->
+              Error
+                "parent args_attenuation has an unknown predicate shape \
+                 (un-attenuable)"
+          | Some pmax -> (
+              match max_ternary_of ckvs with
+              | Some cmax when cmax <= pmax -> Ok ()
+              | Some cmax ->
+                  Error
+                    (Printf.sprintf "max_ternary %d widens parent cap %d" cmax
+                       pmax)
+              | None ->
+                  if admit_all ckvs then
+                    Error "admit-all widens a capped parent"
+                  else Error "unknown args_attenuation predicate shape"))
+    |> fun r ->
+    match r with
+    | Error e -> Error e
+    | Ok () -> (
+        (* path: parent NULL covers anything; a prefixed parent only
+           admits prefixes OF itself (a NULL child would widen) *)
+        match (parent.g_path_prefix, path_prefix) with
+        | None, _ -> Ok ()
+        | Some _, None -> Error "dropping path_prefix widens the parent"
+        | Some pp, Some cp ->
+            if prefix_match pp cp then Ok ()
+            else
+              Error (Printf.sprintf "path prefix %S is not under %S" cp pp))
+
+(* Host-side mint of a narrower grant (delegation-attenuation): only
+   the HOLDER of the parent may attenuate it, the parent's lineage must
+   be live, and the derived row must be a proven narrowing (relation
+   above).  The derived row records BOTH lineage facts: minted_by =
+   the minting identity, parent_grant = the parent grant.  No prim
+   mints - this is a host API operation only (grants.borg: granting
+   from inside the calculus is explicitly excluded in v1). *)
+let attenuate_grant p ~parent_id ~prim ~args_attenuation ~path_prefix
+    ~caller () :
+  [ `Ok of grant
+  | `Unknown
+  | `Revoked
+  | `Wrong_caller
+  | `Not_narrower of string ]
+  Lwt.t =
+  fetch_grant p parent_id
+  >>= function
+  | None -> Lwt.return `Unknown
+  | Some parent when parent.g_revoked_at <> None -> Lwt.return `Revoked
+  | Some parent when parent.g_caller <> caller -> Lwt.return `Wrong_caller
+  | Some parent -> (
+      (match parent.g_parent_grant with
+       | None -> Lwt.return true
+       | Some ancestor -> lineage_live p ~max_hops:64 ancestor)
+      >>= function
+      | false -> Lwt.return `Revoked (* dead lineage: nothing to narrow *)
+      | true -> (
+          match
+            attenuation_narrower ~prim ~args_attenuation ~path_prefix parent
+          with
+          | Error reason -> Lwt.return (`Not_narrower reason)
+          | Ok () ->
+              mint_grant p ~prim ~args_attenuation ~path_prefix ~caller
+                ~minted_by:(Some caller) ~parent_grant:(Some parent.g_id)
+                ()
+              >>= fun g -> Lwt.return (`Ok g)))
+
+(* lineage surfaces (audit): the ancestor chain (nearest first) and the
+   descendant subtree (breadth via recursive CTE, depth 1 = direct
+   children).  Bounded the same way as the live walk. *)
+let grant_lineage p ?(max_hops = 64) id =
+  let rec go hops acc id =
+    if hops > max_hops then Lwt.return (List.rev acc)
+    else
+      fetch_grant p id
+      >>= function
+      | None | Some { g_parent_grant = None; _ } ->
+          Lwt.return (List.rev acc)
+      | Some { g_parent_grant = Some parent; _ } -> (
+          fetch_grant p parent
+          >>= function
+          | None -> Lwt.return (List.rev acc)
+          | Some g -> go (hops + 1) (g :: acc) parent)
+  in
+  fetch_grant p id >>= function
+  | None -> Lwt.return []
+  | Some _ -> go 0 [] id
+
+let grant_descendants p ?(max_depth = 64) id =
+  Db.q
+    ~params:[ p_str id; p_int max_depth ]
+    p
+    "WITH RECURSIVE tree AS ( \
+     SELECT id::text AS id, 1 AS depth FROM grants WHERE parent_grant = $1::uuid \
+     UNION ALL \
+     SELECT g.id::text, t.depth + 1 FROM grants g JOIN tree t ON g.parent_grant::text = t.id \
+     WHERE t.depth < $2 ) \
+     SELECT id FROM tree ORDER BY depth, id"
+  >>= fun rows ->
+  let rec fetch_all acc = function
+    | [] -> Lwt.return (List.rev acc)
+    | id :: rest -> (
+        fetch_grant p id
+        >>= function
+        | None -> fetch_all acc rest
+        | Some g -> fetch_all (g :: acc) rest)
+  in
+  fetch_all [] (List.map (fun r -> text r 0 "grant.id") rows)
 
 (* -- retention (journal.retention-gc, M10) --------------------------- *)
 

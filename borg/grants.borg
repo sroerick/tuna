@@ -18,11 +18,11 @@
       ANSWER and the run continues (AGENTS.md rule 7). Replay never
       re-checks grants: Replay.execute_fed answers from the journal
       only. Callsite paths resolved from provenance tags (first tag
-      wins under bracket duplication). Still open: attenuation beyond
-      max_ternary, delegation, audit surfaces.
-      grant-token/revocation: fully implemented at the store +
-      boundary + API validation layers — flip partial -> implemented
-      pending M10 acceptance wiring.|) *)
+      wins under bracket duplication). Update 2026-10-02: delegation-
+      attenuation shipped (§delegation-attenuation: parent_grant
+      lineage, proven narrowing, live-lineage revocation; audit was
+      already verify-6). The grant-token/revocation partial->implemented
+      flip noted below is long done; the chapter is implemented.|) *)
  (doc "Tuna book chapter: grants — the capability model. Nothing inside the calculus is resolvable by name; a run touches the world only through grant tokens physically passed to it as tree arguments.")
  (status planned)
  (convention ocaml-dune)
@@ -113,20 +113,57 @@
 
   (subsection delegation-attenuation
    (doc "Minting narrower grants from broader ones")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          Delegation is structural: a grant tree is data and may be passed
          downward to any subprogram as a normal argument. Attenuation is
-         HOST-side: deriving a narrower grant requires a mint-grant call
-         by a caller whose own grant admits it; the derived row records
-         minted_by, so grant lineage is queryable.
+         HOST-side (shipped 2026-10-02): POST /api/grants/:id/attenuate
+         derives a narrower grant from one the caller HOLDS, and the
+         derived row records BOTH lineage facts - minted_by = the minting
+         identity, parent_grant = the narrowed capability - so lineage is
+         queryable in both directions (GET /api/grants/:id returns the
+         ancestor chain and the descendant subtree; the audit query of
+         section audit composes with it).
+
+         The narrowing relation is proven at mint time, host-side, over
+         the interpreted predicate vocabulary:
+
+         - prim: "*" narrows to any named prim; a named prim only to
+           itself (a change of prim is not a narrowing).
+         - args_attenuation: admit-all (null/{}) narrows to any
+           well-formed known shape; {"max_ternary": N} only to
+           {"max_ternary": M} with M <= N (equal allowed - delegation
+           without further attenuation). Malformed JSON or unknown
+           predicate shapes never narrow (the narrowing cannot be
+           proven), and a parent with an unknown shape is
+           un-attenuable-from.
+         - path_prefix: a prefixed parent only admits prefixes OF
+           itself; dropping the prefix widens and is refused; an
+           unprefixed parent admits any prefix.
+
+         Revocation walks the lineage: a grant is live only if IT and
+         every parent_grant ancestor is unrevoked. Revoking a grant
+         kills its whole descendant subtree's future use - attenuation
+         must not escape revocation (mint-a-child-then-revoke-the-parent
+         buys nothing) - while history stays untouched (journals answer
+         replay; verify-3 unaffected). Revoking a child never kills the
+         parent. Edges only point from a fresh grant to an existing
+         one, so the lineage is a DAG by construction; no cycle guard is
+         needed (the live walk still bounds hops).
 
          v1 explicitly excludes: granting capabilities FROM INSIDE the
-         calculus (no prim-call that mints; minting is a host API
-         operation only) and object-capability style sealers/unsealers.
-         Both are expressible later as ordinary prim design, not calculus
-         changes — that layering claim is part of what the project tests.
+         calculus (no prim mints - pinned by tests/delegation_tests.ml
+         against the prim registry; minting is a host API operation
+         only) and object-capability style sealers/unsealers. Both are
+         expressible later as ordinary prim design, not calculus
+         changes - that layering claim is part of what the project
+         tests.
+
+         v1 narrowing is self-attenuation (derived caller = the holder);
+         cross-identity delegation (mint FOR another identity) is a
+         future owner call, as is revocation NOTIFICATION (section
+         revocation stays pull-only).
     |))
    )
   )

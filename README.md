@@ -114,7 +114,9 @@ POST   /api/runs/:id/gc            → retention GC: cited tombstone, verifier r
 GET    /api/journals/:run_id       → full journal
 POST   /api/journals/:run_id/fork  {"edits":[{seq, result_ternary|error, ...}]} → counterfactual run (chain rebuilt, edited suffix re-executed)
 POST   /api/grants                 {"prim","args_attenuation"?} → grant id
-POST   /api/grants/:id/revoke      → revoke (live at every prim call)
+POST   /api/grants/:id/attenuate   {"prim"?,"args_attenuation"?,"path_prefix"?} → narrower derived grant (holder-only; lineage recorded; widening 400, dead lineage 409)
+GET    /api/grants/:id             → row + lineage (ancestors) + descendants
+POST   /api/grants/:id/revoke      → revoke (live at every prim call, and through the parent_grant chain: revoking a root kills its subtree's future use)
 POST   /api/repl                   {"command": "..."} or {"term": ...} (+ inputs/grants/fuel/size_cap for eval rounds)
 GET    /health                     → no auth, db ping
 ```

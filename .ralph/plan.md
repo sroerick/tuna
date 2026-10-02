@@ -702,3 +702,27 @@ Ground rules:
   dune runtest, differential 24/24, smoke-api 14, smoke-ui 17,
   verify-1..7, HTTP e2e (cold 6 steps -> warm 0 steps/1 hit, same
   result hash).  borge lint clean.
+
+## Delegation-attenuation (shipped 2026-10-02)
+
+- borg/grants.borg §delegation-attenuation: planned -> implemented;
+  chapter status now implemented (all five subsections).
+- Shipped law: host-side mint (POST /api/grants/:id/attenuate) of a
+  narrower grant by the HOLDER only; derived row records minted_by
+  (identity, migration 0003 semantics) AND parent_grant (the narrowed
+  capability, migration 0012); narrowing relation proven at mint time
+  (prim *-narrowing, max_ternary caps non-increasing, path prefixes
+  non-widening, malformed/unknown shapes refuse); revocation walks the
+  parent_grant chain (revoking a root kills its subtree's future use;
+  a child's revocation spares the parent; history untouched); lineage
+  queryable both ways (GET /api/grants/:id + store grant_lineage/
+  grant_descendants); NO prim mints (layering pinned against
+  Prims.names in tests/delegation_tests.ml).
+- v1 is self-attenuation (derived caller = holder); cross-identity
+  delegation is a recorded future owner call.
+- Tests: tests/delegation_tests.ml (PG-gated, 6 cases). Battery green:
+  13 suites, differential 24/24, smoke-api 14, smoke-ui 17,
+  verify-1..7, HTTP e2e (mint -> attenuate -> 400 on widen -> lineage
+  GET -> revoke root -> 409 from dead branch). borge lint clean.
+  Found+fixed en route: malformed attenuation JSON crashed the mint
+  path (json_obj now catches Yojson.Json_error -> refuses).

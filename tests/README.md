@@ -1,9 +1,9 @@
 # Tests
 
 Alcotest suites; `dune runtest` runs them all. PG-gated integration
-suites (store, substrate, m11, fed, deriv, demand) go through
-`scripts/test-store.sh`: postgres down -> skipped silently, postgres up
--> each suite gets its own scratch database.
+suites (store, substrate, m11, fed, deriv, demand, delegation) go
+through `scripts/test-store.sh`: postgres down -> skipped silently,
+postgres up -> each suite gets its own scratch database.
 
 ## demand suite (2026-10-02)
 
@@ -16,6 +16,22 @@ NOTHING (the hardened dirty rule - the prim re-executes live on every
 run); identities do not see each other's gardens (a warms, b stays
 cold, b's own repeat hits); and the feature is off by default (no
 garden read, no garden write).
+
+## delegation suite (2026-10-02)
+
+`tests/delegation_tests.ml` pins delegation-attenuation
+(borg/grants.borg §delegation-attenuation): attenuating a held grant
+mints a narrower one with both lineage facts recorded (minted_by =
+identity, parent_grant = the narrowed capability) and the narrowing
+BITES at the boundary (capped child denies over-cap args, denial
+journaled, run continues); the narrowing relation rejects widening
+(max_ternary up, admit-all under a cap, prefix escape/drop, prim
+change, malformed JSON, unknown predicate shapes); only the holder
+attenuates; revocation walks the lineage (revoking a root kills the
+descendant subtree's checks, attenuation from a dead branch refuses,
+submission denies, a child's revocation spares the parent); lineage is
+queryable both directions; and no prim mints (the layering claim,
+pinned against the prim registry).
 
 ## deriv PG e2e (un-deferred 2026-10-01)
 

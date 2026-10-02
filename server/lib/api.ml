@@ -151,6 +151,17 @@ let with_auth pool handler req =
 
 (* -- row json -------------------------------------------------------- *)
 
+let grant_json (g : Store.grant) : J.t =
+  `Assoc
+    [ ("id", `String g.g_id)
+    ; ("prim", `String g.g_prim)
+    ; ("args_attenuation", `String g.g_args_attenuation)
+    ; ("path_prefix", opt_str g.g_path_prefix)
+    ; ("caller", `String g.g_caller)
+    ; ("minted_by", opt_str g.g_minted_by)
+    ; ("parent_grant", opt_str g.g_parent_grant)
+    ; ("revoked_at", opt_str g.g_revoked_at) ]
+
 let run_json (r : Store.run) : J.t =
   `Assoc
     [ ("id", `String r.r_id)
@@ -845,6 +856,80 @@ let revoke_grant pool auth req =
               Store.revoke_grant pool id
               >>= fun () ->
                (j_ok (`Assoc [ ("revoked", `String id) ])))
+
+(* delegation-attenuation (grants.borg §delegation-attenuation): mint a
+   narrower grant FROM an existing one.  Only the holder may attenuate
+   (the store enforces holder + live lineage + proven narrowing); the
+   derived row records minted_by (identity) and parent_grant (the
+   narrowed capability).  prim defaults to the parent's; supply one
+   only to narrow a "*" grant to a named prim. *)
+let attenuate_grant pool auth req =
+  let parent_id = Dream.param req "id" in
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      let prim =
+        match get_string_opt j "prim" with
+        | Some p -> Some p
+        | None -> None (* inherit the parent's *)
+      in
+      let attenuation =
+        (* same shapes as post_grant: object inlined, "null" string
+           admit-all, absent = the parent's own predicate *)
+        match List.assoc_opt "args_attenuation" (match j with `Assoc kvs -> kvs | _ -> [])
+        with
+        | Some (`String s) -> Some s
+        | Some v -> Some (J.to_string v)
+        | None -> None
+      in
+      let path_prefix = get_string_opt j "path_prefix" in
+      Store.fetch_grant pool parent_id
+      >>= (function
+            | None -> (j_err ~code:404 "unknown grant id")
+            | Some parent ->
+                let prim = Option.value prim ~default:parent.Store.g_prim in
+                let attenuation =
+                  Option.value attenuation ~default:parent.Store.g_args_attenuation
+                in
+                Store.attenuate_grant pool ~parent_id ~prim ~args_attenuation:attenuation
+                  ~path_prefix ~caller:auth.auth_id ()
+                >>= function
+                | `Ok g ->
+                    (j_ok ~code:201
+                       (`Assoc
+                         [ ("grant", grant_json g)
+                         ; ("parent_grant", `String parent_id) ]))
+                | `Unknown -> (j_err ~code:404 "unknown grant id")
+                | `Revoked ->
+                    (j_err ~code:409 "grant (or its lineage) is revoked")
+                | `Wrong_caller ->
+                    (j_err ~code:403 "grant belongs to another identity")
+                | `Not_narrower reason -> (j_err ~code:400 reason)))
+
+(* grant detail + lineage (audit surface: "what was this narrowed from,
+   what was narrowed from it") *)
+let get_grant pool auth req =
+  let id = Dream.param req "id" in
+  Store.fetch_grant pool id
+  >>= (function
+        | None -> (j_err ~code:404 "unknown grant id")
+        | Some g ->
+            (* lineage is the holder's business (or an admin's): the row
+               itself is the capability, but its ancestry chain can name
+               other identities' mints *)
+            if g.Store.g_caller <> auth.auth_id && not auth.auth_is_admin then
+              (j_err ~code:403 "grant belongs to another identity")
+            else
+              Store.grant_lineage pool id
+              >>= fun lineage ->
+              Store.grant_descendants pool id
+              >>= fun descendants ->
+              (j_ok
+                 (`Assoc
+                   [ ("grant", grant_json g)
+                   ; ("lineage", `List (List.map grant_json lineage))
+                   ; ( "descendants"
+                     , `List (List.map grant_json descendants) ) ])))
 
 (* -- tree substrate (M10): JSON over the derived path index -----------
 
@@ -1751,6 +1836,8 @@ let api_routes pool =
     ; Dream.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))
       ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
+      ; Dream.post "/api/grants/:id/attenuate" (with_auth pool (attenuate_grant pool))
+      ; Dream.get "/api/grants/:id" (with_auth pool (get_grant pool))
       ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))
       ; Dream.post "/api/repl" (with_auth pool (post_repl pool))
       ; Dream.post "/api/tree/get" (with_auth pool (post_tree_get pool))
