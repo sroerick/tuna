@@ -14,7 +14,7 @@
       interpreter/, compiler/, common/ changes; the host gains
       seeding and one resolution probe, nothing else. That is the
       Forth endgame bet made falsifiable.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section stdlib-v1
   (doc "A stdlib def is an ordinary def: compile + program upsert
@@ -32,9 +32,9 @@
         encodings pay for it at every use. Extensional stays where it
         already lives: differential corpus fixtures (add_ch_2_3,
         church3_succ_zero).")
-  (status planned)
+  (status implemented)
   (subsection conventions
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Life on an untyped substrate: conventions COLLIDE and that is
@@ -48,7 +48,11 @@
          two smallest trees, distinguished by a single triage
          reduction. The cstr byte codec already bakes the same
          assignment in (byte-values chapter), so ONE encoding of bool
-         exists in the system, not two.
+         exists in the system, not two. LANDED 2026-10-03: every
+         convention held; the surface var-atom grammar forbids
+         '?', so leaf?/stem?/fork? shipped as
+         is-leaf/is-stem/is-fork - this line is the rename record
+         promised in core-v1.
       2. LIST. nil = leaf, cons = fork hd tl - upstream's algebraic
          list. cstr strings already ride the identical convention
          (string = list of chars, char = little-endian bit list of
@@ -90,7 +94,7 @@
          frozen until this stdlib's make lands - Forth law
          intact. |))))
   (subsection core-v1
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Layered so every entry can name what it consumes; every def
@@ -132,9 +136,39 @@
       folds over the magnitude bit lists; every op returns canonical
       form (law 5), so no consumer can accumulate representation
       debt. mul priced honestly: it is the first entry where fuel
-      cost is expected to be interesting - see the FUEL TABLE law. |))))
+      cost is expected to be interesting - see the FUEL TABLE law.
+
+      MAKE TABLE (landed 2026-10-03): property-pinned in
+      tools/stdprobe (0 runtime steps there = compile-IS reduction;
+      v0 runtime steps per entry ARE the corpus,
+      scripts/diff-corpus/stdlib_*.corpus).
+        tree-case property pin (the tuna-derived mandate above):
+          dispatch lands on exactly its own arm - leaf 1 step,
+          stem 2, fork 3 (fuelprobe; both engines agree).
+        not true->false/false->true; tree-eq on the 8-node not
+        tree both ways. bool-and/or/xor 2x2 tables. if:
+        (if %1110 %200 %10)->1110, (if %1110 %200 %0)->200. first/
+        second projections, junk arms -> leaf. list-fold is fold-
+        RIGHT (fold cons nil = identity); list-length [3]->3;
+        list-reverse pins the append form; list-map preserves
+        order; list-ref: 0->some hd, 1->next, out-of-range->none
+        (the order-swapped fold countdown is pinned dead); tree-eq/
+        list-eq on leaves/stems/forks; nat-sum canary green. L3:
+        mag-canonical strips high false bits ([t,f]->[t]); int-
+        canonical collapses junk and -0 to fork false nil; int-neg
+        never mints -0; mag-add ripple 1+1/3+1/5+2; mag-cmp lt/eq/
+        gt, low-position never overrides, trailing falses inert;
+        mag-sub borrow ripple 4-1=3; mag-mul shift backbone
+        1x4/4x2/2x4/4x4=16 and 3x4=12; int-add/sub/cmp/mul mixed-
+        sign suites; every op returns canonical (law 5).
+      Compiled sizes (F5 watch): not 8, tree-case 10, if 41,
+      bool-xor 68, rec-fix 64, fold-fn 242, list-fold 326,
+      list-reverse 620, mag-canonical 404, int-canonical 546,
+      int-neg 664, mag-ripple 408, mag-add 3089, mag-cmp 2041,
+      mag-sub 3776, mag-mul 4254, int-add 22259, int-sub 22943,
+      int-cmp 5613, int-mul 6213. |))))
   (subsection seeding
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       SOURCE: stdlib/v1/core.defs - def-commands in the existing
@@ -167,9 +201,27 @@
       size -> program hash for every def; the verify script
       recomputes from the store and diffs. A release whose content
       changes lands as new hashes and fresh rows - the manifest
-      bumps, history stays content-addressed, nothing mutates. |))))
+      bumps, history stays content-addressed, nothing mutates.
+
+      LANDED 2026-10-03 (server/lib/stdlib_seed.ml): sabralib boots
+      like fed peers (TUNA_STDLIB_TOKEN or generated-printed-once,
+      sha256-only stored). Boot seeding replays all 53 records
+      through the ORDINARY def round (program rows + repl_dict rows
+      + journaled runs attributed to sabralib, parent-chained).
+      Double-boot additive, verified live: "sabralib seeded (53
+      defs, 53 pre-existing)". Resolution assembly = std rows under
+      identity rows (Hashtbl last-wins; NB Repl_cmd's ternary fold
+      CONSES, so the caller's rows must come first in the list to
+      land last in the map). Live probes green: shadow def not ->
+      (not %10) = %1110; lambda param (input %22102000) beats the
+      shadow; undef reveals std. stdlib_embed.ml is generated from
+      core.defs by a dune rule (tools/stdprobe/embed.py; the
+      transcript grammar, no second grammar, never read at
+      runtime). Reseed hatch = Stdlib_seed.reseed (undefs departed
+      names, replays all rounds; the admin surface to expose it is
+      deliberately left to the chapter that needs it). |))))
   (subsection acceptance
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       1. MANIFEST DRIFT. The implement-size table lands in this
@@ -198,9 +250,39 @@
       6. CORE UNTOUCHED. interpreter/, compiler/, common/ stay
          byte-identical in the landing commit; host delta = seeding
          + probe order only. If any stdlib def requires a core
-         change to work, that is a FINDING, not a patch. |))))
+         change to work, that is a FINDING, not a patch.
+
+      OUTCOMES 2026-10-03 - all six green (scripts/verify-8-stdlib.sh
+      is the live instrument; it covers 1, 4, 5, 6 directly):
+      1. MANIFEST DRIFT [8.1]: 53/53 rows recompute from the live
+         store exactly. The implement-size table is the manifest
+         itself (stdlib/v1/manifest; sizes 3..22259, largest
+         int-add, magnitude core largest mag-sub 3776).
+      2. DIFFERENTIAL: corpus 24 -> 77 entries (stdlib_*, one per
+         def; verify-differential 77/77 three-engine green).
+      3. FUEL TABLE (tools/stdprobe/fuelprobe.exe; lambda-wrapped
+         programs, runtime operands, all-ones worst case):
+           tree-case leaf/stem/fork   v0 1/2/3        v1 1/2/3
+           list-fold 10/100           v0 1431/13221   v1 295/2095
+           int-add 8/32/64-bit        v0 249749/2941349/11106917
+                                      v1 3974/12206/23182
+           int-mul 8/16-bit           v0 >18.4M both (deadline)
+                                      v1 203268/ >1.1M (deadline)
+         These numbers carry directly into the F5/F6 records
+         (FINDINGS.md).
+      4. SEED DISCIPLINE: double boot identical rows (53, 53
+         pre-existing), zero duplicates, 53 attributed rounds
+         [8.4]; shadow/param/undef probes [8.2].
+      5. LEDGER BRIDGE [8.5]: [+2,-3,+1,-1] folded by
+         (list-fold int-add int-zero) -> balance -1, status
+         normal, replay verified, deriv-sealed, deriv-check
+         exit 0.
+      6. CORE UNTOUCHED [8.6]: byte-identical since 0185b1a (the
+         commit the vocabulary work starts after; the rim-eio
+         flat.ml changes are prior), gate
+         TUNA_STDLIB_BASELINE-overridable. |))))
   (subsection pre-registered-failures
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       F5 INLINE BLOWUP. Def-time inlining multiplies compiled size
@@ -220,4 +302,17 @@
       rules) stay pure, so replay recomputes the checks that
       matter and trusts recorded answers exactly where the review
       drew that line. Fuel table law 3 carries both engines'
-      numbers into the finding. |))))))
+      numbers into the finding.
+
+      OUTCOMES 2026-10-03 (full record: FINDINGS.md). F5 not
+      triggered (largest compiled def 22,259 nodes - int-add -
+      an order under the 100k wire; consumer/consumed ratio
+      near 1 at L3 depth). F6 OBSERVED at every measured size
+      (8-bit int-add alone is 249,749 v0 steps); compile-side
+      unaffected (the seeding path never breathes on the compile
+      cap). The pre-decided consequence stands unsmuggled: the
+      journaled math prim family is a FOLLOW-UP CHAPTER; this
+      one lands the vocabulary + the finding. Dictionary-
+      definitions-alone is REFUTED for arithmetic-scale numeric
+      work and UNAFFECTED for the structural vocabulary (ledger
+      checks price fine under verify-8 [8.5]). |))))))

@@ -5,6 +5,18 @@ suites (store, substrate, m11, fed, deriv, demand, delegation) go
 through `scripts/test-store.sh`: postgres down -> skipped silently,
 postgres up -> each suite gets its own scratch database.
 
+## sabra stdlib v1 (2026-10-03)
+
+No alcotest suite; the chapter's acceptance instrument is
+`scripts/verify-8-stdlib.sh` (live dev server): manifest drift vs the
+seeded repl_dict(sabralib), the parse-time resolution order probes,
+std-vocabulary fallbacks, seed attribution/additivity, the ledger
+bridge (posting list -> balance -> replay -> deriv-seal ->
+deriv-check), and the core-untouched git gate. Companion scratch:
+`tools/stdprobe/` (def property pins, fuel table probe, freezer,
+corpusgen); corpus coverage lives in `scripts/diff-corpus/stdlib_*`
+(53 entries, verify-differential 77/77).
+
 ## demand suite (2026-10-02)
 
 `tests/demand_tests.ml` pins the demand-memo boundary

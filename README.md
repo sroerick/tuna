@@ -124,7 +124,10 @@ GET    /health                     → no auth, db ping
 REPL command grammar (`eval`/`def`/`undef`/`get`/`patch`/`first-diff`/
 `dict`; a bare term evaluates): see `server/lib/repl_cmd.ml`. Eval and
 def rounds are first-class journaled runs, chained per identity via
-`parent_run_id`; structural commands are store queries.
+`parent_run_id`; structural commands are store queries. Name resolution
+at parse time (borg/stdlib.borg): lambda param > identity dictionary >
+sabralib dictionary (the seeded sabra stdlib v1, 53 defs) > reader
+builtins — identity def shadow wins, `undef` reveals std.
 
 ### Federation (M12, `borg/federation.borg`)
 
