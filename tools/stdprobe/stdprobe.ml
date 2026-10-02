@@ -61,6 +61,7 @@ let () =
   d "eq-fn" "(lambda (self) (lambda (a) (lambda (b) ((tree-case (is-leaf b) (lambda (c) ((tree-case %0 (lambda (c2) (self c c2)) (lambda (u) (lambda (v) %0))) b)) (lambda (l) (lambda (r) ((tree-case %0 (lambda (c) %0) (lambda (l2) (lambda (r2) (bool-and (self l l2) (self r r2))))) b)))) a))))";
   d "tree-eq" "(rec-fix eq-fn)";
   d "list-eq" "(lambda (xs) (lambda (ys) (tree-eq xs ys)))";
+  d "mag-canonical" "(lambda (bits) (list-fold (lambda (hd) (lambda (acc) ((tree-case ((tree-case %0 (lambda (c) (pair %10 %0)) (lambda (u) (lambda (v) %0))) hd) (lambda (c2) (pair hd acc)) (lambda (ua) (lambda (va) (pair hd acc)))) acc))) %0 bits))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -91,6 +92,16 @@ let () =
   eval "list-eq" ["(pair %10 %0)"; "(pair %10 %0)"];
   eval "list-eq" ["(pair %10 %0)"; "(pair %200 %0)"];
   eval "nat-sum" ["%0"]; eval "nat-sum" ["%10"]; eval "nat-sum" ["%1110"];
+
+  eval "mag-canonical" ["%0"];            (* nil -> nil *)
+  eval "mag-canonical" ["%2100"];         (* [t] -> [t] *)
+  eval "mag-canonical" ["%200"];          (* [f] -> nil *)
+  eval "mag-canonical" ["%20200"];        (* [f,f] -> nil *)
+  eval "mag-canonical" ["%202100"];       (* [f,t] (=2) -> [f,t] unchanged *)
+  eval "mag-canonical" ["%210200"];       (* [t,f] (=1) -> [t] *)
+  eval "mag-canonical" ["%20210200"];     (* [f,t,f] (=2) -> [f,t] *)
+  eval "mag-canonical" ["%202102100"];    (* [f,t,t] (=6) -> unchanged *)
+  eval "mag-canonical" ["%10"];           (* junk stem spine -> nil *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];

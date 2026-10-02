@@ -127,5 +127,18 @@ d("eq-fn", lam("self", lam("a", lam("b", dispatch(EQ_LEAF, EQ_STEM, EQ_FORK, "a"
 d("tree-eq", L("rec-fix", "eq-fn"))
 d("list-eq", lam("xs", lam("ys", L("tree-eq", "xs", "ys"))))
 
+# ---- L3 ints (law 5: sign-magnitude, fork(sign-bool, mag-bits)) ----
+# magnitude = bit list, LSB first; canonical = high-order false bits stripped.
+# mag-canonical: fold-right, acc = the canonical TAIL (fold is right, so acc
+# is the MORE significant side). acc nil = "no significant bits seen yet":
+# hd true -> [true]; hd false or junk -> nil (this strips top false bits).
+MAG_F = lam2("hd", "acc",
+  dispatch(
+    dispatch("%0", lam("c", L("pair", "%10", "%0")), lam2("u", "v", "%0"), "hd"),
+    lam("c2", L("pair", "hd", "acc")),
+    lam2("ua", "va", L("pair", "hd", "acc")),
+    "acc"))
+d("mag-canonical", lam("bits", L("list-fold", MAG_F, "%0", "bits")))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
