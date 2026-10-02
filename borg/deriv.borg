@@ -32,7 +32,7 @@
    (details
     (doc (|
       curl -s https://<host>/api/runs/<run-id>/deriv | deriv-check -
-      Or save the JSON and run `deriv-check record.json`. Exit codes: 0 verified, 1 tampered (hash mismatch, chain break, unconsumed journal rows, replay divergence), 2 malformed. tests/ contains the golden canonical-encoding test, tamper cases (flipped output hash, wrong program hash, unconsumed rows, resealed truncation), and the reseal test proving a record seals as its own artifact; PG e2e is gated pending a dev stack (tests/README.md notes the vultr deferral).|)
+      Or save the JSON and run `deriv-check record.json`. Exit codes: 0 verified, 1 tampered (hash mismatch, chain break, unconsumed journal rows, replay divergence), 2 malformed. tests/ contains the golden canonical-encoding test, tamper cases (flipped output hash, wrong program hash, unconsumed rows, resealed truncation), and the reseal test proving a record seals as its own artifact; the PG e2e group (server-built record verifies offline through Tuna_deriv alone, plus builder refusals 404/409) runs green on the dev stack since 2026-10-01 (tests/README.md records the earlier environment deferral and its recovery).|)
     )
     (status implemented))
   )
