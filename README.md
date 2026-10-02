@@ -70,9 +70,9 @@ journal views with replay-verify buttons, grants admin, REPL.
     **bit-for-bit identical** to the recursive monad engine across the
     whole differential corpus under both semantics (v0 and v1), refereed
     by `tests/flat_tests.ml`; `tools/flatbench` measures the two engines
-    at no step-cost premium. The server run boundary still drives the
-    recursive engine (`Prim_eval.Make(Lwt)`); wiring it to the flat core
-    is future work.
+    at no step-cost premium. The server run boundary *drives the pure
+    core* through `Flat_drive.Make(Lwt)` (the monad lives at the rim,
+    never in the core); the recursive engine is kept as the test referee.
 
       Effects stay run-time-only with the `(runtime (prim "name" ...))`
       form: it threads the enclosing lambda parameter through constant

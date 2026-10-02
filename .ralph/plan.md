@@ -670,9 +670,12 @@ Ground rules:
       BOTH laws (v0 + v1), 8/8 green.  Measured cost (tools/flatbench)
       on small-prim + prim-heavy workloads: flat/rec ratios 0.47–1.24 at
       identical step counts.  Chapter borg/purity.borg; finding recorded
-      in FINDINGS.md (RUNTIME PURITY THESIS section).  Next slice, not
-      claimed: wire the server Run boundary to drive Flat instead of
-      Prim_eval.Make(Lwt).
+      in FINDINGS.md (RUNTIME PURITY THESIS section).  MIGRATION DONE
+      2026-10-01: Run.execute and Replay.execute_fed now drive the pure
+      core via Tuna_interp.Flat_drive.Make(Lwt) (the monad lives at the
+      rim); Tuna_interp.Eval delegates to Flat too; Prim_eval.Make is
+      retained as the corpus referee.  Full battery green over the
+      migrated boundary (PG suites + differential + smoke + verify-1..7).
     - Shape (1) local handlers (control group) was not built; the
       measured result above made it non-load-bearing for the decision.
     - The pre-registered failure (the journal boundary cannot drive a

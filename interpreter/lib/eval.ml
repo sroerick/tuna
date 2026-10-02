@@ -19,14 +19,14 @@
      TUNA_RUN_MAX_SECONDS); pure evaluation passes none, so step
      counts stay an invariant of the calculus.
 
-   Since M7 this module is the IDENTITY-monad instantiation of the
-   monadic engine (Prim_eval.Make): one verbatim port of the rules
-   serves both the pure evaluator and the journalling host boundary,
-   so step counts and evaluation order cannot drift apart. The
-   identity instantiation sequences exactly like the original lets,
-   and the default host answers every (never occurring in a pure
-   corpus) prim call with an error tree. *)
-
+   Since M7 this module was the IDENTITY-monad instantiation of the
+   monadic engine (Prim_eval.Make).  As of the RUNTIME PURITY THESIS
+   migration (borg/purity.borg) it delegates to the PURE-STEP core
+   (Flat) through the identity-monad driver (Flat_drive.Make(Id)): the
+   core no longer carries a monad parameter, and this public API keeps
+   its exact shape and step counts.  The recursive monadic engine
+   (Prim_eval.Make) remains available as the CORPUS REFEREE the thesis
+   designates, and tests/flat_tests.ml cross-checks the two. *)
 
 
 module Id = struct
@@ -37,26 +37,24 @@ module Id = struct
   let catch f h = try f () with e -> h e
 end
 
-module Pure_host = struct
-  let prim ~site:_ ~name:_ ~args:_ : [ `Ok of Tuna.Tree.t | `Error of string ] Id.t =
-    `Error "no prim host in pure evaluation (prim calls need a run boundary)"
-end
+module Drive = Flat_drive.Make (Id)
 
-module Engine = Prim_eval.Make (Id)
-
-type result = Engine.result =
+type result = Prim_eval.result =
     Normal of Tuna.Tree.t * int
   | Loop of int
   | Fuel_exhausted of int
   | Size_exhausted of int
   | Deadline_exceeded of int
 
-type mode = Engine.mode = Canonical | Sharing
+type mode = Prim_eval.mode = Canonical | Sharing
 
-(* Same API and behavior as the pre-M7 pure engine.  [~mode:Sharing]
-   opts into the distinct-work law (borg/sharing.borg): memoized
-   firings, distinct step counts, finite [Loop] divergence.  [~trace]
-   attaches a firing-event collector (borg/trace.borg): observation
-   only, step counts untouched. *)
+(* Same API and behavior as before.  [~mode:Sharing] opts into the
+   distinct-work law (borg/sharing.borg).  [~trace] attaches a
+   firing-event collector (borg/trace.borg): observation only. *)
 let eval ?host ?deadline ?(mode = Canonical) ?trace ~fuel ~size_cap ~program args =
-  Engine.eval ?host ?deadline ~mode ?trace ~fuel ~size_cap ~program args
+  Drive.eval ?host ?deadline ~mode ?trace ~fuel ~size_cap ~program args
+
+(* Back-compat alias: callers that reached the identity-monad engine as
+   [Eval.Engine] (sharing/trace test suites) get the flat driver, which
+   has the same [eval]/[result]/[trace] API. *)
+module Engine = Drive

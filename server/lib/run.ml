@@ -29,7 +29,7 @@
 open Lwt.Infix
 
 module J = Yojson.Basic
-module Eng = Tuna_interp.Prim_eval.Make (Lwt)
+module Eng = Tuna_interp.Flat_drive.Make (Lwt)
 module S = Tuna_store.Store
 
 (* -- provenance: site (IR node id) -> callsite tree path -------------- *)

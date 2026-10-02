@@ -15,6 +15,22 @@
 
 module Flat = Tuna_interp.Flat
 module Eval = Tuna_interp.Eval
+module Prim_eval = Tuna_interp.Prim_eval
+
+(* The RECURSIVE engine, instantiated directly (NOT Eval, which now
+   delegates to Flat): this is the corpus referee the thesis designates
+   — the independent implementation the pure-step core must match. *)
+module Rec_id = struct
+  type 'a t = 'a
+  let return x = x
+  let bind x f = f x
+  let catch f h = try f () with e -> h e
+end
+
+module Rec = Prim_eval.Make (Rec_id)
+
+let rec_run ~mode ~fuel ~size_cap ~program ~args =
+  Rec.eval ~mode ~fuel ~size_cap ~program args
 
 (* -- corpus reading (mirrors tools/gen/gen.ml's reader) -------------- *)
 
@@ -82,9 +98,6 @@ let flat_run ~mode ~fuel ~size_cap ~program ~args =
     m
 
 (* recursive engine, same host *)
-let rec_run ~mode ~fuel ~size_cap ~program ~args =
-  Eval.eval ~mode ~fuel ~size_cap ~program args
-
 (* Every corpus entry must agree between the two engines under both
    laws.  The corpus is v0 (canonical) so the checked-in expect lines
    are the canonical law; Sharing is compared flat-vs-recursive only
@@ -136,7 +149,7 @@ let test_prim_boundary () =
     `Error "denied for test"
   in
   let rec_r =
-    Eval.eval ~host:(fun ~site:_ ~name:_ ~args:_ -> `Error "denied for test")
+    Rec.eval ~host:(fun ~site:_ ~name:_ ~args:_ -> `Error "denied for test")
       ~fuel:100 ~size_cap:10000 ~program [ arg ]
   in
   let flat_m = Flat.start ~fuel:100 ~size_cap:10000 ~program ~args:[ arg ] () in
@@ -155,7 +168,7 @@ let test_dirty_firing () =
   let prim = prim_call ~name:"echo" ~site:1 in
   let host ~site:_ ~name:_ ~args:_ = `Done (tree_of "10") in
   let rec_r =
-    Eval.eval
+    Rec.eval
       ~host:(fun ~site:_ ~name:_ ~args:_ -> `Ok (tree_of "10"))
       ~mode:Eval.Sharing ~fuel:100 ~size_cap:10000 ~program:not_tree [ prim ]
   in
@@ -176,7 +189,7 @@ let test_loop_law () =
     `Error "x"
   in
   let rec_r =
-    Eval.eval ~host:(fun ~site:_ ~name:_ ~args:_ -> `Error "x")
+    Rec.eval ~host:(fun ~site:_ ~name:_ ~args:_ -> `Error "x")
       ~mode:Eval.Sharing ~fuel:1000 ~size_cap:10000 ~program:m_term [ m_term ]
   in
   let m =
@@ -254,6 +267,98 @@ let test_async_suspension () =
          (Tuna.Canon.encode (tree_of "10")) (Tuna.Canon.encode t)
    | _ -> Alcotest.fail "expected a normal form after async answer")
 
+(* trace equivalence: observation must agree between the two engines,
+   both laws.  Compare counters and the full event list by rendering
+   each into a comparable string (alcotest has no sixtuple). *)
+let trace_summary_str (tr : Prim_eval.trace) =
+  Printf.sprintf "raw=%d hits=%d dirty=%d loop=%b next=%d trunc=%b"
+    tr.Prim_eval.tr_raw tr.Prim_eval.tr_hits tr.Prim_eval.tr_dirty
+    tr.Prim_eval.tr_loop tr.Prim_eval.tr_next tr.Prim_eval.tr_truncated
+
+let trace_events_str (tr : Prim_eval.trace) =
+  String.concat "\n"
+    (List.rev
+       (Queue.fold
+          (fun acc (e : Prim_eval.trace_event) ->
+            Printf.sprintf "%d|%s|%s|%s|%s|%s" e.Prim_eval.e_seq
+              (Prim_eval.kind_string e.Prim_eval.e_kind)
+              e.Prim_eval.e_rule e.Prim_eval.e_fun e.Prim_eval.e_arg
+              e.Prim_eval.e_note
+            :: acc)
+          [] tr.Prim_eval.tr_events))
+
+let test_trace_equivalence () =
+  let program = tree_of "22102000" in
+  let args = [ tree_of "10"; tree_of "0" ] in
+  List.iter
+    (fun (mode, label) ->
+      let tr_rec = Prim_eval.new_trace () in
+      let _ =
+        Rec.eval ~mode ~trace:tr_rec ~fuel:1000 ~size_cap:10000 ~program args
+      in
+      let tr_flat = Prim_eval.new_trace () in
+      let m = Flat.start ~mode ~trace:tr_flat ~fuel:1000 ~size_cap:10000
+          ~program ~args () in
+      let _ =
+        Flat.run ~host:(fun ~site:_ ~name:_ ~args:_ -> `Error "x") m
+      in
+      Alcotest.(check string) (label ^ ": summary counters agree")
+        (trace_summary_str tr_rec) (trace_summary_str tr_flat);
+      Alcotest.(check string) (label ^ ": event list agrees")
+        (trace_events_str tr_rec) (trace_events_str tr_flat))
+    [ (Eval.Canonical, "v0"); (Eval.Sharing, "v1") ]
+
+(* driver equivalence: Flat_drive (monad adapter) must reproduce the
+   recursive engine exactly — this is the engine the server boundary
+   will use.  Identity monad here; Lwt at the boundary. *)
+module Id_monad = struct
+  type 'a t = 'a
+  let return x = x
+  let bind x f = f x
+  let catch f h = try f () with e -> h e
+end
+
+module Drive = Tuna_interp.Flat_drive.Make (Id_monad)
+
+let test_driver_equivalence () =
+  List.iter
+    (fun f ->
+      let c = read_corpus f in
+      let program = tree_of c.c_program in
+      let args = List.map tree_of c.c_args in
+      List.iter
+        (fun (mode, label) ->
+          let rec_obs =
+            observe
+              (Rec.eval ~mode ~fuel:c.c_fuel ~size_cap:c.c_size_cap ~program
+                 args)
+          in
+          let drive_obs =
+            observe
+              (Drive.eval ~mode ~fuel:c.c_fuel ~size_cap:c.c_size_cap ~program
+                 args)
+          in
+          Alcotest.(check (triple string string int))
+            (Printf.sprintf "%s [%s] drive==recursive" c.c_name label)
+            rec_obs drive_obs)
+        [ (Eval.Canonical, "v0"); (Eval.Sharing, "v1") ])
+    (corpus_files ())
+
+(* the driver answers a prim through the monad with the same result the
+   recursive engine gives *)
+let test_driver_prim () =
+  let program = prim_call ~name:"echo" ~site:0 in
+  let arg = tree_of "22102000" in
+  let host ~site:_ ~name:_ ~args:_ = Id_monad.return (`Ok (tree_of "10")) in
+  let d = observe (Drive.eval ~host ~fuel:100 ~size_cap:10000 ~program [ arg ]) in
+  let r =
+    observe
+      (Rec.eval
+         ~host:(fun ~site:_ ~name:_ ~args:_ -> `Ok (tree_of "10"))
+         ~fuel:100 ~size_cap:10000 ~program [ arg ])
+  in
+  Alcotest.(check (triple string string int)) "driver prim == recursive" r d
+
 let () =
   Alcotest.run "flat"
     [ ( "purity-thesis"
@@ -268,4 +373,9 @@ let () =
         ; Alcotest.test_case "step-by-step == run" `Quick test_step_by_step
         ; Alcotest.test_case "async suspension (no scheduler)" `Quick
             test_async_suspension
+        ; Alcotest.test_case "trace equivalence" `Quick
+            test_trace_equivalence
+        ; Alcotest.test_case "driver == recursive (corpus)" `Quick
+            test_driver_equivalence
+        ; Alcotest.test_case "driver prim" `Quick test_driver_prim
         ] ) ]

@@ -181,9 +181,20 @@ interpreter/, compiler/.
   scheduler-free driver suspends, inspects, and resumes with no monad
   or callback in the core.
 
-Consequence / scope: the server run boundary still drives
-`Prim_eval.Make(Lwt)` — the migration stage named in the thesis.
-Wiring `Run` to the flat machine is the next slice, not claimed here.
+Consequence / scope, UPDATED 2026-10-01: the migration landed. The
+server run boundary (`Run.execute`) and the replay/counterfactual
+engine (`Replay.execute_fed`) now drive the pure core through
+`Tuna_interp.Flat_drive.Make(Lwt)` — the monad lives at the rim, not in
+the core — and the public pure API (`Tuna_interp.Eval`) delegates to
+the flat driver via the identity monad. The recursive
+`Prim_eval.Make` is KEPT as the corpus referee the tests cross-check
+against. Full battery over the migrated boundary: pure suites, PG
+suites (store/substrate/m11/fed/deriv), differential 24/24, smoke-api
+14/14, smoke-ui 17/17, verify-1..7 7/7 (replay identity included).
 No F-class failure was observed: the journal boundary did NOT leak
 scheduler state back into the core (the thesis's pre-registered failure
-condition); suspension being a value is what makes that so.
+condition); suspension being a value is what makes that so. The
+monad-shaped `Prim_eval.Make` still exists as the reference engine, so
+"no Lwt under interpreter/" is now true of the CORE (flat.ml) and the
+public path (eval.ml -> flat_drive), with the recursive reference kept
+intentionally.

@@ -17,9 +17,17 @@
     machine in a [pending] VALUE the driver answers out of band, with
     no scheduler in the core.  Either outcome was pre-registered as a
     valid finding; the observed one is "the pure-step core is viable",
-    recorded here and in FINDINGS.md.  Scope: the server run boundary
-    still drives Prim_eval.Make(Lwt) (the migration stage); wiring Run
-    to the flat machine is the next slice, not claimed here.|) *)
+    recorded here and in FINDINGS.md.  MIGRATION COMPLETE 2026-10-01:
+    the server run boundary (Run.execute) and the replay/counterfactual
+    engine (Replay.execute_fed) now drive the pure core through
+    Tuna_interp.Flat_drive.Make(Lwt) — the monad lives at the rim
+    (the host adapter), not in the core.  The public pure API
+    (Tuna_interp.Eval) also delegates to the flat driver.  The
+    recursive Prim_eval.Make is KEPT as the corpus referee the tests
+    cross-check against (tests/flat_tests.ml).  Full battery with the
+    migrated boundary: pure suites + PG suites + differential 24/24 +
+    smoke-api 14/14 + smoke-ui 17/17 + verify-1..7 7/7 (replay identity
+    included).|) *)
  (doc "Tuna book chapter: purity — the pure-step core (RUNTIME PURITY THESIS). An explicit-stack abstract machine whose state is a value: one elementary reduction per step, no scheduler, no monad in the core. The corpus referees that its step counts are identical to the recursive engine under both accounting laws.")
  (status implemented)
  (convention ocaml-dune)
@@ -45,11 +53,45 @@
         I/O simply stops calling [step] and resumes with [answer] — no
         callback, no monad, no concealed promise runtime.
 
-        The recursive monadic engine (Prim_eval.Make) remains the
-        production engine at the server run boundary today; this chapter
-        is the CORE half of the thesis, and wiring Run to it is the next
-        slice.  Both exist in interpreter/lib and share the hoisted
-        [Prim_eval.result] / [Prim_eval.mode] types.
+        The recursive monadic engine (Prim_eval.Make) is KEPT as the
+        corpus referee the thesis designates, and the migration has
+        landed: the server run boundary (Run.execute) and the replay
+        engine (Replay.execute_fed) drive the pure core through
+        Tuna_interp.Flat_drive.Make(Lwt) — a thin host adapter that
+        sequences pure [step]/[answer] calls in Lwt.  The public pure
+        API (Tuna_interp.Eval) delegates to the flat driver too, via the
+        identity-monad instantiation.  So the monad now lives ONLY at
+        the rim: the core names no scheduler; the host adapter owns the
+        effects.  tests/flat_tests.ml cross-checks the pure core against
+        the retained recursive engine on the whole differential corpus
+        under both laws, and the acceptance scripts (verify-3 replay
+        identity included) run green over the migrated boundary.
+       |))))
+ (section host-adapter
+  (doc "Flat_drive: the monad lives at the rim, never in the core")
+  (status implemented)
+  (details
+   (doc (|
+        Flat_drive.Make(M) is the bridge the thesis called the
+        migration stage's successor.  It has API parity with
+        Prim_eval.Make: [eval ~host ~mode ~fuel ~size_cap ~program args]
+        returns a Prim_eval.result in M, with a monadic host of the
+        [`Ok | `Error] M.t shape.  Inside, [drive] is a tail-recursive
+        bind chain: if the pure machine is parked on a prim, it awaits
+        the host's M answer and injects it with Flat.answer; otherwise
+        it takes one pure Flat.step.  No evaluation state lives in the
+        adapter — only the sequencing.
+
+        The wall-clock deadline (AGENTS.md rule 5) is enforced HERE,
+        between elementary steps, never inside the core: pure
+        evaluation stays untimed and step counts stay an invariant.
+        A boundary abort finalizes the machine as Deadline_exceeded via
+        Flat.abort — an operator-policy state transition, exactly like
+        the recursive engine's exception, but expressed as a value.
+
+        Swapping the engine at Run/Replay was a one-line module change
+        each because of the API parity, which is the point: the thesis
+        could be realized without rewriting the boundary.
        |))))
  (section corpus-referee
   (doc "step counts identical to the recursive engine, both laws")

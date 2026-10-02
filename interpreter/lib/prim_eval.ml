@@ -67,6 +67,104 @@ type result =
 
 type mode = Canonical | Sharing
 
+(* The hoisted trace/sharing helpers below use the tree constructors
+   unqualified, same as the functor bodies. *)
+open Tuna.Tree
+
+(* Digests are carried as RAW 32-BYTE STRINGS, not Digestif.SHA256.t:
+   the digest module's [t] is abstract behind its signature, so each
+   Hashtbl.Make application would mint an incompatible key type and
+   the pair key could never flow between the tables.  Strings keep
+   the tables plain and the equality content-based. *)
+module Phys_map = Hashtbl.Make (struct
+    type t = Tuna.Tree.t
+
+    let equal = ( == )
+    let hash = Hashtbl.hash
+  end)
+
+(* -- trace (borg/trace.borg): opt-in, capped firing observability --- *)
+
+type trace_kind = Kfire | Kcharge | Kdirty | Kloop
+
+let kind_string = function
+  | Kfire -> "fire"
+  | Kcharge -> "charge"
+  | Kdirty -> "dirty"
+  | Kloop -> "loop"
+
+type trace_event = {
+  e_seq : int
+; e_kind : trace_kind
+; e_rule : string  (* triage arm; "" when not applicable *)
+; e_fun : string  (* 16-hex content-digest prefix; "" when n/a *)
+; e_arg : string  (* 16-hex content-digest prefix; "" when n/a *)
+; e_note : string
+}
+
+type trace = {
+  mutable tr_cap : int  (* max RECORDED events; counters are uncapped *)
+; mutable tr_next : int  (* next event seq *)
+; mutable tr_truncated : bool
+; mutable tr_raw : int  (* firing-gate entries = raw firings, both laws *)
+; mutable tr_hits : int  (* v1 memo hits; never recorded as events *)
+; mutable tr_dirty : int  (* v1 dirty re-executions *)
+; mutable tr_loop : bool
+; tr_events : trace_event Queue.t
+; tr_digests : string Phys_map.t  (* display digest cache, trace-local *)
+}
+
+let new_trace ?(cap = 50_000) () =
+  { tr_cap = cap; tr_next = 0; tr_truncated = false; tr_raw = 0
+  ; tr_hits = 0; tr_dirty = 0; tr_loop = false
+  ; tr_events = Queue.create (); tr_digests = Phys_map.create 4096 }
+
+(* Display digest: the SAME structural content law the v1 memo keys
+   use, cached per physical node.  v1 events reuse the memo law's
+   already-computed digests (free); pure-v0 traces digest on demand
+   here, small trees only. *)
+let rec trace_digest tr t =
+  match Phys_map.find_opt tr.tr_digests t with
+  | Some d -> d
+  | None ->
+      let raw =
+        match t with
+        | Leaf -> Digestif.SHA256.digest_string "\x00"
+        | Stem a -> Digestif.SHA256.digest_string ("\x01" ^ trace_digest tr a)
+        | Fork (a, c) ->
+            Digestif.SHA256.digest_string
+              ("\x02" ^ trace_digest tr a ^ trace_digest tr c)
+      in
+      let d = Digestif.SHA256.to_raw_string raw in
+      Phys_map.replace tr.tr_digests t d;
+      d
+
+let hex16 raw =
+  String.sub (Digestif.SHA256.to_hex (Digestif.SHA256.of_raw_string raw)) 0 16
+
+(* The triage arm [dispatch_firing] will take, recorded on fire/charge
+   events so a trace reads as the rule sequence, not just a count. *)
+let triage_name a c =
+  match (a, c) with
+  | Fork (Leaf, _), _ -> "fork(leaf,_)"
+  | Fork (Stem _, _), _ -> "fork(stem,_)"
+  | Fork (Fork _, _), Leaf -> "fork(fork,_)/leaf"
+  | Fork (Fork _, _), Stem _ -> "fork(fork,_)/stem"
+  | Fork (Fork _, _), Fork _ -> "fork(fork,_)/fork"
+  | _ -> "wrapper"
+
+
+type sharing = {
+  node_digests : string Phys_map.t
+      (* physical node -> raw content digest, once per object *)
+; answers : (string * string, Tuna.Tree.t) Hashtbl.t
+      (* firing pair -> completed answer *)
+; inflight : (string * string, int) Hashtbl.t
+      (* firing pair -> host tick at entry (loop + purity bookkeeping) *)
+; mutable host_tick : int  (* monotonic count of host answers *)
+}
+
+
 module Make (M : MONAD) = struct
   open Tuna.Tree
 
@@ -87,97 +185,38 @@ module Make (M : MONAD) = struct
 
   type nonrec mode = mode = Canonical | Sharing
 
-  (* Digests are carried as RAW 32-BYTE STRINGS, not Digestif.SHA256.t:
-     the digest module's [t] is abstract behind its signature, so each
-     Hashtbl.Make application would mint an incompatible key type and
-     the pair key could never flow between the tables.  Strings keep
-     the tables plain and the equality content-based. *)
-  module Phys_map = Hashtbl.Make (struct
-      type t = Tuna.Tree.t
+  (* Re-export the hoisted trace/sharing vocabulary so existing callers
+     that reach it through an instantiation (Eng.new_trace, e.Eng.tr_next,
+     ...) keep working without churn. *)
+  type nonrec trace_kind = trace_kind = Kfire | Kcharge | Kdirty | Kloop
+  type nonrec trace_event = trace_event =
+    { e_seq : int
+    ; e_kind : trace_kind
+    ; e_rule : string
+    ; e_fun : string
+    ; e_arg : string
+    ; e_note : string
+    }
+  type nonrec trace = trace =
+    { mutable tr_cap : int
+    ; mutable tr_next : int
+    ; mutable tr_truncated : bool
+    ; mutable tr_raw : int
+    ; mutable tr_hits : int
+    ; mutable tr_dirty : int
+    ; mutable tr_loop : bool
+    ; tr_events : trace_event Queue.t
+    ; tr_digests : string Phys_map.t
+    }
+  type nonrec sharing = sharing =
+    { node_digests : string Phys_map.t
+    ; answers : (string * string, t) Hashtbl.t
+    ; inflight : (string * string, int) Hashtbl.t
+    ; mutable host_tick : int
+    }
 
-      let equal = ( == )
-      let hash = Hashtbl.hash
-    end)
-
-  type sharing = {
-    node_digests : string Phys_map.t
-        (* physical node -> raw content digest, once per object *)
-  ; answers : (string * string, t) Hashtbl.t
-        (* firing pair -> completed answer *)
-  ; inflight : (string * string, int) Hashtbl.t
-        (* firing pair -> host tick at entry (loop + purity bookkeeping) *)
-  ; mutable host_tick : int  (* monotonic count of host answers *)
-  }
-
-  (* -- trace (borg/trace.borg): opt-in, capped firing observability --- *)
-
-  type trace_kind = Kfire | Kcharge | Kdirty | Kloop
-
-  let kind_string = function
-    | Kfire -> "fire"
-    | Kcharge -> "charge"
-    | Kdirty -> "dirty"
-    | Kloop -> "loop"
-
-  type trace_event = {
-    e_seq : int
-  ; e_kind : trace_kind
-  ; e_rule : string  (* triage arm; "" when not applicable *)
-  ; e_fun : string  (* 16-hex content-digest prefix; "" when n/a *)
-  ; e_arg : string  (* 16-hex content-digest prefix; "" when n/a *)
-  ; e_note : string
-  }
-
-  type trace = {
-    mutable tr_cap : int  (* max RECORDED events; counters are uncapped *)
-  ; mutable tr_next : int  (* next event seq *)
-  ; mutable tr_truncated : bool
-  ; mutable tr_raw : int  (* firing-gate entries = raw firings, both laws *)
-  ; mutable tr_hits : int  (* v1 memo hits; never recorded as events *)
-  ; mutable tr_dirty : int  (* v1 dirty re-executions *)
-  ; mutable tr_loop : bool
-  ; tr_events : trace_event Queue.t
-  ; tr_digests : string Phys_map.t  (* display digest cache, trace-local *)
-  }
-
-  let new_trace ?(cap = 50_000) () =
-    { tr_cap = cap; tr_next = 0; tr_truncated = false; tr_raw = 0
-    ; tr_hits = 0; tr_dirty = 0; tr_loop = false
-    ; tr_events = Queue.create (); tr_digests = Phys_map.create 4096 }
-
-  (* Display digest: the SAME structural content law the v1 memo keys
-     use, cached per physical node.  v1 events reuse the memo law's
-     already-computed digests (free); pure-v0 traces digest on demand
-     here, small trees only. *)
-  let rec trace_digest tr t =
-    match Phys_map.find_opt tr.tr_digests t with
-    | Some d -> d
-    | None ->
-        let raw =
-          match t with
-          | Leaf -> Digestif.SHA256.digest_string "\x00"
-          | Stem a -> Digestif.SHA256.digest_string ("\x01" ^ trace_digest tr a)
-          | Fork (a, c) ->
-              Digestif.SHA256.digest_string
-                ("\x02" ^ trace_digest tr a ^ trace_digest tr c)
-        in
-        let d = Digestif.SHA256.to_raw_string raw in
-        Phys_map.replace tr.tr_digests t d;
-        d
-
-  let hex16 raw =
-    String.sub (Digestif.SHA256.to_hex (Digestif.SHA256.of_raw_string raw)) 0 16
-
-  (* The triage arm [dispatch_firing] will take, recorded on fire/charge
-     events so a trace reads as the rule sequence, not just a count. *)
-  let triage_name a c =
-    match (a, c) with
-    | Fork (Leaf, _), _ -> "fork(leaf,_)"
-    | Fork (Stem _, _), _ -> "fork(stem,_)"
-    | Fork (Fork _, _), Leaf -> "fork(fork,_)/leaf"
-    | Fork (Fork _, _), Stem _ -> "fork(fork,_)/stem"
-    | Fork (Fork _, _), Fork _ -> "fork(fork,_)/fork"
-    | _ -> "wrapper"
+  let new_trace = new_trace
+  let kind_string = kind_string
 
   type budget =
     { mutable fuel : int

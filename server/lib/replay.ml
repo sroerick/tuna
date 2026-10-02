@@ -26,7 +26,7 @@
 
 open Lwt.Infix
 
-module Eng = Tuna_interp.Prim_eval.Make (Lwt)
+module Eng = Tuna_interp.Flat_drive.Make (Lwt)
 module S = Tuna_store.Store
 
 type outcome = Eng.result =
