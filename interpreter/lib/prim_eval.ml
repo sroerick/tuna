@@ -53,6 +53,20 @@ module type MONAD = sig
   val catch : (unit -> 'a t) -> (exn -> 'a t) -> 'a t
 end
 
+(* Engine-level result and mode, hoisted OUT of the functor so the
+   pure-step core (Tuna_interp.Flat) and every functor instantiation
+   share the same types without importing an instance. *)
+type result =
+  | Normal of Tuna.Tree.t * int  (* normal form, steps taken *)
+  | Loop of int  (* v1: firing re-entered in flight; steps taken *)
+  | Fuel_exhausted of int  (* steps taken before fuel ran out *)
+  | Size_exhausted of int  (* steps taken before size_cap was hit *)
+  | Deadline_exceeded of int
+      (* wall-clock budget (operator policy at the run boundary), not
+         a calculus budget: steps taken before the deadline passed *)
+
+type mode = Canonical | Sharing
+
 module Make (M : MONAD) = struct
   open Tuna.Tree
 
@@ -61,16 +75,17 @@ module Make (M : MONAD) = struct
   type host =
     site:int -> name:string -> args:t -> [ `Ok of t | `Error of string ] M.t
 
-  type result =
-    | Normal of t * int  (* normal form, steps taken *)
-    | Loop of int  (* v1: firing re-entered in flight; steps taken *)
-    | Fuel_exhausted of int  (* steps taken before fuel ran out *)
-    | Size_exhausted of int  (* steps taken before size_cap was hit *)
+  (* [result] and [mode] are hoisted to Prim_eval's top level (above
+     the functor) so the flat machine shares them; re-export here for
+     callers that reach them through an instance. *)
+  type nonrec result = result =
+    | Normal of t * int
+    | Loop of int
+    | Fuel_exhausted of int
+    | Size_exhausted of int
     | Deadline_exceeded of int
-        (* wall-clock budget (operator policy at the run boundary), not
-           a calculus budget: steps taken before the deadline passed *)
 
-  type mode = Canonical | Sharing
+  type nonrec mode = mode = Canonical | Sharing
 
   (* Digests are carried as RAW 32-BYTE STRINGS, not Digestif.SHA256.t:
      the digest module's [t] is abstract behind its signature, so each

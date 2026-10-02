@@ -61,6 +61,18 @@ journal views with replay-verify buttons, grants admin, REPL.
       the provenance map that diagnostics resolve through. `pair`/`cons`
       compile to the leaf (extensionally the fork constructor), so
       `(pair a b)` = `Fork (a, b)` at zero triage cost.
+  - **Pure-step core** (`interpreter/lib/flat.ml`, `borg/purity.borg`):
+    the RUNTIME PURITY THESIS end state — an explicit-stack (CEK-style)
+    abstract machine whose state is a value, with no monad parameter and
+    no scheduler/Lwt types. `step` performs one elementary reduction;
+    a prim call parks the machine in a `pending` value the host answers
+    out of band (`answer`), so suspension is a value. Its step counts are
+    **bit-for-bit identical** to the recursive monad engine across the
+    whole differential corpus under both semantics (v0 and v1), refereed
+    by `tests/flat_tests.ml`; `tools/flatbench` measures the two engines
+    at no step-cost premium. The server run boundary still drives the
+    recursive engine (`Prim_eval.Make(Lwt)`); wiring it to the flat core
+    is future work.
 
       Effects stay run-time-only with the `(runtime (prim "name" ...))`
       form: it threads the enclosing lambda parameter through constant

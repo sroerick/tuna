@@ -1,0 +1,107 @@
+(project tuna-purity
+ (* agent note (|2026-10-01, M10+ experiment: the RUNTIME PURITY THESIS
+    (tuna.borg docstring; .ralph/plan.md Open Questions) is realized as
+    Tuna_interp.Flat — a pure explicit-stack (CEK-style) core whose
+    state is a value, no monad parameter and no Lwt/scheduler types
+    anywhere under common/, interpreter/, compiler/.  The corpus
+    referee (tests/flat_tests.ml) requires bit-for-bit step-count
+    identity with the recursive monadic engine (Prim_eval.Make) across
+    the whole differential corpus under BOTH laws (Canonical v0 and
+    Sharing v1), plus prim/dirty/loop/determinism/step-by-step/async-
+    suspension cases — 8 green.  Cost probe (tools/flatbench): the two
+    workloads the thesis names (small-prim, prim-heavy) measure within
+    noise of the recursive engine (flat/rec ratio 0.47–1.24 across
+    1e2–2e4 boundary crossings) with identical step counts — nothing
+    aesthetic, measured.  The suspension property the explicit-stack
+    shape was chosen for is a tested fact: a prim call parks the
+    machine in a [pending] VALUE the driver answers out of band, with
+    no scheduler in the core.  Either outcome was pre-registered as a
+    valid finding; the observed one is "the pure-step core is viable",
+    recorded here and in FINDINGS.md.  Scope: the server run boundary
+    still drives Prim_eval.Make(Lwt) (the migration stage); wiring Run
+    to the flat machine is the next slice, not claimed here.|) *)
+ (doc "Tuna book chapter: purity — the pure-step core (RUNTIME PURITY THESIS). An explicit-stack abstract machine whose state is a value: one elementary reduction per step, no scheduler, no monad in the core. The corpus referees that its step counts are identical to the recursive engine under both accounting laws.")
+ (status implemented)
+ (convention ocaml-dune)
+ (section pure-step-core
+  (doc "state is a value; step : machine -> machine option; no monad, no Lwt")
+  (status implemented)
+  (details
+   (doc (|
+        The end-state shape the thesis names: [machine] is a record of
+        control (an optional [apply f x]), a continuation stack ([k]),
+        the current value, budget, and optional v1 memo state.  [step]
+        performs exactly ONE elementary reduction — a wrapper
+        application, a triage firing, or the SUSPENSION of the machine
+        on a prim call — and returns the successor state, or [None] when
+        halted/already suspended.  Nothing in the module names a
+        scheduler or a monad: it is plain OCaml.
+
+        Suspension is the payoff of the shape: a prim call parks the
+        machine in [pending_ : (site * name * args) option], a VALUE the
+        driver inspects, holds, or answers out of band via [answer].
+        [run ~host] is sugar over [step]/[answer] for a synchronous host;
+        [advance] stops at the next suspension.  A host that wants to do
+        I/O simply stops calling [step] and resumes with [answer] — no
+        callback, no monad, no concealed promise runtime.
+
+        The recursive monadic engine (Prim_eval.Make) remains the
+        production engine at the server run boundary today; this chapter
+        is the CORE half of the thesis, and wiring Run to it is the next
+        slice.  Both exist in interpreter/lib and share the hoisted
+        [Prim_eval.result] / [Prim_eval.mode] types.
+       |))))
+ (section corpus-referee
+  (doc "step counts identical to the recursive engine, both laws")
+  (status implemented)
+  (details
+   (doc (|
+        tests/flat_tests.ml is the referee: for every
+        scripts/diff-corpus entry it runs BOTH engines and requires the
+        (status, result-ternary, steps) triple to agree exactly, under
+        Canonical (v0) and Sharing (v1).  The flat machine is an
+        INDEPENDENT implementation — it re-implements the counting law
+        rather than calling the recursive engine — which is what makes
+        agreement meaningful.
+
+        The order is the verbatim one (AGENTS.md rule 4): wrappers are
+        application not steps; every triage firing costs one step and
+        one fuel; fork(stem a1,a2) evaluates a1 c THEN a2 c THEN the
+        outer apply (the [KStemFirst]/[KStemSecond] frames encode
+        exactly this); fork(fork,a3) dispatches free; prim calls are
+        fuel-free and step-free.
+
+        Plus: prim boundary (denial answer tree), dirty firing under v1
+        (a prim answered inside a firing never memoizes), loop law
+        (self-application answers Loop at the same step), determinism
+        (pure ⇒ two runs agree), step-by-step (stepping to completion
+        one reduction at a time equals [run]), async suspension (a
+        scheduler-free driver answers a parked prim).
+
+        Failure definition carried over from the thesis: if the flat
+        machine cannot reproduce corpus step counts identical to the
+        verbatim-port reference, that is a spec violation (corpus red),
+        not a design variant.  It does, so it is not.
+       |))))
+ (section measured-cost
+  (doc "the criterion is measured cost on equal step counts, not aesthetics")
+  (status implemented)
+  (details
+   (doc (|
+        tools/flatbench (dune exec tools/flatbench/flatbench.exe)
+        compares the two engines on the workloads the thesis names:
+
+          - small-prim (mostly pure calculus, few boundary crossings),
+            depths 100/500/2000;
+          - prim-heavy (many boundary crossings), n = 1000/5000/20000.
+
+        Observed 2026-10-01 (native, dev box): flat/rec wall-time ratios
+        0.47–1.24 with IDENTICAL step counts throughout — i.e. within
+        measurement noise, with the flat machine slightly ahead at the
+        largest prim-heavy size (0.89) and in v1 sharing mode (0.47).
+        The thesis pre-registered two possible outcomes (rim-handler
+        O(depth) tax vs flat constant-per-step); the observed result is
+        the flat machine is viable at no measured step-cost premium.
+        The number is what matters, not the direction.
+       |))))
+)

@@ -1,0 +1,4 @@
+(executable
+ (name flatbench)
+ (modules flatbench)
+ (libraries tuna tuna_interp unix))

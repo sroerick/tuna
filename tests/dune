@@ -14,6 +14,17 @@
  (libraries tuna tuna_interp tuna_compiler alcotest))
 
 (executable
+ (name flat_tests)
+ (modules flat_tests)
+ (libraries tuna tuna_interp alcotest))
+
+(rule
+ (alias runtest)
+ (deps flat_tests.exe (source_tree ../scripts/diff-corpus))
+ (action
+  (run %{exe:flat_tests.exe})))
+
+(executable
  (name sharing_tests)
  (modules sharing_tests)
  (libraries tuna tuna_interp tuna_compiler alcotest))

@@ -143,3 +143,47 @@ escalated).
       compiled ternary 2384 -> 542 (4.4x).  The byte-values pages stay
       strictly smaller than their tree-encoded twins (bloat test
       updated to the binary closed form).
+
+---
+
+## RUNTIME PURITY THESIS — the pure-step core (not an F-class failure)
+
+This is not one of F1–F4; it is the operator thesis itself (tuna.borg
+docstring; `.ralph/plan.md` Open Questions), and it was pre-registered
+that *either* outcome is a finding of equal validity. The instrument is
+`Tuna_interp.Flat` (interpreter/lib/flat.ml, borg/purity.borg): a pure
+explicit-stack (CEK-style) core whose state is a value, with no monad
+parameter and no Lwt/scheduler types anywhere under common/,
+interpreter/, compiler/.
+
+**Observed 2026-10-01: the pure-step core is viable.** Evidence:
+
+- **Step-count identity (the non-negotiable invariant).**
+  tests/flat_tests.ml runs BOTH engines — the flat machine and the
+  recursive `Prim_eval.Make` — on every `scripts/diff-corpus` entry and
+  requires the (status, result-ternary, steps) triple to agree exactly,
+  under Canonical (v0) AND Sharing (v1). 8/8 green. The flat machine is
+  an INDEPENDENT re-implementation of the counting law, so this is
+  agreement between two implementations, not a tautology. The corpus
+  referee is exactly the instrument the thesis designated.
+- **Measured cost (the criterion is measured cost on equal step counts,
+  not aesthetics).** tools/flatbench on the two workloads the thesis
+  names (small-prim depths 100/500/2000; prim-heavy n =
+  1000/5000/20000): flat/rec wall-time ratios 0.47–1.24, IDENTICAL
+  step counts throughout. The pre-registered asymmetry (rim-handler
+  O(depth) tax vs flat constant-per-step) was to be measured, not
+  pre-judged; observed is no measured step-cost premium, slight flat
+  advantage at the largest prim-heavy size (0.89) and in v1 (0.47).
+- **Suspension = a value (the property the shape was chosen for).** A
+  prim call parks the machine in `pending_ : (site * name * args)
+  option`; the driver answers out of band with `answer`; `run ~host` is
+  sugar over `step`/`answer` for a synchronous host. Tested: a
+  scheduler-free driver suspends, inspects, and resumes with no monad
+  or callback in the core.
+
+Consequence / scope: the server run boundary still drives
+`Prim_eval.Make(Lwt)` — the migration stage named in the thesis.
+Wiring `Run` to the flat machine is the next slice, not claimed here.
+No F-class failure was observed: the journal boundary did NOT leak
+scheduler state back into the core (the thesis's pre-registered failure
+condition); suspension being a value is what makes that so.

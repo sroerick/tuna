@@ -661,19 +661,21 @@ Ground rules:
   tunacore admits no scheduler, end state is a PURE STEP value->value
   core. `Prim_eval.Make(Lwt)` in server/lib is a migration stage.)
   M10+ experiment (NOT blocking M7/M8): effects/flat-machine bridge.
-    - Shape (2) is the headline: explicit-stack (CEK-style) evaluator,
-      pure `step : state -> state`, perform from the flat loop O(1);
-      run suspension = a state VALUE (serializable/steppable) — a
-      feature the monad/callback cannot offer without becoming it.
-    - Shape (1) local handlers is the control group (answer-in-place,
-      O(1) transport; proves the O(depth) tax was rim-design, not
-      effects-physics).
-    - Known cost asymmetry to measure, not pre-judge: rim-handler
-      effects pay O(depth) per capture (prim-heavy adversarial
-      programs), monad(Lwt)/flat pay small-per-step constant or zero;
-      criterion is MEASURED cost on small-prim + prim-heavy workloads
-      with step counts identical, nothing aesthetic.
-    - Either outcome is a finding for FINDINGS.md, equal validity.
-    - Do not de-color the core before M8 ships; do it as one corpus-
-      refereed commit once the journal tests have pinned semantics.
+    - [DONE 2026-10-01] Shape (2) shipped: `Tuna_interp.Flat` is a pure
+      explicit-stack (CEK-style) machine whose state is a value; `step`
+      is one elementary reduction, `pending` is a suspended prim (a
+      value), `answer` resumes, `run` is synchronous sugar.  Corpus
+      referee tests/flat_tests.ml: step counts bit-for-bit identical to
+      the recursive engine across the whole differential corpus under
+      BOTH laws (v0 + v1), 8/8 green.  Measured cost (tools/flatbench)
+      on small-prim + prim-heavy workloads: flat/rec ratios 0.47–1.24 at
+      identical step counts.  Chapter borg/purity.borg; finding recorded
+      in FINDINGS.md (RUNTIME PURITY THESIS section).  Next slice, not
+      claimed: wire the server Run boundary to drive Flat instead of
+      Prim_eval.Make(Lwt).
+    - Shape (1) local handlers (control group) was not built; the
+      measured result above made it non-load-bearing for the decision.
+    - The pre-registered failure (the journal boundary cannot drive a
+      pure-step core without leaking scheduler state back in) was NOT
+      observed: suspension-as-a-value is what forecloses it.
 
