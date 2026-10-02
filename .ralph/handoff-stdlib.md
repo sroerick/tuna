@@ -114,6 +114,14 @@ resurrect it.
    `tcase`/TCase confirms the shape; no upstream typecase DEF exists, so
    ours is tuna-derived and PROPERTY-PINNED (the chapter mandates the
    result+steps table at make time — the table in §1 IS it).
+7b. **Only the LEAF arm may be a bare value.** tree-case's leaf arm is
+   returned plain, but stem/fork arms are APPLIED to the parts (stem gets
+   the child, fork gets l then r). A bare application VALUE in a stem/
+   fork slot gets that value applied to the child - observed: mag-cmp's
+   eq verdict %10 applied to a stem child leaf produced %200 (i.e.
+   apply(%10, leaf) = Fork(Leaf,Leaf)). Bare values are fine in the leaf
+   slot (mag-ripple's (pair hd tl) green there); wrap stem/fork slots in
+   a lambda absorbing the parts even when ignored.
 8. **Probe gotchas**: dune runs tests from `_build/default/tests` etc.;
    `Tuna.Canon.of_string` error is a pair; tool dune stanzas need
    `(modules ...)`; deep recursion in the COMPILER overflows the OCaml

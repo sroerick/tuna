@@ -214,5 +214,32 @@ d("mag-add", lam("a", lam("b",
   L("mag-canonical",
     L(L(L("rec-fix", "mag-add-fn"), "a"), "b", "%0")))))
 
+# mag-cmp: three-way over LSB-first lists -> small nat (0 lt, 1 eq, 2
+# gt). Recursion reaches the MSB end first; the deeper verdict wins
+# unless eq, then the current position decides. One list exhausted: a
+# true bit anywhere in the other's rest decides, else eq (trailing false
+# bits inert). Junk stems read as 0.
+MC_ANY = lambda v: L("list-fold", lam2("h", "acc", L("bool-or", "h", "acc")), "%0", v)
+MC_A_LEAF = L(L("if", "%0", "%10"), MC_ANY("b"))
+# tree-case law at work: only the LEAF arm may be a bare value (it is
+# returned plain); stem/fork arms are APPLIED to the parts, so a value
+# there gets applied to the child - must be a lambda absorbing it.
+MC_B0 = dispatch("%10", lam("jb1", "%0"), lam2("j1", "j2", "%10"), "bhd")
+MC_B1 = dispatch("%110", lam("jb2", "%10"), lam2("j3", "j4", "%110"), "bhd")
+MC_BIT = dispatch(MC_B0, lam("jb0", MC_B1), lam2("j5", "j6", "%10"), "ahd")
+MC_BFORK = lam2("bhd", "btl",
+  dispatch("%0",
+    lam("c", dispatch(MC_BIT, lam("j7", "%110"), lam2("j8", "j9", MC_BIT), "c")),
+    lam2("j10", "j11", MC_BIT),
+    L("self", "atl", "btl")))
+MC_AFORK = lam2("ahd", "atl",
+  dispatch(L(L("if", "%110", "%10"), MC_ANY("a")),
+           lam("jb3", L(L("if", "%110", "%10"), MC_ANY("a"))),
+           MC_BFORK,
+           "b"))
+d("mag-cmp-fn", lam("self", lam("a", lam("b",
+  dispatch(MC_A_LEAF, lam("j12", MC_A_LEAF), MC_AFORK, "a")))))
+d("mag-cmp", lam("a", lam("b", L(L("rec-fix", "mag-cmp-fn"), "a", "b"))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")

@@ -70,6 +70,8 @@ let () =
   d "mag-ripple" "(lambda (xs) (lambda (c) ((rec-fix mag-ripple-fn) xs c)))";
   d "mag-add-fn" "(lambda (self) (lambda (a) (lambda (b) (lambda (c) ((tree-case (mag-ripple b c) (lambda (ja) (mag-ripple b c)) (lambda (ahd) (lambda (atl) ((tree-case (mag-ripple (pair ahd atl) c) (lambda (jb) (mag-ripple (pair ahd atl) c)) (lambda (bhd) (lambda (btl) (pair (bool-xor (bool-xor ahd bhd) c) (self atl btl (bool-or (bool-and ahd bhd) (bool-and c (bool-xor ahd bhd)))))))) b)))) a)))))";
   d "mag-add" "(lambda (a) (lambda (b) (mag-canonical (((rec-fix mag-add-fn) a) b %0))))";
+  d "mag-cmp-fn" "(lambda (self) (lambda (a) (lambda (b) ((tree-case ((if %0 %10) (list-fold (lambda (h) (lambda (acc) (bool-or h acc))) %0 b)) (lambda (j12) ((if %0 %10) (list-fold (lambda (h) (lambda (acc) (bool-or h acc))) %0 b))) (lambda (ahd) (lambda (atl) ((tree-case ((if %110 %10) (list-fold (lambda (h) (lambda (acc) (bool-or h acc))) %0 a)) (lambda (jb3) ((if %110 %10) (list-fold (lambda (h) (lambda (acc) (bool-or h acc))) %0 a))) (lambda (bhd) (lambda (btl) ((tree-case %0 (lambda (c) ((tree-case ((tree-case ((tree-case %10 (lambda (jb1) %0) (lambda (j1) (lambda (j2) %10))) bhd) (lambda (jb0) ((tree-case %110 (lambda (jb2) %10) (lambda (j3) (lambda (j4) %110))) bhd)) (lambda (j5) (lambda (j6) %10))) ahd) (lambda (j7) %110) (lambda (j8) (lambda (j9) ((tree-case ((tree-case %10 (lambda (jb1) %0) (lambda (j1) (lambda (j2) %10))) bhd) (lambda (jb0) ((tree-case %110 (lambda (jb2) %10) (lambda (j3) (lambda (j4) %110))) bhd)) (lambda (j5) (lambda (j6) %10))) ahd)))) c)) (lambda (j10) (lambda (j11) ((tree-case ((tree-case %10 (lambda (jb1) %0) (lambda (j1) (lambda (j2) %10))) bhd) (lambda (jb0) ((tree-case %110 (lambda (jb2) %10) (lambda (j3) (lambda (j4) %110))) bhd)) (lambda (j5) (lambda (j6) %10))) ahd)))) (self atl btl))))) b)))) a))))";
+  d "mag-cmp" "(lambda (a) (lambda (b) ((rec-fix mag-cmp-fn) a b)))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -138,6 +140,16 @@ let () =
   eval "mag-add" ["%210202100"; "%202100"]; (* 5+2 = 7 = [t,t,t] *)
   eval "mag-add" ["%0"; "%210202100"];   (* 0+5 = 5 *)
   eval "mag-add" ["%200"; "%2100"];      (* junk bit [f] + 1 -> 1 *)
+  eval "mag-cmp" ["%0"; "%0"];           (* 0 = 0 *)
+  eval "mag-cmp" ["%2100"; "%0"];        (* 1 > 0 *)
+  eval "mag-cmp" ["%0"; "%2100"];        (* 0 < 1 *)
+  eval "mag-cmp" ["%2100"; "%2100"];     (* 1 = 1 *)
+  eval "mag-cmp" ["%2100"; "%202100"];   (* 1 < 2 *)
+  eval "mag-cmp" ["%202100"; "%2100"];   (* 2 > 1 *)
+  eval "mag-cmp" ["%2102100"; "%202100"]; (* 3 > 2 *)
+  eval "mag-cmp" ["%210202100"; "%202102100"]; (* 5 < 6: low-pos difference never overrides *)
+  eval "mag-cmp" ["%210200"; "%2100"];   (* [t,f] = [t]: trailing false inert *)
+  eval "mag-cmp" ["%10"; "%0"];          (* junk stem reads 0 -> eq *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];
