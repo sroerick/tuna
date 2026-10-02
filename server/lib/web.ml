@@ -420,28 +420,34 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
   let request_handler (sa : Eio.Net.Sockaddr.stream)
       (g : Httpun.Reqd.t Gluten.reqd) : unit =
     ignore sa;
-    let reqd = g.Gluten.reqd in
-    let request = Httpun.Reqd.request reqd in
-    let body = try read_body reqd with Body_too_large -> "" in
-    let headers =
-      Httpun.Headers.to_list request.Httpun.Request.headers
-    in
-    let req =
-      { meth = Httpun.Method.to_string request.Httpun.Request.meth
-      ; target = request.Httpun.Request.target
-      ; headers
-      ; body
-      ; captures = [] }
-    in
-    let resp =
-      try handler req
-      with exn ->
-        Printf.eprintf "[tuna] handler error: %s\n%!" (Printexc.to_string exn);
-        { status = 500
-        ; headers = [ ("Content-Type", "application/json") ]
-        ; body = "{\"error\":\"internal server error\"}" }
-    in
-    safe_respond reqd resp
+    (* The handler MUST NOT block the connection's read fiber: body reads
+       are serviced by that fiber, so a synchronous handler that awaits
+       the body deadlocks.  Fork a child fiber and return immediately
+       (PP's http.ml launch pattern). *)
+    Eio.Fiber.fork ~sw (fun () ->
+        let reqd = g.Gluten.reqd in
+        let request = Httpun.Reqd.request reqd in
+        let body = try read_body reqd with Body_too_large -> "" in
+        let headers =
+          Httpun.Headers.to_list request.Httpun.Request.headers
+        in
+        let req =
+          { meth = Httpun.Method.to_string request.Httpun.Request.meth
+          ; target = request.Httpun.Request.target
+          ; headers
+          ; body
+          ; captures = [] }
+        in
+        let resp =
+          try handler req
+          with exn ->
+            Printf.eprintf "[tuna] handler error: %s\n%!"
+              (Printexc.to_string exn);
+            { status = 500
+            ; headers = [ ("Content-Type", "application/json") ]
+            ; body = "{\"error\":\"internal server error\"}" }
+        in
+        safe_respond reqd resp)
   in
   let conn_handler =
     Httpun_eio.Server.create_connection_handler
