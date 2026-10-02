@@ -79,6 +79,9 @@ let () =
   d "int-add" "(lambda (a) (lambda (b) ((lambda (ca) ((lambda (cb) ((tree-case cb (lambda (j0) cb) (lambda (sa) (lambda (ma) ((tree-case ca (lambda (j8) ca) (lambda (sb) (lambda (mb) ((if (pair sa (mag-add ma mb)) ((tree-case (pair sb (mag-sub mb ma)) (lambda (c) ((tree-case (pair %0 %0) (lambda (j3) (pair sa (mag-sub ma mb))) (lambda (j4) (lambda (j5) (pair sa (mag-sub ma mb))))) c)) (lambda (j6) (lambda (j7) (pair sa (mag-sub ma mb))))) (mag-cmp ma mb))) (not (bool-xor sa sb)))))) cb)))) ca)) (int-canonical b))) (int-canonical a))))";
   d "int-sub" "(lambda (a) (lambda (b) (int-add a (int-neg b))))";
   d "int-cmp" "(lambda (a) (lambda (b) ((lambda (ca) ((lambda (cb) ((tree-case %10 (lambda (jc2) %10) (lambda (sa) (lambda (ma) ((tree-case %10 (lambda (jc) %10) (lambda (sb) (lambda (mb) ((if ((if (mag-cmp mb ma) (mag-cmp ma mb)) sa) ((if %0 %110) sa)) (not (bool-xor sa sb)))))) cb)))) ca)) (int-canonical b))) (int-canonical a))))";
+  d "mag-mul-fn" "(lambda (self) (lambda (b) (lambda (a) (lambda (acc) ((tree-case acc (lambda (jm2) acc) (lambda (bhd) (lambda (btl) ((tree-case (self btl (pair %0 a) acc) (lambda (jm) (self btl (pair %0 a) (mag-add acc a))) (lambda (j1) (lambda (j2) (self btl (pair %0 a) acc)))) bhd)))) b)))))";
+  d "mag-mul" "(lambda (a) (lambda (b) (mag-canonical (((rec-fix mag-mul-fn) b) a %0))))";
+  d "int-mul" "(lambda (x) (lambda (y) ((lambda (ca) ((lambda (cb) ((tree-case cb (lambda (jm3) cb) (lambda (sa) (lambda (ma) ((tree-case ca (lambda (jm4) ca) (lambda (sb) (lambda (mb) (int-canonical (pair (bool-xor sa sb) (mag-mul ma mb)))))) cb)))) ca)) (int-canonical y))) (int-canonical x))))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -196,6 +199,24 @@ let () =
   eval "int-cmp" ["%20210202100"; "%202102100"]; (* 5 > 3 *)
   eval "int-cmp" ["%0"; "%202100"];           (* junk < 1 *)
   eval "int-cmp" ["%2100"; "%200"];           (* junk -0 = 0 *)
+  eval "mag-mul" ["%2100"; "%2100"];         (* 1x1 *)
+  eval "mag-mul" ["%202100"; "%2102100"];    (* 2x3 = 6 *)
+  eval "mag-mul" ["%0"; "%2102100"];         (* 0x3 *)
+  eval "int-mul" ["%200"; "%20210202100"];    (* 0 x 5 = 0 *)
+  eval "int-mul" ["int-one"; "int-one"];      (* 1 x 1 = 1 *)
+  eval "int-mul" ["%20202100"; "%202102100"];  (* 2 x 3 = 6 *)
+  eval "int-mul" ["%202102100"; "%20202100"];  (* 3 x 2 = 6 *)
+  eval "int-mul" ["%210202100"; "%202102100"];  (* -2 x 3 = -6 *)
+  eval "int-mul" ["%210202100"; "%2102102100"]; (* -2 x -3 = 6 *)
+  eval "int-mul" ["%10"; "%202100"];           (* junk x 1 = 0 *)
+  eval "int-mul" ["%2020202100"; "%2020202100"]; (* +4 x +4 = +16 *)
+  eval "mag-mul" ["%2100"; "%20202100"];      (* 1 x 4 = 4 *)
+  eval "mag-mul" ["%20202100"; "%2100"];      (* 4 x 1 = 4 *)
+  eval "mag-mul" ["%20202100"; "%202100"];     (* 4 x 2 = 8 *)
+  eval "mag-mul" ["%202100"; "%20202100"];     (* 2 x 4 = 8 *)
+  eval "mag-mul" ["%20202100"; "%20202100"];   (* 4 x 4 = 16 *)
+  eval "mag-mul" ["%20202100"; "%210200"];     (* 4 x [t,f]=1 = 4: trailing-false multiplier *)
+  eval "mag-mul" ["%2102100"; "%20202100"];    (* 3 x 4 = 12 *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];

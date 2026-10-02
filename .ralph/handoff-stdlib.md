@@ -122,6 +122,14 @@ resurrect it.
    apply(%10, leaf) = Fork(Leaf,Leaf)). Bare values are fine in the leaf
    slot (mag-ripple's (pair hd tl) green there); wrap stem/fork slots in
    a lambda absorbing the parts even when ignored.
+7c. **RECURSION FIRST-ARG LAW**: in every working rec-fix engine the
+   self-call's FIRST argument is the shrinking, dispatched data (fold:
+   tl, add/cmp: atl, ref: child of i, eq: l/r, ripsub: tl). mul-fn v1
+   violated it (dispatched on b = param 2 while arg 1 grew by
+   (pair %0 a)) and CLOSED evals hung at compile reduction forever -
+   def compiled fine, the first closed eval diverged (beware: hang
+   localizes to the eval, not the def). Fix = param order engine
+   (self b a acc), recursion (self btl (grown a) newacc).
 8. **Probe gotchas**: dune runs tests from `_build/default/tests` etc.;
    `Tuna.Canon.of_string` error is a pair; tool dune stanzas need
    `(modules ...)`; deep recursion in the COMPILER overflows the OCaml

@@ -314,5 +314,35 @@ d("int-cmp", lam("a", lam("b",
   L(lam("ca", L(lam("cb", IC_CAWORK), L("int-canonical", "b"))),
     L("int-canonical", "a")))))
 
+# int-mul: shift-and-add. mag-mul walks the multiplier bits LSB-first,
+# carrying acc; (pair %0 a) IS x2 because LSB-first; a true bit adds the
+# current shifted a under the arm lambda (false bit: pure shift, no
+# add). result sign = xor; int-canonical drops the sign on a zero mag.
+# ENGINE LAW (hard-won 2026-10-03): the self-recursion's FIRST arg is
+# always the shrinking, dispatched data (fold/add/sub/cmp/ref all obey;
+# breaking it - dispatching on a LATER param while arg 1 grows - makes
+# compile reduction of closed evals unroll forever). Hence b first.
+MUL_BFORK = lam2("bhd", "btl",
+  dispatch(L("self", "btl", L("pair", "%0", "a"), "acc"),
+           lam("jm", L("self", "btl", L("pair", "%0", "a"),
+                       L("mag-add", "acc", "a"))),
+           lam2("j1", "j2", L("self", "btl", L("pair", "%0", "a"), "acc")),
+           "bhd"))
+d("mag-mul-fn", lam("self", lam("b", lam("a", lam("acc",
+  dispatch("acc", lam("jm2", "acc"), MUL_BFORK, "b"))))))
+d("mag-mul", lam("a", lam("b",
+  L("mag-canonical",
+    L(L(L("rec-fix", "mag-mul-fn"), "b"), "a", "%0")))))
+d("int-mul", lam("x", lam("y",
+  L(lam("ca", L(lam("cb",
+    dispatch("cb", lam("jm3", "cb"),
+      lam2("sa", "ma", dispatch("ca", lam("jm4", "ca"),
+        lam2("sb", "mb",
+          L("int-canonical",
+            L("pair", L("bool-xor", "sa", "sb"), L("mag-mul", "ma", "mb")))),
+        "cb")),
+      "ca")),
+    L("int-canonical", "y"))), L("int-canonical", "x")))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
