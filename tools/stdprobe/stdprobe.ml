@@ -63,6 +63,8 @@ let () =
   d "list-eq" "(lambda (xs) (lambda (ys) (tree-eq xs ys)))";
   d "mag-canonical" "(lambda (bits) (list-fold (lambda (hd) (lambda (acc) ((tree-case ((tree-case %0 (lambda (c) (pair %10 %0)) (lambda (u) (lambda (v) %0))) hd) (lambda (c2) (pair hd acc)) (lambda (ua) (lambda (va) (pair hd acc)))) acc))) %0 bits))";
   d "int-canonical" "(lambda (n) ((tree-case (pair %0 %0) (lambda (c) (pair %0 %0)) (lambda (sign) (lambda (mag) ((lambda (m) ((tree-case (pair %0 %0) (lambda (c2) (pair (is-stem sign) m)) (lambda (u2) (lambda (v2) (pair (is-stem sign) m)))) m)) (mag-canonical mag))))) n))";
+  d "int-zero" "%200";
+  d "int-one" "%202100";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -112,6 +114,8 @@ let () =
   eval "int-canonical" ["%22002100"];      (* junk fork sign, [t] -> +1 *)
   eval "int-canonical" ["%0"];             (* junk leaf int -> +0 *)
   eval "int-canonical" ["%10"];            (* junk stem int -> +0 *)
+  eval "int-canonical" ["int-zero"];       (* alias pins *)
+  eval "int-canonical" ["int-one"];
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];

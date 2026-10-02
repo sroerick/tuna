@@ -156,5 +156,10 @@ d("int-canonical", lam("n",
                L("mag-canonical", "mag"))),
            "n")))
 
+# int constants (alias defs, same discipline as true/false); both
+# canonical from birth.
+d("int-zero", "%200")
+d("int-one", "%202100")
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
