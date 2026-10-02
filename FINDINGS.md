@@ -147,6 +147,84 @@ escalated).
 
 ---
 
+## F5 — INLINE BLOWUP (sabra stdlib)
+
+> borg/stdlib.borg pre-registration: any def > 100k compiled nodes, or
+> a consumer layer > 10x its consumed layer. If it fires, that is a
+> FINDING: the dictionary-definitions-alone thesis pays an
+> automation-shaped size tax.
+
+**Status: not triggered** (2026-10-03, L0-L3 complete in the probe).
+
+- Largest def: int-add at 22,259 nodes (engines fully inline:
+  mag-sub twice, mag-add, mag-cmp, int-canonical twice). Next:
+  int-cmp 5,613, int-mul 6,213, mag-sub 3,776, mag-add 3,089.
+  Median L2 def is in the 300-700 range. Everything is an order of
+  magnitude under the 100k tripwire, and the consumer/consumed ratio
+  stays near 1 (int-add at 22.2k consumes a ~46k lived dictionary
+  *including itself*, i.e. per-def marginal consumption is nowhere
+  near 10x).
+- Watch note: def sizes are additive-linear in cross-references
+  (every reference inlines the referenced compiled tree), so the
+  blowup risk concentrates in deep chains (int-* over mag-* over
+  bool/* + list-fold). It has not materialized at L3 depth.
+
+## F6 — NUMERIC FUEL (sabra stdlib)
+
+> borg/stdlib.borg pre-registration: 64-bit int-add exceeds 100k steps
+> under v0, or trips the compile cap on seeding. THEN: a follow-up
+> chapter adds a journaled math prim family and default arithmetic
+> moves to prims, while invariant checks stay pure.
+
+**Status: OBSERVED 2026-10-03** (tools/stdprobe/fuelprobe.exe; the
+chapter's fuel-table law 3 carries both engines' numbers here).
+
+The defining condition fired at EVERY measured size, not just 64-bit:
+even the 8-bit add is 2.5x over the 100k line. Measured runtime steps
+(lambda-wrapped programs, runtime-supplied operands, all-ones
+magnitudes = worst-case carry for add):
+
+| measurement      | v0 steps        | v1 (sharing) steps |
+|------------------|-----------------|--------------------|
+| tree-case leaf   | 1               | 1                  |
+| tree-case stem   | 2               | 2                  |
+| tree-case fork   | 3               | 3                  |
+| list-fold 10     | 1,431           | 295                |
+| list-fold 100    | 13,221          | 2,095              |
+| int-add 8-bit    | 249,749         | 3,974              |
+| int-add 32-bit   | 2,941,349       | 12,206             |
+| int-add 64-bit   | 11,106,917      | 23,182             |
+| int-mul 8-bit    | >18.4M (60-90s deadline; 1e8 fuel never needed) | 203,268 |
+| int-mul 16-bit   | >18.4M (same)   | >1.1M (600s deadline inline; throughput collapse) |
+
+- Trigger wording was "64-bit int-add > 100k v0 steps": fired, with
+  the margin the chapter asked to know (11.1M, 111x the line).
+  compile-side is unaffected: seeding (compile-IS reduction) eats
+  these costs at def time without breathing on the 1e8 compile cap -
+  the breaker line "or trips the compile cap on seeding" did NOT fire.
+- v1 sharing is the counterweight the table law asks to carry
+  alongside: 64-bit add fits comfortably at 23k steps; 8-bit mul
+  203k. But sharing is NOT a rescue: 16-bit mul under v1 died on a
+  600s wall clock having passed only 1.1M steps (memo throughput
+  collapses on this workload; steps with large unique (fun,arg) keys
+  dominate). Arithmetic at v1-useful sizes is bounded but dear.
+- Steps-per-bit under v0 is ~173k for int-add 64-bit - the inlined
+  per-position machinery (tree-case dispatch + bool gates + rec-fix
+  unfolds at ~7.7k compiled nodes per consumer) prices every bit
+  position in four-to-five-figure steps. This is the honest cost of
+  intensional sign-magnitude arithmetic through dictionary defs;
+  exactly the regime the pre-registration pre-decided prims for.
+- Consequence per the pre-registration: a follow-up chapter adds a
+  journaled math prim family (math/add, math/cmp, ...) and default
+  arithmetic moves to prims; the stdlib defs stay as the pure
+  reference (and as the replay-recomputed CHECK layer where the
+  review wants that). The dictionary-definitions-alone thesis is
+  REFUTED for arithmetic-scale numeric work and UNAFFECTED for the
+  structural vocabulary (bools/lists/tree-eq/cmp-free layers all
+  price in the hundreds-to-thousands of steps - usable).
+
+---
+
 ## RUNTIME PURITY THESIS — the pure-step core (not an F-class failure)
 
 This is not one of F1–F4; it is the operator thesis itself (tuna.borg

@@ -1,4 +1,4 @@
-(executable
- (name stdprobe)
- (modules stdprobe)
+(executables
+ (names stdprobe fuelprobe)
+ (modules stdprobe fuelprobe stddefs)
  (libraries tuna tuna_interp tuna_compiler))
