@@ -4,3 +4,13 @@
  (name tuna_server)
  (libraries tuna tuna_interp tuna_compiler tuna_store tuna_deriv dream yojson lwt
    lwt.unix unix base64))
+
+; sabra stdlib v1 (borg/stdlib.borg): embed the frozen transcript as an
+; OCaml module - the file is never read at runtime
+(rule
+ (target stdlib_embed.ml)
+ (deps ../../stdlib/v1/core.defs ../../tools/stdprobe/embed.py)
+ (action
+  (with-stdout-to %{target}
+   (run python3 %{workspace_root}/tools/stdprobe/embed.py
+     %{workspace_root}/stdlib/v1/core.defs))))

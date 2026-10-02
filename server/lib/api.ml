@@ -1316,17 +1316,8 @@ let get_value pool auth req =
    answer, 404s included, is journaled like value-get. *)
 
 (* 32 random bytes as hex (the same shape as bin/main.ml's root token) *)
-let random_token_hex () =
-  let ic = open_in_bin "/dev/urandom" in
-  Fun.protect
-    ~finally:(fun () -> close_in ic)
-    (fun () ->
-      let raw = really_input_string ic 32 in
-      let hex = Buffer.create 64 in
-      String.iter
-        (fun c -> Buffer.add_string hex (Printf.sprintf "%02x" (Char.code c)))
-        raw;
-      Buffer.contents hex)
+(* token minting moved to server/lib/tokens.ml (shared with the
+   stdlib seeder) *)
 
 let fed_value_core pool ~(auth : auth) ~hash =
   let hash = Tuna.Hash.normalize_hex hash in
@@ -1424,7 +1415,7 @@ let boot_fed_peers pool =
           let token, generated =
             match supplied with
             | Some t when t <> "" -> (t, false)
-            | _ -> (random_token_hex (), true)
+            | _ -> (Tokens.random_token_hex (), true)
           in
           Store.bootstrap_identity pool ~is_admin:false
             ~name:("fed-peer-" ^ name) ~token ()
@@ -1898,6 +1889,22 @@ let serve ~port ~bootstrap_token =
   in
   boot >>= fun pool ->
   boot_fed_peers pool >>= fun () ->
+  (* sabra stdlib v1 (borg/stdlib.borg): seed the sabralib dictionary
+     by replaying every def record through the ordinary def round.
+     Additive, skip-if-exists; each entry lands journaled +
+     attributed. *)
+  Stdlib_seed.boot pool
+    ~execute:(fun ~caller ~command ->
+      Repl_cmd.execute pool ~caller ~command ~inputs:[] ~grant_ids:[]
+        ~fuel:1_000_000 ~size_cap:1_000_000
+        ~compile_deadline:(Run.compile_deadline_now ())
+        ()
+      >>= function
+      | Ok _ -> Lwt.return (Ok ())
+      | Error (code, msg) ->
+          Lwt.return (Error (Printf.sprintf "%d: %s" code msg)))
+    ()
+  >>= fun () ->
   Dream.log "boot: identity bootstrap ok";
   Dream.serve ~interface:"127.0.0.1" ~port
     (Dream.logger

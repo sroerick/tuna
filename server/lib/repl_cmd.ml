@@ -444,6 +444,15 @@ let execute pool ~caller ~command ~inputs ~grant_ids ~fuel ~size_cap
     (fun () ->
       S.dict_list pool ~identity_id:caller
       >>= fun rows ->
+      (* borg/stdlib.borg resolution order (parse time): lambda param >
+         identity repl_dict > sabralib repl_dict > reader builtins.
+         The assembly is std rows UNDER the caller rows; the compiler
+         folds the assoc list last-of-name-wins, so identity entries
+         shadow std, undef restores it.  sabralib itself gets no
+         underlay (its rows ARE the std rows). *)
+      Stdlib_seed.dict_rows_under pool ~caller
+      >>= fun std_rows ->
+      let rows = std_rows @ rows in
       (match
          List.fold_left
            (fun acc d ->
