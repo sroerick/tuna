@@ -241,5 +241,38 @@ d("mag-cmp-fn", lam("self", lam("a", lam("b",
   dispatch(MC_A_LEAF, lam("j12", MC_A_LEAF), MC_AFORK, "a")))))
 d("mag-cmp", lam("a", lam("b", L(L("rec-fix", "mag-cmp-fn"), "a", "b"))))
 
+# mag-ripsub: subtract a single 1 from an LSB-first magnitude (borrow
+# ripple; the mag-ripple twin). 0-borrow case is handled in mag-sub
+# directly (the result passes mag-canonical, so interim non-canonical
+# forms are fine).
+RS_FORK = lam2("hd", "tl",
+  dispatch(L("pair", "%10", L("self", "tl")),
+           lam("jh", L("pair", "%0", "tl")),
+           lam2("rj1", "rj2", L("pair", "%0", "tl")),
+           "hd"))
+d("mag-ripsub-fn", lam("self", lam("xs",
+  dispatch("%0", lam("rj3", "%0"), RS_FORK, "xs"))))
+d("mag-ripsub", lam("xs",
+  L("mag-canonical", L(L("rec-fix", "mag-ripsub-fn"), "xs"))))
+
+# mag-sub: full subtractor. per position: diff = a^(b^w),
+# borrow' = (b&w) | (~a & (b|w)). CALLER CONTRACT: a >= b (via mag-cmp);
+# violating it reads as 0 past the point a runs out. Result through
+# mag-canonical (law 5).
+MS_DIFF = L("bool-xor", "ahd", L("bool-xor", "bhd", "w"))
+MS_BORROW = L("bool-or", L("bool-and", "bhd", "w"),
+              L("bool-and", L("not", "ahd"), L("bool-or", "bhd", "w")))
+MS_BNIL = dispatch("a", lam("rj4", L("mag-ripsub", "a")),
+                   lam2("rj5", "rj6", L("mag-ripsub", "a")), "w")
+MS_BFORK = lam2("bhd", "btl",
+  L("pair", MS_DIFF, L("self", "atl", "btl", MS_BORROW)))
+MS_AFORK = lam2("ahd", "atl",
+  dispatch(MS_BNIL, lam("rj7", MS_BNIL), MS_BFORK, "b"))
+d("mag-sub-fn", lam("self", lam("a", lam("b", lam("w",
+  dispatch("%0", lam("rj8", "%0"), MS_AFORK, "a"))))))
+d("mag-sub", lam("a", lam("b",
+  L("mag-canonical",
+    L(L(L("rec-fix", "mag-sub-fn"), "a"), "b", "%0")))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")

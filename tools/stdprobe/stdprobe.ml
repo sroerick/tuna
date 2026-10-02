@@ -72,6 +72,10 @@ let () =
   d "mag-add" "(lambda (a) (lambda (b) (mag-canonical (((rec-fix mag-add-fn) a) b %0))))";
   d "mag-cmp-fn" "(lambda (self) (lambda (a) (lambda (b) ((tree-case ((if %0 %10) (list-fold (lambda (h) (lambda (acc) (bool-or h acc))) %0 b)) (lambda (j12) ((if %0 %10) (list-fold (lambda (h) (lambda (acc) (bool-or h acc))) %0 b))) (lambda (ahd) (lambda (atl) ((tree-case ((if %110 %10) (list-fold (lambda (h) (lambda (acc) (bool-or h acc))) %0 a)) (lambda (jb3) ((if %110 %10) (list-fold (lambda (h) (lambda (acc) (bool-or h acc))) %0 a))) (lambda (bhd) (lambda (btl) ((tree-case %0 (lambda (c) ((tree-case ((tree-case ((tree-case %10 (lambda (jb1) %0) (lambda (j1) (lambda (j2) %10))) bhd) (lambda (jb0) ((tree-case %110 (lambda (jb2) %10) (lambda (j3) (lambda (j4) %110))) bhd)) (lambda (j5) (lambda (j6) %10))) ahd) (lambda (j7) %110) (lambda (j8) (lambda (j9) ((tree-case ((tree-case %10 (lambda (jb1) %0) (lambda (j1) (lambda (j2) %10))) bhd) (lambda (jb0) ((tree-case %110 (lambda (jb2) %10) (lambda (j3) (lambda (j4) %110))) bhd)) (lambda (j5) (lambda (j6) %10))) ahd)))) c)) (lambda (j10) (lambda (j11) ((tree-case ((tree-case %10 (lambda (jb1) %0) (lambda (j1) (lambda (j2) %10))) bhd) (lambda (jb0) ((tree-case %110 (lambda (jb2) %10) (lambda (j3) (lambda (j4) %110))) bhd)) (lambda (j5) (lambda (j6) %10))) ahd)))) (self atl btl))))) b)))) a))))";
   d "mag-cmp" "(lambda (a) (lambda (b) ((rec-fix mag-cmp-fn) a b)))";
+  d "mag-ripsub-fn" "(lambda (self) (lambda (xs) ((tree-case %0 (lambda (rj3) %0) (lambda (hd) (lambda (tl) ((tree-case (pair %10 (self tl)) (lambda (jh) (pair %0 tl)) (lambda (rj1) (lambda (rj2) (pair %0 tl)))) hd)))) xs)))";
+  d "mag-ripsub" "(lambda (xs) (mag-canonical ((rec-fix mag-ripsub-fn) xs)))";
+  d "mag-sub-fn" "(lambda (self) (lambda (a) (lambda (b) (lambda (w) ((tree-case %0 (lambda (rj8) %0) (lambda (ahd) (lambda (atl) ((tree-case ((tree-case a (lambda (rj4) (mag-ripsub a)) (lambda (rj5) (lambda (rj6) (mag-ripsub a)))) w) (lambda (rj7) ((tree-case a (lambda (rj4) (mag-ripsub a)) (lambda (rj5) (lambda (rj6) (mag-ripsub a)))) w)) (lambda (bhd) (lambda (btl) (pair (bool-xor ahd (bool-xor bhd w)) (self atl btl (bool-or (bool-and bhd w) (bool-and (not ahd) (bool-or bhd w)))))))) b)))) a)))))";
+  d "mag-sub" "(lambda (a) (lambda (b) (mag-canonical (((rec-fix mag-sub-fn) a) b %0))))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -150,6 +154,17 @@ let () =
   eval "mag-cmp" ["%210202100"; "%202102100"]; (* 5 < 6: low-pos difference never overrides *)
   eval "mag-cmp" ["%210200"; "%2100"];   (* [t,f] = [t]: trailing false inert *)
   eval "mag-cmp" ["%10"; "%0"];          (* junk stem reads 0 -> eq *)
+  eval "mag-ripsub" ["%2100"];           (* 1-1 = 0 *)
+  eval "mag-ripsub" ["%20202100"];       (* 4-1 = 3, borrow ripple *)
+  eval "mag-ripsub" ["%2102100"];        (* 3-1 = 2 *)
+  eval "mag-sub" ["%0"; "%0"];           (* 0-0 *)
+  eval "mag-sub" ["%2100"; "%2100"];     (* 1-1 *)
+  eval "mag-sub" ["%202100"; "%2100"];   (* 2-1 = 1 *)
+  eval "mag-sub" ["%2102100"; "%202100"]; (* 3-2 = 1 *)
+  eval "mag-sub" ["%20202100"; "%2100"]; (* 4-1 = 3, borrow ripple *)
+  eval "mag-sub" ["%20202100"; "%20202100"]; (* 4-4 = 0 *)
+  eval "mag-sub" ["%210202100"; "%202100"]; (* 5-2 = 3 *)
+  eval "mag-sub" ["%210200"; "%0"];      (* [t,f]-0 -> canonical [t] *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];
