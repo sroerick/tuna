@@ -1925,10 +1925,18 @@ let api_routes pool =
       ; Dream.get "/api/route/get" (with_auth pool (get_route_get pool))
       ; Dream.get "/api/route/list" (with_auth pool (get_route_list pool)) ]
 
+(* the public artifact directory (pp-slice T3): scripts/deploy/build-public.sh
+   writes src.tgz here at boot/refresh; absent file is a plain 404 *)
+let public_dir () =
+  match Sys.getenv_opt "TUNA_PUBLIC_DIR" with
+  | Some d when String.trim d <> "" -> String.trim d
+  | _ -> "/tmp/tuna-pp-public"
+
 (* assemble the full router: health + JSON API + human pages + static *)
 let router ?(static_dir = "server/static") pool =
   Dream.router
     (Dream.get "/health" (health pool)
+    :: Dream.get "/src.tgz" (Dream.from_filesystem (public_dir ()) "src.tgz")
     :: api_routes pool
     @ Pages.open_routes pool
     @ Pages.routes pool

@@ -62,6 +62,12 @@ let open_routes pool =
   [ Dream.get "/login" A.login_get
   ; Dream.post "/login" (A.login_post pool)
   ; Dream.get "/logout" (A.logout_get pool)
+  (* pp-slice T3: the hard-public face (no session).  Reserved
+     surfaces match before the route dispatcher (routes.borg law 2). *)
+  ; Dream.get "/welcome" (Public.welcome pool None)
+  ; Dream.get "/code" (Public.code pool None)
+  ; Dream.get "/agent.txt" (Public.agent_txt pool)
+  ; Dream.get "/.well-known/agent.json" (Public.agent_json pool)
   ; Dream.get "/programs/lookup"
       (A.require_auth pool (fun _user req ->
            let hash =

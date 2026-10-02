@@ -102,6 +102,15 @@ let upsert_program p ~hash ~ternary ~ir ~created_by =
   | n -> store_error "program upsert: fetch after insert gave %d rows" (List.length n)
          )
 
+(* recent programs newest-first (the /code public face; content-
+   addressed, so created_by may be NULL for pre-identity rows) *)
+let list_programs p ?(limit = 200) () =
+  Db.q ~params:[ p_int limit ] p
+    "SELECT hash, ternary, ir::text, created_by::text FROM programs \
+     ORDER BY created_at DESC LIMIT $1"
+  >>= fun rows ->
+  Lwt.return (List.map (fun r -> program_of_row r "programs") rows)
+
 (* -- runs ------------------------------------------------------------ *)
 
 module Run_status = struct
