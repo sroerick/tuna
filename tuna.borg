@@ -91,6 +91,9 @@
   (inline
    "borg/purity.borg"
   )
+  (inline
+   "borg/stdlib.borg"
+  )
  (* agent note (|2026-09-15 STORAGE SUBSTRATE WATCH (operator review
       session, PP archaeology). Pricklypear's one-tree substrate
       autopsy, tl;dr: its "everything is a tree" storage bet froze at

@@ -1,0 +1,208 @@
+(project tuna-stdlib
+ (doc "Tuna book chapter: the stdlib for the surface dialect. The
+      language's provisional name is sabra - the v0-handoff runner-up;
+      the tuna-the-system vs sabra-the-language split is the owner's
+      call, nothing in this chapter depends on it, and every artifact
+      is named stdlib regardless. This is the vocabulary layer the
+      2026-10-02 design review gated the roadmap on: substrate dogfood
+      already happened (host-written products - todo, view, trace,
+      rewind); in-calculus product logic is NOT dogfooded until this
+      chapter lands, else the language reads as unusable when it is
+      merely bare. Research question, stated so it can be refuted:
+      package-scale writability is reachable through DICTIONARY
+      DEFINITIONS ALONE - zero new surface syntax, zero
+      interpreter/, compiler/, common/ changes; the host gains
+      seeding and one resolution probe, nothing else. That is the
+      Forth endgame bet made falsifiable.")
+ (status planned)
+ (convention ocaml-dune)
+ (section stdlib-v1
+  (doc "A stdlib def is an ordinary def: compile + program upsert
+        (IR + provenance retained) + a name->tree dictionary row +
+        one journaled first-class run. No new linking semantics are
+        introduced: names resolve at parse time (capture-safe; a
+        shadowing lambda parameter wins), dictionary-bound names read
+        as tree literals, and cross-def references inline the
+        referenced compiled trees at def time. The stdlib is a seeded
+        dictionary owned by a dedicated identity - plus probe order.
+        Conventions are INTENSIONAL per the vendored upstream
+        conventions README: booleans, options, lists, naturals as
+        tree structure directly, because the triage rules give
+        structural dispatch free where Church-style extensional
+        encodings pay for it at every use. Extensional stays where it
+        already lives: differential corpus fixtures (add_ch_2_3,
+        church3_succ_zero).")
+  (status planned)
+  (subsection conventions
+   (status planned)
+   (details
+    (doc (|
+      Life on an untyped substrate: conventions COLLIDE and that is
+      recorded, not prevented. false = nil = none = leaf; some leaf =
+      true; pair (false, false) *is* the 2-list and also the canonical
+      int zero the moment anything reads it as one. Predicates and
+      canonical forms are the tools, laws below say which predicate
+      reads which convention.
+
+      1. BOOL. false = 0, true = %10 (leaf; stem leaf) - upstream's
+         two smallest trees, distinguished by a single triage
+         reduction. The cstr byte codec already bakes the same
+         assignment in (byte-values chapter), so ONE encoding of bool
+         exists in the system, not two.
+      2. LIST. nil = leaf, cons = fork hd tl - upstream's algebraic
+         list. cstr strings already ride the identical convention
+         (string = list of chars, char = little-endian bit list of
+         bools): one list law, never a second one.
+      3. OPTION. none = leaf, some x = stem x (upstream). Collides
+         with bools by design; option answers are case-read, never
+         boolean-tested.
+      4. SMALL NAT. stem chains (0 = leaf, n+1 = stem n) for tags
+         and counters only. Constructors cost zero triage: succ IS
+         the apply-Leaf wrapper, pair IS Leaf - the byte-values law
+         4 cousin; costs live in consumers, never constructors.
+      5. INT. sign-magnitude: fork of bool sign and a magnitude bit
+         list, least-significant first (aligned with the cstr char
+         bit order), high-order false bits stripped by
+         int-canonical; both zeros one form (fork false nil).
+         Decimal/currency conventions are NOT here - a future ledger
+         chapter owns amounts-as-fixed-point-cents, so the pure
+         numeric core stays a pure integer core.
+      6. DECIDED OUT OF V1 (not gaps; adding one is a book change
+         citing measured need): record/assoc conventions; string
+         payload ops (byte-values + prim world already - pure string
+         ops are priced like unary bloat per byte-values law 4);
+         journaled math prims (see the numeric-fuel failure below);
+         surface sugar - letrec, list or number literals - belongs
+         to a DIALECT chapter, not here. |))))
+  (subsection core-v1
+   (status planned)
+   (details
+    (doc (|
+      Layered so every entry can name what it consumes; every def
+      written in TODAY's dialect (lambda, application, %ternary pins,
+      strings, pair/cons).
+
+      L0 PINS (verbatim-port rule, AGENTS 3): not = %22102000,
+      size 8, ported as-is - acceptance M3 pins not true -> leaf
+      in 2 steps (rules 3b then 3a) and the corpus already carries
+      id_not. true and false as named alias defs so docs, agents and
+      tests can cite them.
+
+      L1 STRUCTURE: tree-case - the three-arm typecase over
+      leaf/stem/fork, branch functions receiving the parts (stem
+      takes (child), fork takes (l r), leaf takes the branch value
+      plain). THE pattern-calculus showpiece and the single load-
+      bearing bridge into the lambda surface: everything structural
+      is defined through it. No published upstream tree is vendored
+      for the typecase (reference READMEs checked), so this def is
+      tuna-derived and PROPERTY-PINNED: a result+steps table over
+      sample leaf/stem/fork inputs lands in this chapter at make
+      time, and a published upstream version supersedes ours per the
+      verbatim-port rule. leaf?/stem?/fork? predicates join it, and
+      the bool core: if (bool then/else, landing on the upstream
+      single-triage dispatch).
+
+      L2 LISTS: list-fold FIRST - the recursion idiom; consumers
+      are defined via fold wherever expressible so the stdlib keeps
+      ONE recursion shape instead of five (fewer distinct closures
+      means less bracket-abstraction blowup and a sharing-v1
+      friendlier graph). Then list-length, list-reverse,
+      list-append, list-map, list-ref (option answer per law 3),
+      list-eq, and tree-eq - generic structural equality over
+      arbitrary trees including programs, itself a property table
+      class (T-family style) at make time.
+
+      L3 INTS: int-canonical, int-zero, int-one, int-neg, int-add,
+      int-sub (add + neg), int-cmp, int-mul - carry-propagating
+      folds over the magnitude bit lists; every op returns canonical
+      form (law 5), so no consumer can accumulate representation
+      debt. mul priced honestly: it is the first entry where fuel
+      cost is expected to be interesting - see the FUEL TABLE law. |))))
+  (subsection seeding
+   (status planned)
+   (details
+    (doc (|
+      SOURCE: stdlib/v1/core.defs - def-commands in the existing
+      REPL grammar, one per record, blank-line separated; file
+      order = compile order = topological order (pins before
+      tree-case before consumers). The file IS a replayable REPL
+      transcript; no second grammar ever.
+
+      OWNER: a dedicated non-admin identity sabralib (booted like
+      fed peers; token once, rotation via env). Seeding replays each
+      def through the ordinary def round - so every stdlib entry
+      lands as a program row (hash-citable, IR + provenance
+      attached), a repl_dict row, and a journaled run attributed to
+      sabralib, parent-chained in file order. The stdlib's own
+      installation is therefore auditable and deriv-able like
+      everything else - no privileged write path.
+
+      RESOLUTION ORDER (parse time; the ONLY new host behavior):
+      lambda param > identity repl_dict > sabralib repl_dict >
+      reader builtins. The server assembles the effective
+      dictionary as std-under-identity - one name->tree map, the
+      compiler untouched. Consequence, adopted from PP's boot law:
+      seeding is ADDITIVE, skip-if-exists, never overwrite; an
+      identity that pins its own not shadows std locally, undef
+      restores it. Explicit reseed (admin) touches only the
+      sabralib dictionary - PP's reseed-package escape hatch,
+      carried over.
+
+      RELEASE MANIFEST: stdlib/v1/manifest pins name -> ternary
+      size -> program hash for every def; the verify script
+      recomputes from the store and diffs. A release whose content
+      changes lands as new hashes and fresh rows - the manifest
+      bumps, history stays content-addressed, nothing mutates. |))))
+  (subsection acceptance
+   (status planned)
+   (details
+    (doc (|
+      1. MANIFEST DRIFT. The implement-size table lands in this
+         chapter (every def: name, size, program hash);
+         scripts/verify-8-stdlib.sh recomputes from the live store
+         and diffs - exit 1 on any drift.
+      2. DIFFERENTIAL. Every def is exercised by at least one new
+         corpus entry; the 26-entry corpus grows; three engines
+         agree result + step count (v0 law; v1 distinct counts
+         recorded alongside per sharing.borg, never equality).
+      3. FUEL TABLE (load-bearing, recorded here at make time):
+         measured v0 steps for tree-case arm dispatch, list-fold
+         over 10/100-element lists, int-add over 8/32/64-bit
+         operands, int-mul over 8/16-bit; v1 sharing numbers beside
+         them. This table feeds both pre-registered failures.
+      4. SEED DISCIPLINE. Double boot: identical rows, zero
+         duplicates, every def journaled and attributed. Local-pin
+         shadow test: pinning a std name in a user identity wins;
+         undef reveals std. Reseed is explicit-only and touches
+         only sabralib's dictionary.
+      5. LEDGER BRIDGE. One mole-scenario run: a posting list folded
+         to a balance by the int core, status normal, replay-
+         verified, deriv-sealed and deriv-check exit 0 - the first
+         product candidate the 2026-10-02 review named, proving the
+         stdlib carries a validator-shaped workload end to end.
+      6. CORE UNTOUCHED. interpreter/, compiler/, common/ stay
+         byte-identical in the landing commit; host delta = seeding
+         + probe order only. If any stdlib def requires a core
+         change to work, that is a FINDING, not a patch. |))))
+  (subsection pre-registered-failures
+   (status planned)
+   (details
+    (doc (|
+      F5 INLINE BLOWUP. Def-time inlining multiplies compiled size
+      through def chains (the body of B lands inside every A that
+      consumes it). TRIGGER: any v1 stdlib def compiles above 100k
+      nodes, or a consumer layer exceeds 10x the size of the layer
+      it consumes. THEN: the dictionary-as-module model is
+      insufficient as-is - record in FINDINGS.md and take a linking
+      chapter; do NOT rescue by growing kernel vocabulary here.
+
+      F6 NUMERIC FUEL - the purity flip, pre-decided 2026-10-02
+      review (pure-checks / prim-aggregates). TRIGGER: 64-bit
+      int-add exceeds 100k steps under v0, or trips the compile cap
+      on seeding. THEN: a follow-up chapter adds a journaled math
+      prim family (math/add, math/cmp, ...) and default arithmetic
+      moves to prims - while INVARIANT checks (ledger balance
+      rules) stay pure, so replay recomputes the checks that
+      matter and trusts recorded answers exactly where the review
+      drew that line. Fuel table law 3 carries both engines'
+      numbers into the finding. |))))))
