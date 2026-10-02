@@ -300,5 +300,19 @@ d("int-add", lam("a", lam("b",
 d("int-sub", lam("a", lam("b",
   L("int-add", "a", L("int-neg", "b")))))
 
+# int-cmp: small-nat three-way (0 lt, 1 eq, 2 gt), signs first. diff
+# signs -> sa decides (negative loses); same sign -> mag-cmp, magnitude
+# args flipped when both negative.
+IC_FORKB = lam2("sb", "mb",
+  L(L("if", L(L("if", L("mag-cmp", "mb", "ma"), L("mag-cmp", "ma", "mb")), "sa"),
+       L(L("if", "%0", "%110"), "sa")),
+    L("not", L("bool-xor", "sa", "sb"))))
+IC_FORKA = lam2("sa", "ma",
+  dispatch("%10", lam("jc", "%10"), IC_FORKB, "cb"))
+IC_CAWORK = dispatch("%10", lam("jc2", "%10"), IC_FORKA, "ca")
+d("int-cmp", lam("a", lam("b",
+  L(lam("ca", L(lam("cb", IC_CAWORK), L("int-canonical", "b"))),
+    L("int-canonical", "a")))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")

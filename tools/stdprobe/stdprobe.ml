@@ -78,6 +78,7 @@ let () =
   d "mag-sub" "(lambda (a) (lambda (b) (mag-canonical (((rec-fix mag-sub-fn) a) b %0))))";
   d "int-add" "(lambda (a) (lambda (b) ((lambda (ca) ((lambda (cb) ((tree-case cb (lambda (j0) cb) (lambda (sa) (lambda (ma) ((tree-case ca (lambda (j8) ca) (lambda (sb) (lambda (mb) ((if (pair sa (mag-add ma mb)) ((tree-case (pair sb (mag-sub mb ma)) (lambda (c) ((tree-case (pair %0 %0) (lambda (j3) (pair sa (mag-sub ma mb))) (lambda (j4) (lambda (j5) (pair sa (mag-sub ma mb))))) c)) (lambda (j6) (lambda (j7) (pair sa (mag-sub ma mb))))) (mag-cmp ma mb))) (not (bool-xor sa sb)))))) cb)))) ca)) (int-canonical b))) (int-canonical a))))";
   d "int-sub" "(lambda (a) (lambda (b) (int-add a (int-neg b))))";
+  d "int-cmp" "(lambda (a) (lambda (b) ((lambda (ca) ((lambda (cb) ((tree-case %10 (lambda (jc2) %10) (lambda (sa) (lambda (ma) ((tree-case %10 (lambda (jc) %10) (lambda (sb) (lambda (mb) ((if ((if (mag-cmp mb ma) (mag-cmp ma mb)) sa) ((if %0 %110) sa)) (not (bool-xor sa sb)))))) cb)))) ca)) (int-canonical b))) (int-canonical a))))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -184,6 +185,17 @@ let () =
   eval "int-sub" ["%202100"; "%2102100"];     (* 1 - -1 = 2 *)
   eval "int-sub" ["%0"; "%200"];            (* junk + 0 = 0 *)
   eval "int-sub" ["%202020202100"; "%20210202100"]; (* 8 - 5 = 3 *)
+  eval "int-cmp" ["%202100"; "%202100"];       (* 1 = 1 *)
+  eval "int-cmp" ["%202100"; "%2102100"];      (* 1 > -1 *)
+  eval "int-cmp" ["%2102100"; "%202100"];      (* -1 < 1 *)
+  eval "int-cmp" ["%2102100"; "%210202100"];   (* -1 > -2: negative flip *)
+  eval "int-cmp" ["%210202100"; "%2102100"];   (* -2 < -1 *)
+  eval "int-cmp" ["%200"; "%200"];            (* 0 = 0 *)
+  eval "int-cmp" ["%200"; "%202100"];         (* 0 < 1 *)
+  eval "int-cmp" ["%200"; "%2102100"];        (* 0 > -1 *)
+  eval "int-cmp" ["%20210202100"; "%202102100"]; (* 5 > 3 *)
+  eval "int-cmp" ["%0"; "%202100"];           (* junk < 1 *)
+  eval "int-cmp" ["%2100"; "%200"];           (* junk -0 = 0 *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];
