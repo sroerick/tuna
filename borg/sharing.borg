@@ -14,7 +14,13 @@
    Update 2026-09-18: the owner took the call - engine split
    accepted, F1 recorded OBSERVED in FINDINGS.md; v0 stays the API
    default and the memo stays per-run for now; cross-run
-   demand-memo is planned below (owner-interested, not scheduled).|) *)
+   demand-memo is planned below (owner-interested, not scheduled).
+
+   Update 2026-10-02: demand-memo shipped in the conservative
+   leaning (own-garden, free hits, replay-without-garden enforcing
+   result identity; step counts on demand rows are environment
+   facts).  Opt-in per request under v1; see the demand-memo
+   section.|) *)
  (doc "Tuna book chapter: sharing - the distinct-work semantics (v1): memoized firings, finite loop answers, prim exemption, and per-version replay. One evaluator, two accounting laws.")
  (status implemented)
  (convention ocaml-dune)
@@ -160,8 +166,8 @@
         table costs O(distinct answers) memory per run.
          |))))
  (section demand-memo
-  (doc "Cross-run sharing of clean firings (planned; owner-interested 2026-09-18, not scheduled)")
-  (status planned)
+  (doc "Cross-run sharing of clean firings (the garden; owner gated 2026-09-18, leaning shipped 2026-10-02)")
+  (status implemented)
   (details
    (doc (|
         v1's memo is per-run on purpose: prim answers are per-run facts
@@ -178,17 +184,42 @@
         untouched by construction - the shared table is pure-cache
         only.
 
-        Open with the owner: the trust model (whose cached answers
-        may a run accept - own-garden only, verified-only where a
-        cached answer must carry a replay receipt, or anyone's), the
-        price of a cache hit (free like v1's per-run hits, or a
-        metered read), and the replay story (a row that consumed
-        shared answers replays under which law when the shared table
-        has since evolved - current leaning: replay re-executes and
-        treats the shared table as a host, so identity stays
-        per-run).  Federation interplay: the shared memo is the
-        natural export surface once M12 exists; sequencing
-        demand-memo after federation keeps the trust question from
-        being answered twice.
+        Shipped form (the conservative leaning, opt-in per request):
+        "demand": true on POST /api/runs under semantics v1 (demand
+        under v0 is ignored - there is no memo law to share).  The
+        open owner questions, and the answers now in force:
+
+        - Trust model: OWN-GARDEN.  The demand_memo table is keyed by
+          caller, and a run only consults rows its own identity
+          wrote.  A run never consumes another identity's answers;
+          verified-only and anyone's remain future upgrades, not
+          defaults.
+        - Price of a hit: FREE, exactly like a v1 per-run memo hit.
+          A garden hit costs no step and no fuel; the run row records
+          demand_hits so the accounting is visible.
+        - Replay story: replay re-executes WITHOUT the garden and
+          treats it as a host.  A demand run's step count is an
+          environment fact (how warm the garden was), not a calculus
+          fact, so replay skips the step-count identity check for
+          demand_sharing rows and still enforces status + result
+          identity: clean firings are pure, so the RESULT must
+          reproduce bit-for-bit regardless of cache warmth.  An
+          aborted replay stays verdict-unverifiable as before.
+
+        Mechanics: the pure core stays I/O-free (purity thesis) -
+        Flat.start takes ?garden (preloaded (fun,arg)->answer rows,
+        hex-decoded at the boundary); share_gate consults the garden
+        only on a per-run miss, and clean_firings exports the run's
+        clean answers for the boundary to persist.  The driver
+        (Run.execute) loads the caller's garden before the run and
+        upserts newly-clean firings after it (idempotent re-put keeps
+        garden hits warm).  Storage: demand_memo (caller, fun_hash,
+        arg_hash) -> result_hash + result_ternary; runs gained
+        demand_sharing + demand_hits.
+
+        Federation interplay stands: the shared memo is the natural
+        export surface once the trust question has a verified-only
+        answer; own-garden keeps that answer open by shipping
+        nothing cross-identity today.
        |))))
 )

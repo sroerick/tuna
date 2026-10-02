@@ -1,9 +1,21 @@
 # Tests
 
 Alcotest suites; `dune runtest` runs them all. PG-gated integration
-suites (store, substrate, m11, fed, deriv) go through
+suites (store, substrate, m11, fed, deriv, demand) go through
 `scripts/test-store.sh`: postgres down -> skipped silently, postgres up
 -> each suite gets its own scratch database.
+
+## demand suite (2026-10-02)
+
+`tests/demand_tests.ml` pins the demand-memo boundary
+(borg/sharing.borg §demand-memo) end-to-end through `Run.execute_run`:
+a clean firing computed by run 1 is cached in the caller's garden and a
+later run of the same program serves it free (fewer distinct firings,
+same result hash); a program whose only firing answers a prim persists
+NOTHING (the hardened dirty rule - the prim re-executes live on every
+run); identities do not see each other's gardens (a warms, b stays
+cold, b's own repeat hits); and the feature is off by default (no
+garden read, no garden write).
 
 ## deriv PG e2e (un-deferred 2026-10-01)
 

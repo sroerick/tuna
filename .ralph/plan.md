@@ -682,3 +682,23 @@ Ground rules:
       pure-step core without leaking scheduler state back in) was NOT
       observed: suspension-as-a-value is what forecloses it.
 
+
+## Demand-memo (shipped 2026-10-02)
+
+- borg/sharing.borg §demand-memo: planned -> implemented, in the
+  conservative leaning recorded in the chapter: own-garden trust
+  (demand_memo keyed by caller), free hits (demand_hits on the run
+  row), replay re-executes WITHOUT the garden (demand rows skip the
+  step-count identity check; status + result identity still enforced).
+- Opt-in: "demand": true on POST /api/runs under semantics v1;
+  demand under v0 is ignored.  Off by default: no garden read, no
+  garden write.
+- Purity seam held: Flat.start takes ?garden (preload); share_gate
+  consults it only on a per-run miss; clean_firings exports the run's
+  clean answers; Run.execute loads/persists around the pure core - the
+  core stays I/O-free.
+- Tests: tests/demand_tests.ml (PG-gated, 4 cases: cache+reuse, dirty
+  never cached, own-garden scope, off by default).  Battery green:
+  dune runtest, differential 24/24, smoke-api 14, smoke-ui 17,
+  verify-1..7, HTTP e2e (cold 6 steps -> warm 0 steps/1 hit, same
+  result hash).  borge lint clean.

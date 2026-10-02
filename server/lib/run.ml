@@ -218,8 +218,8 @@ let mode_of_semantics = function
   | s -> invalid_arg (Printf.sprintf "unknown semantics %S" s)
 
 let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
-    ?(parent_run_id = None) ?(semantics = "v0") ?(trace_cap = 0) ~fuel
-    ~size_cap () =
+    ?(parent_run_id = None) ?(semantics = "v0") ?(trace_cap = 0)
+    ?(demand = false) ~fuel ~size_cap () =
   let input_hashes = List.map Tuna.Hash.hex_of_tree inputs in
   let rec store_inputs = function
     | [] -> Lwt.return ()
@@ -357,9 +357,35 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
         Some (Eng.new_trace ~cap:(min trace_cap (trace_max_events ())) ())
       else None
     in
-    Eng.eval ~host ~mode:(mode_of_semantics semantics) ~fuel ~size_cap ~deadline
-      ~program ?trace inputs
-  >>= fun result ->
+    (* demand-memo (borg/sharing.borg): only under v1 (the memo law) and
+       only when the request opts in.  Preload the caller's garden (own-
+       garden scope); the pure core reads it but does no I/O. *)
+    let use_demand = demand && semantics = "v1" in
+    (if use_demand then S.demand_memo_list pool ~caller ()
+     else Lwt.return [])
+    >>= fun garden ->
+    (if use_demand then
+       Eng.eval_result ~host ~mode:(mode_of_semantics semantics) ~fuel ~size_cap
+         ~deadline ~program ~garden ?trace inputs
+     else
+       Eng.eval ~host ~mode:(mode_of_semantics semantics) ~fuel ~size_cap ~deadline
+         ~program ?trace inputs
+       >>= fun result -> Lwt.return (result, 0, []))
+  >>= fun (result, demand_hits, clean) ->
+  (* persist newly-clean firings into the garden: only v1 demand runs,
+     and only pure (never-prim-touched) firings, so grant liveness and
+     the audit trail are untouched by construction. *)
+  (if use_demand && clean <> [] then
+     let rec put = function
+       | [] -> Lwt.return ()
+       | (fh, ah, rt) :: rest ->
+           S.demand_memo_put pool ~caller ~fun_hash:fh ~arg_hash:ah
+             ~result_hash:(Tuna.Hash.hex_of_string rt) ~result_ternary:rt
+           >>= fun () -> put rest
+     in
+     put clean
+   else Lwt.return ())
+  >>= fun () ->
   let status, result_ternary, steps =
     match result with
     | Eng.Normal (t, s) ->
@@ -373,6 +399,11 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
   in
   S.update_run_result pool ~id:run_id ~status ?result_ternary:result_ternary
     ?step_count:(Some steps) ()
+    >>= fun () ->
+    (if use_demand then
+       S.update_run_demand pool ~id:run_id
+         ~demand_sharing:true ~demand_hits
+     else Lwt.return ())
     >>= fun () ->
     (match trace with
      | None -> Lwt.return ()
@@ -417,7 +448,8 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
    the M9 REPL's journaled rounds (parent_run_id chains the per-session
    transcript). *)
 let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
-    ?(parent_run_id = None) ?(semantics = "v0") ?(trace_cap = 0) ~size_cap () :
+    ?(parent_run_id = None) ?(semantics = "v0") ?(trace_cap = 0)
+    ?(demand = false) ~size_cap () :
     (S.run * S.journal list, int * string) result Lwt.t =
   if fuel < 1 || size_cap < 1 then
     Lwt.return (Error (400, "fuel and size_cap must be >= 1"))
@@ -464,7 +496,7 @@ let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
                           | Ok program ->
                                 execute pool ~caller ~grant_ids ~program_hash
                                   ~program ~ir_json:prog.S.p_ir ~inputs:input_trees
-                                  ~parent_run_id ~semantics ~trace_cap ~fuel
-                                  ~size_cap ()
+                                  ~parent_run_id ~semantics ~trace_cap ~demand
+                                  ~fuel ~size_cap ()
                               >>= fun (row, js) -> Lwt.return (Ok (row, js))))))
 

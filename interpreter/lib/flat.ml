@@ -70,10 +70,16 @@ type sharing = {
   node_digests : (t, string) Hashtbl.t
       (* physical node -> raw content digest, once per object *)
 ; answers : (string * string, t) Hashtbl.t
-      (* firing pair -> completed answer *)
+      (* firing pair -> completed answer (THIS run's clean firings) *)
 ; inflight : (string * string, int) Hashtbl.t
       (* firing pair -> host tick at entry (loop + purity bookkeeping) *)
 ; mutable host_tick : int  (* monotonic count of host answers *)
+; mutable garden : (string * string, t) Hashtbl.t
+      (* demand-memo (borg/sharing.borg): preloaded CLEAN firings from
+         the caller's garden, keyed by raw content digests.  Empty =
+         the feature is off.  Purely a host fact: the core reads it but
+         never does I/O; the driver preloads and persists it. *)
+; mutable garden_hits : int  (* firings answered from the garden *)
 }
 
 type machine = {
@@ -114,16 +120,33 @@ let rec digest_of s (t : t) =
 
 (* -- start ------------------------------------------------------------- *)
 
-let start ?(mode = Canonical) ?trace ~fuel ~size_cap ~program ~args () =
+let start ?(mode = Canonical) ?trace ?(garden = []) ~fuel ~size_cap ~program
+    ~args () =
   let sharing =
     match mode with
     | Canonical -> None
     | Sharing ->
+        (* garden rows arrive as (fun_hex, arg_hex, result_ternary); the
+           memo keys are RAW digest strings, so convert here.  An
+           unparseable result is skipped, never inserted. *)
+        let g = Hashtbl.create 4096 in
+        List.iter
+          (fun (fh, ah, rt) ->
+            match Tuna.Canon.of_string rt with
+            | Ok t ->
+                Hashtbl.replace g
+                  ( Digestif.SHA256.to_raw_string (Digestif.SHA256.of_hex fh)
+                  , Digestif.SHA256.to_raw_string (Digestif.SHA256.of_hex ah) )
+                  t
+            | Error _ -> ())
+          garden;
         Some
           { node_digests = Hashtbl.create 4096
           ; answers = Hashtbl.create 4096
           ; inflight = Hashtbl.create 64
-          ; host_tick = 0 }
+          ; host_tick = 0
+          ; garden = g
+          ; garden_hits = 0 }
   in
   let m =
     { f = None
@@ -156,6 +179,26 @@ let start ?(mode = Canonical) ?trace ~fuel ~size_cap ~program ~args () =
 let steps m = m.steps
 let value m = m.value
 let result m = m.done_
+
+(* demand-memo interface for the HOST DRIVER (borg/sharing.borg): how
+   many firings were answered from the garden, and the run's clean
+   firings rendered as (fun_hex, arg_hex, result_ternary) for
+   persistence.  The core computes; the driver persists.  Both are
+   no-ops / empty under Canonical mode. *)
+let garden_hits m =
+  match m.sharing with Some s -> s.garden_hits | None -> 0
+
+let clean_firings m : (string * string * string) list =
+  match m.sharing with
+  | None -> []
+  | Some s ->
+      let hex raw =
+        Digestif.SHA256.to_hex (Digestif.SHA256.of_raw_string raw)
+      in
+      Hashtbl.fold
+        (fun (fh, ah) t acc ->
+          (hex fh, hex ah, Tuna.Canon.encode t) :: acc)
+        s.answers []
 
 (* boundary abort: finalize the machine as a non-normal result (used by
    the host driver for a wall-clock deadline — operator policy, not a
@@ -236,23 +279,37 @@ let share_gate m a c =
            | None -> ());
           `Hit answer
       | None -> (
-          match Hashtbl.find_opt s.inflight key with
-          | Some _ ->
+          (* demand-memo (borg/sharing.borg): a clean firing recorded by
+             an earlier run in the caller's garden.  Free, exactly like a
+             per-run hit; recorded into the per-run table so repeats in
+             this run are also free.  The tag distinguishes a garden hit
+             for the run-row bookkeeping and the replay story. *)
+          match Hashtbl.find_opt s.garden key with
+          | Some answer ->
+              s.garden_hits <- s.garden_hits + 1;
+              Hashtbl.replace s.answers key answer;
               (match m.trace with
-               | Some tr ->
-                   tr.Prim_eval.tr_loop <- true;
-                   emit m Prim_eval.Kloop "" (Some (fst key)) (Some (snd key))
-                     "in-flight re-entry"
+               | Some tr -> tr.Prim_eval.tr_hits <- tr.Prim_eval.tr_hits + 1
                | None -> ());
-              `Loop
+              `Hit answer
           | None -> (
-              match fire m with
-              | `Fuel -> `Fuel
-              | `Fresh ->
-                  Hashtbl.replace s.inflight key s.host_tick;
-                  emit m Prim_eval.Kcharge (Prim_eval.triage_name a c)
-                    (Some (fst key)) (Some (snd key)) "";
-                  `Fresh s.host_tick)))
+              match Hashtbl.find_opt s.inflight key with
+              | Some _ ->
+                  (match m.trace with
+                   | Some tr ->
+                       tr.Prim_eval.tr_loop <- true;
+                       emit m Prim_eval.Kloop "" (Some (fst key)) (Some (snd key))
+                         "in-flight re-entry"
+                   | None -> ());
+                  `Loop
+              | None -> (
+                  match fire m with
+                  | `Fuel -> `Fuel
+                  | `Fresh ->
+                      Hashtbl.replace s.inflight key s.host_tick;
+                      emit m Prim_eval.Kcharge (Prim_eval.triage_name a c)
+                        (Some (fst key)) (Some (snd key)) "";
+                      `Fresh s.host_tick))))
 
 let share_finish m a c ~tick0 r =
   match m.sharing with

@@ -101,14 +101,34 @@ module Make (M : MONAD) = struct
   let eval ?(host : host =
              fun ~site:_ ~name:_ ~args:_ ->
                M.return (`Error "no prim host at this boundary"))
-      ?(deadline = Float.infinity) ?(mode = Canonical) ?trace ~fuel ~size_cap
-      ~program args : result M.t =
-    let m = Flat.start ~mode ?trace ~fuel ~size_cap ~program ~args () in
+      ?(deadline = Float.infinity) ?(mode = Canonical) ?trace ?(garden = [])
+      ~fuel ~size_cap ~program args : result M.t =
+    let m = Flat.start ~mode ?trace ~garden ~fuel ~size_cap ~program ~args () in
     M.catch
       (fun () ->
         M.bind (drive ~deadline ~host m) (fun () ->
             M.return
               (Option.value (Flat.result m)
                  ~default:(Prim_eval.Normal (Flat.value m, Flat.steps m)))))
+      (fun e -> M.bind (M.return ()) (fun () -> raise e))
+
+  (* eval_result: like [eval], but also returns the demand-memo
+     bookkeeping (garden hits, clean firings) for the host to persist.
+     The run boundary uses this when demand sharing is enabled. *)
+  let eval_result ?(host : host =
+                    fun ~site:_ ~name:_ ~args:_ ->
+                      M.return (`Error "no prim host at this boundary"))
+      ?(deadline = Float.infinity) ?(mode = Canonical) ?trace ?(garden = [])
+      ~fuel ~size_cap ~program args :
+      (result * int * (string * string * string) list) M.t =
+    let m = Flat.start ~mode ?trace ~garden ~fuel ~size_cap ~program ~args () in
+    M.catch
+      (fun () ->
+        M.bind (drive ~deadline ~host m) (fun () ->
+            let r =
+              Option.value (Flat.result m)
+                ~default:(Prim_eval.Normal (Flat.value m, Flat.steps m))
+            in
+            M.return (r, Flat.garden_hits m, Flat.clean_firings m)))
       (fun e -> M.bind (M.return ()) (fun () -> raise e))
 end

@@ -352,7 +352,9 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                                  ; first_diff_path = ""
                                  ; recorded_hash
                                  ; replayed_hash = replayed })
-                          else if Some (outcome_steps outcome) <> run.S.r_step_count
+                          else if
+                            (not run.S.r_demand_sharing)
+                            && Some (outcome_steps outcome) <> run.S.r_step_count
                           then
                             Lwt.return
                               (Diverged

@@ -61,6 +61,16 @@ journal views with replay-verify buttons, grants admin, REPL.
       the provenance map that diagnostics resolve through. `pair`/`cons`
       compile to the leaf (extensionally the fork constructor), so
       `(pair a b)` = `Fork (a, b)` at zero triage cost.
+  - **Demand-memo** (`borg/sharing.borg` §demand-memo): opt-in
+    cross-run sharing of CLEAN firings ("demand": true under v1).
+    Own-garden trust model (the `demand_memo` table is keyed by caller;
+    a run only consumes answers its own identity produced), hits are
+    free (no step, no fuel; `demand_hits` on the run row), and the
+    dirty rule hardens to a boundary law — a firing whose evaluation
+    touched a prim is never cached, so grant liveness and the journal
+    audit are untouched by construction. Replay re-executes without the
+    garden: a demand run's step count is an environment fact, but its
+    result must reproduce bit-for-bit.
   - **Pure-step core** (`interpreter/lib/flat.ml`, `borg/purity.borg`):
     the RUNTIME PURITY THESIS end state — an explicit-stack (CEK-style)
     abstract machine whose state is a value, with no monad parameter and
@@ -96,7 +106,7 @@ tuna eval-compiled <ternary> [args...] [--fuel N] [--cap N]
 POST   /api/programs               {"ternary": "..."} | {"source": "..."}  → 201 {hash}
 GET    /api/programs/:hash         → row (+ ir provenance when compiled from source)
 POST   /api/programs/:hash/patch   {"path","expected_old_hash","new_ternary"} — structural CAS; 409 carries both subtree hashes + first-diff path
-POST   /api/runs                   {"program_hash","inputs":[ternary...],"grants":[id...],"fuel","size_cap"} → run row (synchronous, journaled)
+POST   /api/runs                   {"program_hash","inputs":[ternary...],"grants":[id...],"fuel","size_cap","semantics","trace"/"trace_cap","demand"} → run row (synchronous, journaled)
 GET    /api/runs?caller=&program=  → list
 GET    /api/runs/:id               → row + journal (auto-verifies an unverified finished run)
 GET    /api/runs/verify?all=1      → replay-verification sweep over all runs

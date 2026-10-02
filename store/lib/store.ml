@@ -149,12 +149,15 @@ type run = {
 ; r_verify_status : string option
 ; r_created_at : string option
 ; r_semantics : string  (* 'v0' canonical | 'v1' distinct-work (0009) *)
+; r_demand_sharing : bool  (* 0011: did this run consult the demand-memo *)
+; r_demand_hits : int  (* 0011: firings answered from the shared table *)
 }
 
 let select_run =
   "SELECT id::text, program_hash, input_hashes, fuel, size_cap, result_hash, \
    result_ternary, step_count, status, caller::text, parent_run_id::text, \
-   verify_status, created_at::text, semantics FROM runs WHERE id = $1::uuid"
+   verify_status, created_at::text, semantics, demand_sharing, demand_hits \
+   FROM runs WHERE id = $1::uuid"
 
 let run_of_row r =
   { r_id = text r 0 "run.id"
@@ -170,7 +173,9 @@ let run_of_row r =
   ; r_parent_run_id = opt_text r 10
   ; r_verify_status = opt_text r 11
   ; r_created_at = opt_text r 12
-  ; r_semantics = text r 13 "run.semantics" }
+  ; r_semantics = text r 13 "run.semantics"
+  ; r_demand_sharing = bool r 14 "run.demand_sharing"
+  ; r_demand_hits = int r 15 "run.demand_hits" }
 
 let insert_run p ~program_hash ?(inputs = []) ?(caller = None) ?(parent_run_id = None)
     ?(semantics = "v0") ~fuel ~size_cap () =
@@ -261,12 +266,85 @@ let list_runs p ?(caller = None) ?(program = None) ?(limit = 50) () =
     p
      "SELECT id::text, program_hash, input_hashes, fuel, size_cap, result_hash, \
      result_ternary, step_count, status, caller::text, parent_run_id::text, \
-     verify_status, created_at::text, semantics FROM runs \
+     verify_status, created_at::text, semantics, demand_sharing, demand_hits \
+     FROM runs \
      WHERE ($1::uuid IS NULL OR caller = $1::uuid) \
        AND ($2::text IS NULL OR program_hash = $2) \
      ORDER BY created_at DESC LIMIT $3"
   >>= fun rows -> Lwt.return (List.map run_of_row rows)
 
+(* -- demand-memo (borg/sharing.borg §demand-memo, migration 0011) ----
+
+   A CROSS-RUN cache of CLEAN firings only, scoped per caller (the
+   own-garden trust option): key (caller, fun_hash, arg_hash) -> the
+   answer.  Only firings that never touched a prim are written here,
+   so the table is pure-cache by construction -- grant liveness and the
+   journal audit are untouched.  Reads are the run's own garden only; a
+   miss is a miss, never an error. *)
+
+let demand_memo_get p ~caller ~fun_hash ~arg_hash =
+  Db.q
+    ~params:[ p_str caller; p_str fun_hash; p_str arg_hash ]
+    p
+    "SELECT result_ternary FROM demand_memo \
+     WHERE caller = $1 AND fun_hash = $2 AND arg_hash = $3"
+  >>= function
+  | [] -> Lwt.return None
+  | [ r ] ->
+      (* touch last_seen_at for retention ranking; fire-and-forget *)
+      Db.q_unit
+        ~params:[ p_str caller; p_str fun_hash; p_str arg_hash ]
+        p
+        "UPDATE demand_memo SET last_seen_at = now() \
+         WHERE caller = $1 AND fun_hash = $2 AND arg_hash = $3"
+      >>= fun () -> Lwt.return (Some (text r 0 "demand_memo.result_ternary"))
+  | _ -> store_error "demand_memo: multiple rows for one key"
+
+let demand_memo_put p ~caller ~fun_hash ~arg_hash ~result_hash
+    ~result_ternary =
+  Db.q_unit
+    ~params:
+      [ p_str caller; p_str fun_hash; p_str arg_hash; p_str result_hash
+      ; p_str result_ternary ]
+    p
+    "INSERT INTO demand_memo \
+       (caller, fun_hash, arg_hash, result_hash, result_ternary) \
+     VALUES ($1, $2, $3, $4, $5) \
+     ON CONFLICT (caller, fun_hash, arg_hash) DO UPDATE SET \
+       result_hash = EXCLUDED.result_hash, \
+       result_ternary = EXCLUDED.result_ternary, last_seen_at = now()"
+
+let demand_memo_count p =
+  Db.q p "SELECT count(*) FROM demand_memo"
+  >>= function
+  | [ r ] -> Lwt.return (int r 0 "count")
+  | _ -> store_error "demand_memo count: unexpected rows"
+
+(* the caller's whole garden memo (own-garden scope): seed a demand run
+   with these, most-recently-seen first, bounded by [limit].  The driver
+   preloads them into the run's per-run memo, so the pure core never
+   touches the store -- the shared table is a HOST fact. *)
+let demand_memo_list p ?(limit = 100_000) ~caller () =
+  Db.q
+    ~params:[ p_str caller; p_int limit ]
+    p
+    "SELECT fun_hash, arg_hash, result_ternary FROM demand_memo \
+     WHERE caller = $1 ORDER BY last_seen_at DESC LIMIT $2"
+  >>= fun rows ->
+  Lwt.return
+    (List.map
+       (fun r ->
+         ( text r 0 "demand_memo.fun_hash"
+         , text r 1 "demand_memo.arg_hash"
+         , text r 2 "demand_memo.result_ternary" ))
+       rows)
+
+(* record the demand bookkeeping on the run row after execution *)
+let update_run_demand p ~id ~demand_sharing ~demand_hits =
+  Db.q_unit
+    ~params:[ p_bool demand_sharing; p_int64 (Int64.of_int demand_hits); p_str id ]
+    p
+    "UPDATE runs SET demand_sharing = $1, demand_hits = $2 WHERE id = $3::uuid"
 
 (* -- run traces (borg/trace.borg): opt-in per-firing observability ----
 

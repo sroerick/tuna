@@ -166,7 +166,9 @@ let run_json (r : Store.run) : J.t =
     ; ("parent_run_id", opt_str r.r_parent_run_id)
     ; ("verify_status", opt_str r.r_verify_status)
     ; ("created_at", opt_str r.r_created_at)
-    ; ("semantics", `String r.r_semantics) ]
+    ; ("semantics", `String r.r_semantics)
+    ; ("demand_sharing", `Bool r.r_demand_sharing)
+    ; ("demand_hits", `Int r.r_demand_hits) ]
 
 let journal_json (j : Store.journal) : J.t =
   `Assoc
@@ -373,6 +375,10 @@ let post_run pool auth req =
             | _, Some c when c > 0 -> c
             | _ -> 0
           in
+          (* demand-memo (borg/sharing.borg): opt-in, only effective
+             under v1.  "demand": true consults the caller's own-garden
+             clean-firing cache and persists newly-clean firings. *)
+          let demand = Option.value (get_bool_opt j "demand") ~default:false in
         match get_string_opt j "program_hash" with
       | None ->  (j_err "missing \"program_hash\"")
       | Some program_hash -> (
@@ -391,7 +397,7 @@ let post_run pool auth req =
               let input_trees = List.rev rev in
                   Run.execute_run pool ~caller:auth.auth_id ~program_hash
                     ~input_trees ~grant_ids:(strings_of j "grants") ~fuel
-                    ~semantics ~trace_cap ~size_cap ()
+                    ~semantics ~trace_cap ~demand ~size_cap ()
               >>= (function
                     | Error (code, msg) -> j_err ~code msg
                     | Ok (row, js) ->
