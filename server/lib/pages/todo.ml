@@ -13,7 +13,7 @@
    the host surface).  Plain forms + redirect, no-JS first, like every
    other page. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module J = Yojson.Basic
@@ -51,7 +51,7 @@ let record_json ~title ~state ~created_by ~created_at =
 
 let journal pool ~actor ~op ~path ~value_hash ~version () =
   S.op_append pool ~op ~path ~value_hash ~prev_version:None ~version ~actor
-  >>= fun _ -> Lwt.return ()
+  >>= fun _ -> return ()
 
 let put_item pool ~actor ~path ~bytes =
   let hash = S.byte_hash bytes in
@@ -59,7 +59,7 @@ let put_item pool ~actor ~path ~bytes =
   S.path_put pool ~path ~value_hash:hash ~owner:actor >>= fun newv ->
   journal pool ~actor ~op:"put" ~path ~value_hash:(Some hash)
     ~version:(Some newv) ()
-  >>= fun () -> Lwt.return newv
+  >>= fun () -> return newv
 
 type item = {
   i_id : string
@@ -75,7 +75,7 @@ type item = {
 let items pool =
   S.path_list pool ~prefix ()
   >>= fun entries ->
-  Lwt_list.map_s
+  List.map_s
     (fun (e : S.path_entry) ->
       S.byte_value_fetch pool e.S.tp_value_hash
       >>= function
@@ -85,7 +85,7 @@ let items pool =
               let get k =
                 match J.Util.member k j with `String s -> s | _ -> "?"
               in
-              Lwt.return
+              return
                 (Some
                    { i_id = String.sub e.S.tp_path (String.length prefix)
                        (String.length e.S.tp_path - String.length prefix)
@@ -94,10 +94,10 @@ let items pool =
                    ; i_created_by = get "created_by"
                    ; i_created_at = get "created_at"
                    ; i_version = e.S.tp_version })
-          | exception _ -> Lwt.return None)
-      | None -> Lwt.return None)
+          | exception _ -> return None)
+      | None -> return None)
     entries
-  >>= fun rows -> Lwt.return (List.filter_map Fun.id rows)
+  >>= fun rows -> return (List.filter_map Fun.id rows)
 
 let view pool user _req =
   items pool >>= fun rows ->
@@ -131,7 +131,7 @@ let view pool user _req =
        (List.length rows) table)
 
 let add pool user req =
-  Dream.form ~csrf:false req
+  Web.form ~csrf:false req
   >>= function
   | `Ok fields -> (
       match List.assoc_opt "title" fields with
@@ -145,13 +145,13 @@ let add pool user req =
                 ~created_by:user.S.i_name ~created_at:(now_iso ())
             in
             put_item pool ~actor:user.S.i_id ~path ~bytes >>= fun _ ->
-            Dream.redirect req "/todo")
+            Web.redirect req "/todo")
   | _ -> L.err_page ~user "bad form submission"
 
 (* the record is re-read and rewritten with the state flipped; the item
    id is path-derived, so a forged form can only touch todo/ items *)
 let set_state pool user req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   let path = prefix ^ id in
   S.path_get pool ~path
   >>= function
@@ -174,10 +174,10 @@ let set_state pool user req =
                   ~created_at:(get "created_at")
               in
               put_item pool ~actor:user.S.i_id ~path ~bytes >>= fun _ ->
-              Dream.redirect req "/todo"))
+              Web.redirect req "/todo"))
 
 let del pool user req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   let path = prefix ^ id in
   S.path_get pool ~path
   >>= function
@@ -186,4 +186,4 @@ let del pool user req =
       S.path_delete pool ~path ~expected_version:None >>= fun _ ->
       journal pool ~actor:user.S.i_id ~op:"del" ~path ~value_hash:None
         ~version:None ()
-      >>= fun () -> Dream.redirect req "/todo"
+      >>= fun () -> Web.redirect req "/todo"

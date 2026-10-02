@@ -9,10 +9,10 @@
 
 module S = Tuna_store.Store
 
-let esc = Dream.html_escape
+let esc = Web.html_escape
 
 let is_htmx req =
-  match Dream.header req "HX-Request" with
+  match Web.header req "HX-Request" with
   | Some "true" -> true
   | _ -> false
 
@@ -73,7 +73,7 @@ let nav user =
 
 (* Full document; [user] is the signed-in identity (None shows a login link). *)
 let page ?(code = 200) ?user ~title body =
-  Dream.html ~code
+  Web.html ~code
     (Printf.sprintf
        {|<!doctype html>
 <html lang="en">

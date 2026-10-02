@@ -2,8 +2,8 @@
 
 (library
  (name tuna_server)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_deriv dream yojson lwt
-   lwt.unix unix base64))
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_deriv yojson
+   httpun httpun-eio gluten-eio bigstringaf eio eio.unix eio_main unix base64))
 
 ; sabra stdlib v1 (borg/stdlib.borg): embed the frozen transcript as an
 ; OCaml module - the file is never read at runtime

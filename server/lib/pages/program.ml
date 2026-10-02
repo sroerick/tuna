@@ -3,7 +3,7 @@
    form, and a "run it" form.  All controls are plain forms that work
    without JS; htmx enhances them in place (hx-target fragments). *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module J = Yojson.Basic
 module JU = Yojson.Basic.Util
@@ -12,7 +12,7 @@ module S = Tuna_store.Store
 module L = Layout
 
 let view pool user req =
-  let hash = Dream.param req "hash" in
+  let hash = Web.param req "hash" in
   S.fetch_program pool hash
   >>= function
   | None ->
@@ -27,7 +27,7 @@ let view pool user req =
       (* provenance table from the ir column's tags (call-sites.provenance) *)
       let provenance =
         match p.S.p_ir with
-        | None -> Lwt.return ""
+        | None -> return ""
         | Some ir_text -> (
             let tags =
               try
@@ -65,9 +65,9 @@ let view pool user req =
                        {|<tr><td>/%s</td><td>node %s</td><td>span %s</td></tr>|}
                        (L.esc path) (L.esc ir) (L.esc span))
             in
-            if rows = [] then Lwt.return ""
+            if rows = [] then return ""
             else
-              Lwt.return
+              return
                 (Printf.sprintf
                    {|<section><h3>provenance</h3><table><tr><th>tree path</th><th>IR node</th><th>source span</th></tr>%s</table></section>|}
                    (String.concat "" rows)))
@@ -124,8 +124,8 @@ let trim_path path =
   else path
 
 let patch_post pool user req =
-  let hash = Dream.param req "hash" in
-  Dream.form ~csrf:false req
+  let hash = Web.param req "hash" in
+  Web.form ~csrf:false req
   >>= function
   | `Ok fields -> (
       let get k = List.assoc_opt k fields in
@@ -160,7 +160,7 @@ let patch_post pool user req =
                               {|<span class="err">path %S does not address a subtree</span>|}
                               (L.esc p)
                           in
-                          if L.is_htmx req then Dream.html html
+                          if L.is_htmx req then Web.html html
                           else L.err_page ~code:404 ~user html
                       | P.Conflict { expected_old_hash; actual_old_hash; first_diff }
                         ->
@@ -171,26 +171,26 @@ let patch_post pool user req =
                               (L.esc (L.short_hash actual_old_hash))
                               (L.esc (Option.value first_diff ~default:""))
                           in
-                          if L.is_htmx req then Dream.html html
+                          if L.is_htmx req then Web.html html
                           else L.err_page ~code:409 ~user html
                       | P.Applied { ternary; hash = new_hash } ->
                           S.upsert_program pool ~hash:new_hash ~ternary ~ir:None
                             ~created_by:(Some user.S.i_id)
                           >>= fun _ ->
                           if L.is_htmx req then
-                            Dream.html
+                            Web.html
                               (Printf.sprintf
                                  {|<span class="okmsg">applied — new program %s</span>|}
                                  (L.link_program new_hash))
-                          else Dream.redirect req ("/programs/" ^ new_hash)))))
+                          else Web.redirect req ("/programs/" ^ new_hash)))))
       | _ -> L.err_page ~user "patch needs path, expected_old_hash, new_ternary")
   | _ -> L.err_page ~user "bad form submission"
 
 (* --- run POST -------------------------------------------------------- *)
 
 let run_post pool user req =
-  let hash = Dream.param req "hash" in
-  Dream.form ~csrf:false req
+  let hash = Web.param req "hash" in
+  Web.form ~csrf:false req
   >>= function
   | `Ok fields -> (
       let get k = List.assoc_opt k fields in
@@ -237,9 +237,9 @@ let run_post pool user req =
                 | Error (_, msg) -> L.err_page ~user msg
                 | Ok (row, _js) ->
                     if L.is_htmx req then
-                      Dream.html
+                      Web.html
                         (Printf.sprintf
                            {|<span class="okmsg">ran — open run %s</span>|}
                            (L.link_run row.S.r_id))
-                    else Dream.redirect req ("/runs/" ^ row.S.r_id))))
+                    else Web.redirect req ("/runs/" ^ row.S.r_id))))
   | _ -> L.err_page ~user "bad form submission"

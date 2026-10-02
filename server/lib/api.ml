@@ -53,7 +53,7 @@
    Style note: handlers chain with `>>= fun x ->` / `>>= function` in
    tail position — no parenthesized-match pyramids. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module J = Yojson.Basic
 module JU = J.Util
@@ -68,10 +68,10 @@ type auth = { auth_id : string; auth_name : string; auth_is_admin : bool }
 
 (* -- json helpers ---------------------------------------------------- *)
 
-let j_ok ?(code = 200) j = Dream.json ~code (J.to_string j)
+let j_ok ?(code = 200) j = Web.json ~code (J.to_string j)
 
 let j_err ?(code = 400) msg =
-  Dream.json ~code (J.to_string (`Assoc [ ("error", `String msg) ]))
+  Web.json ~code (J.to_string (`Assoc [ ("error", `String msg) ]))
 
 let member_opt k (j : J.t) : J.t option =
   match JU.member k j with `Null -> None | v -> Some v
@@ -91,10 +91,10 @@ let strings_of j k =
   List.filter_map (function `String s -> Some s | _ -> None) (get_list j k)
 
 let body_json req =
-  Dream.body req >>= fun body ->
+  Web.body req >>= fun body ->
   match J.from_string body with
-  | j -> Lwt.return (Ok j)
-  | exception Yojson.Json_error _ -> Lwt.return (Error "invalid JSON body")
+  | j -> return (Ok j)
+  | exception Yojson.Json_error _ -> return (Error "invalid JSON body")
 
 let parse_ternary s =
   match Tuna.Canon.of_string s with
@@ -108,7 +108,7 @@ let opt_int = function Some i -> `Int i | None -> `Null
 (* -- auth ------------------------------------------------------------ *)
 
 let bearer_token req =
-  match Dream.header req "Authorization" with
+  match Web.header req "Authorization" with
   | Some h when String.length h > 7
                 && String.equal
                      (String.lowercase_ascii (String.sub h 0 7))
@@ -125,22 +125,22 @@ let authenticate pool req =
   | Some token -> (
       Store.verify_token pool token
       >>= function
-      | None -> Lwt.return None
+      | None -> return None
       | Some i ->
-          Lwt.return
+          return
             (Some
                { auth_id = i.Store.i_id
                ; auth_name = i.Store.i_name
                ; auth_is_admin = i.Store.i_is_admin }))
   | None -> (
-      match Dream.cookie req ~decrypt:false Auth.cookie_name with
-      | None -> Lwt.return None
+      match Web.cookie req ~decrypt:false Auth.cookie_name with
+      | None -> return None
       | Some tok ->
           Store.verify_session pool tok
           >>= function
-          | None -> Lwt.return None
+          | None -> return None
           | Some i ->
-              Lwt.return
+              return
                 (Some
                    { auth_id = i.Store.i_id
                    ; auth_name = i.Store.i_name
@@ -149,13 +149,13 @@ let authenticate pool req =
 (* 5xx guard: domain/store errors become a JSON 500 with the message;
    Dream's default handler would otherwise answer html. *)
 let guard p =
-  Lwt.catch (fun () -> p) (fun exn ->
+  catch p (fun exn ->
       let msg =
         match exn with
         | Store.Store_error s -> "store error: " ^ s
         | e -> Printexc.to_string e
       in
-      Dream.log "handler error: %s" msg;
+      Web.log "handler error: %s" msg;
        (j_err ~code:500 msg))
 
 let with_auth pool handler req =
@@ -163,7 +163,7 @@ let with_auth pool handler req =
   >>= function
   | None ->
        (j_err ~code:401 "unauthorized: valid bearer token required")
-  | Some auth -> guard (handler auth req)
+  | Some auth -> guard (fun () -> handler auth req)
 
 (* -- row json -------------------------------------------------------- *)
 
@@ -239,16 +239,16 @@ let program_json (p : Store.program) : J.t =
 
 (* /health is open; db ping must not raise — a dead PG answers db:false *)
 let health pool _req =
-  Lwt.catch
-    (fun () -> Db.ping pool >>= fun () -> Lwt.return true)
-    (fun _ -> Lwt.return false)
+  catch
+    (fun () -> Db.ping pool >>= fun () -> return true)
+    (fun _ -> return false)
   >>= fun up ->
    (j_ok (`Assoc [ ("status", `String "ok"); ("db", `Bool up) ]))
 
 (* -- programs -------------------------------------------------------- *)
 
 let post_program pool auth req =
-  Dream.body req >>= fun body ->
+  Web.body req >>= fun body ->
   match J.from_string body with
   | exception Yojson.Json_error _ ->  (j_err "body must be a JSON object")
   | j ->
@@ -299,15 +299,15 @@ let post_program pool auth req =
            (j_err "body must contain \"ternary\" or \"source\"")
 
 let get_program pool _auth req =
-  let hash = Dream.param req "hash" in
+  let hash = Web.param req "hash" in
   Store.fetch_program pool hash
   >>= function
   | None ->  (j_err ~code:404 "unknown program hash")
   | Some p ->  (j_ok (program_json p))
 
 let patch_program pool auth req =
-  let hash = Dream.param req "hash" in
-  Dream.body req >>= fun body ->
+  let hash = Web.param req "hash" in
+  Web.body req >>= fun body ->
   match J.from_string body with
   | exception Yojson.Json_error _ ->  (j_err "body must be a JSON object")
   | j ->
@@ -443,26 +443,26 @@ let post_run pool auth req =
    program's retained provenance map.  GC'd runs report "gced" —
    GONE with the cited policy, never verified, never failed-on-merits. *)
 let verdict_json pool ~(program_hash : string) (run_id : string)
-    (v : Replay.verdict) : J.t Lwt.t =
+    (v : Replay.verdict) : J.t =
   let span_of path =
-    if path = "" then Lwt.return None
+    if path = "" then return None
     else
       Store.fetch_program pool program_hash
       >>= (function
-            | None -> Lwt.return None
-            | Some p -> Lwt.return (Run.ir_span p.Store.p_ir path))
+            | None -> return None
+            | Some p -> return (Run.ir_span p.Store.p_ir path))
   in
   match v with
   | Replay.Verified _ ->
-      Lwt.return (`Assoc [ ("run_id", `String run_id); ("verify", `String "verified") ])
+      return (`Assoc [ ("run_id", `String run_id); ("verify", `String "verified") ])
   | Replay.Bad_chain msg ->
-      Lwt.return
+      return
         (`Assoc
           [ ("run_id", `String run_id)
           ; ("verify", `String "failed")
           ; ("reason", `String ("journal hash chain broken: " ^ msg)) ])
   | Replay.Gone reason ->
-      Lwt.return
+      return
         (`Assoc
           [ ("run_id", `String run_id)
           ; ("verify", `String "gced")
@@ -470,7 +470,7 @@ let verdict_json pool ~(program_hash : string) (run_id : string)
   | Replay.Diverged d ->
       span_of d.Replay.callsite_path
       >>= fun span ->
-      Lwt.return
+      return
         (`Assoc
           [ ("run_id", `String run_id)
           ; ("verify", `String "failed")
@@ -486,7 +486,7 @@ let verdict_json pool ~(program_hash : string) (run_id : string)
           ; ("current_contract", opt_str d.Replay.current_contract)
           ; ("contract_mismatch", `Bool d.Replay.contract_mismatch) ])
   | Replay.Unverifiable msg ->
-      Lwt.return
+      return
         (`Assoc
           [ ("run_id", `String run_id)
           ; ("verify", `String "unverifiable")
@@ -495,17 +495,17 @@ let verdict_json pool ~(program_hash : string) (run_id : string)
 (* GET /api/runs/:id — auto-verify on fetch: an unverified finished run
    is replay-verified inline and the verdict recorded (verify_status). *)
 let get_run pool _auth req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   Store.fetch_run_resolved pool id
   >>= function
   | None ->  (j_err ~code:404 "unknown run id")
   | Some (id, r) ->
       (match (r.Store.r_verify_status, r.Store.r_status) with
-       | None, Store.Run_status.Running -> Lwt.return ()
+       | None, Store.Run_status.Running -> return ()
          | None, _ ->
              Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
-             >>= fun _ -> Lwt.return ()
-       | Some _, _ -> Lwt.return ())
+             >>= fun _ -> return ()
+       | Some _, _ -> return ())
       >>= fun () ->
       Store.fetch_run pool id
       >>= function
@@ -527,9 +527,9 @@ let get_run pool _auth req =
    404 unknown run/missing bytes; 409 when no record exists (running,
    wall-clock abort, error row). *)
 let get_deriv pool _auth req =
-  Deriv.of_run pool ~run_id:(Dream.param req "id")
+  Deriv.of_run pool ~run_id:(Web.param req "id")
   >>= fun (code, body) ->
-  Dream.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
+  Web.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
 
 (* -- run traces (borg/trace.borg) ------------------------------------- *)
 
@@ -558,15 +558,15 @@ let trace_event_json (e : Store.trace_event) : J.t =
    untraced run or an unknown id).  Observability only: the events are
    notes ABOUT the run row's numbers, never part of its verdict. *)
 let get_run_trace pool _auth req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   let after =
-    match Dream.query req "after" with
+    match Web.query req "after" with
     | Some s -> (
         match int_of_string_opt s with Some v when v >= 0 -> v | _ -> -1)
     | None -> -1
   in
   let limit =
-    match Dream.query req "limit" with
+    match Web.query req "limit" with
     | Some s -> (
         match int_of_string_opt s with
         | Some v when v > 0 && v <= 1000 -> v
@@ -592,12 +592,12 @@ let get_run_trace pool _auth req =
    every finished run (cap 200, newest first).  Without all=1, returns
    the current verify statuses only.  NOTE: routed BEFORE /api/runs/:id. *)
 let verify_sweep pool _auth req =
-  match Dream.query req "all" with
+  match Web.query req "all" with
   | Some "1" ->
       Store.list_runs pool ~caller:None ~program:None ~limit:200 ()
       >>= fun rs ->
     let rec go acc = function
-        | [] -> Lwt.return (List.rev acc)
+        | [] -> return (List.rev acc)
             | r :: rest -> (
                 Replay.verify_and_record pool ~run_id:r.Store.r_id
                   ~deadline:(Run.deadline_now ()) ()
@@ -623,15 +623,15 @@ let verify_sweep pool _auth req =
                      rs)) ]))
 
 let list_runs pool _auth req =
-  let caller = Dream.query req "caller" in
-  let program = Dream.query req "program" in
+  let caller = Web.query req "caller" in
+  let program = Web.query req "program" in
   Store.list_runs pool ~caller ~program ~limit:100 () >>= fun rs ->
    (j_ok (`Assoc [ ("runs", `List (List.map run_json rs)) ]))
 
 (* -- journals -------------------------------------------------------- *)
 
 let get_journal pool _auth req =
-  let run_id = Dream.param req "run_id" in
+  let run_id = Web.param req "run_id" in
   Store.fetch_run_resolved pool run_id
   >>= function
   | None ->  (j_err ~code:404 "unknown run id")
@@ -653,7 +653,7 @@ type edit = Set_result of Tuna.Tree.t | Set_error of string | Clear
 let fork pool ~parent_run_id ~(edits : (int * edit) list) =
   Store.fetch_run pool parent_run_id
   >>= (function
-        | None -> Lwt.fail (Failure "unknown run")
+        | None -> fail (Failure "unknown run")
         | Some parent ->
             Store.fetch_journals pool parent_run_id
             >>= fun js ->
@@ -663,7 +663,7 @@ let fork pool ~parent_run_id ~(edits : (int * edit) list) =
               ~size_cap:parent.r_size_cap ()
             >>= fun new_id ->
             let rec copy = function
-              | [] -> Lwt.return ()
+              | [] -> return ()
               | j :: rest -> (
                   let result_ternary, e_error =
                     match List.assoc j.Store.j_seq edits with
@@ -695,11 +695,11 @@ let fork pool ~parent_run_id ~(edits : (int * edit) list) =
               >>= fun v ->
               Store.fetch_run pool new_id
                 >>= (function
-                    | None -> Lwt.fail (Failure "fork run vanished")
+                    | None -> fail (Failure "fork run vanished")
                     | Some row ->
                       Store.fetch_journals pool new_id
                       >>= fun njs ->
-                      Lwt.return (row, njs, v)))
+                      return (row, njs, v)))
 
 let rec validate_edits acc = function
   | [] -> Ok (List.rev acc)
@@ -729,7 +729,7 @@ let rec validate_edits acc = function
    program, the derived row carries the counterfactual outcome, and
    its own verification is recorded. *)
 let fork_journal pool _auth req =
-  let run_id = Dream.param req "run_id" in
+  let run_id = Web.param req "run_id" in
   body_json req >>= function
   | Error msg ->  (j_err msg)
   | Ok j -> (
@@ -802,7 +802,7 @@ let world_diff_json (d : Replay.world_diff) : J.t =
    The world diff is journal-versus-journal; contract mismatches are
    first-class.  Denied grants journal a denial, never raise. *)
 let live_replay_run pool auth req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   body_json req >>= function
   | Error msg -> j_err msg
   | Ok j -> (
@@ -932,7 +932,7 @@ let post_grant pool auth req =
              (j_err "args_attenuation must be JSON")))
 
 let revoke_grant pool auth req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   Store.fetch_grant pool id
   >>= (function
         | None ->  (j_err ~code:404 "unknown grant id")
@@ -983,7 +983,7 @@ let post_identity pool auth req =
                          | Some pw when String.trim pw <> "" ->
                              Store.set_password pool ~identity_id:i.Store.i_id
                                ~password:pw
-                         | _ -> Lwt.return ())
+                         | _ -> return ())
                         >>= fun () ->
                         (j_ok ~code:201
                            (`Assoc
@@ -1013,7 +1013,7 @@ let get_identities pool _auth _req =
    narrowed capability).  prim defaults to the parent's; supply one
    only to narrow a "*" grant to a named prim. *)
 let attenuate_grant pool auth req =
-  let parent_id = Dream.param req "id" in
+  let parent_id = Web.param req "id" in
   body_json req >>= function
   | Error msg -> (j_err msg)
   | Ok j -> (
@@ -1058,7 +1058,7 @@ let attenuate_grant pool auth req =
 (* grant detail + lineage (audit surface: "what was this narrowed from,
    what was narrowed from it") *)
 let get_grant pool auth req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   Store.fetch_grant pool id
   >>= (function
         | None -> (j_err ~code:404 "unknown grant id")
@@ -1092,7 +1092,7 @@ let get_grant pool auth req =
 
 let journal_tree_op pool ~actor ~op ~path ?value_hash ?prev_version ?version () =
   Store.op_append pool ~op ~path ~value_hash ~prev_version ~version ~actor
-  >>= fun _ -> Lwt.return ()
+  >>= fun _ -> return ()
 
 let entry_json (e : Store.path_entry) : J.t =
   `Assoc
@@ -1123,7 +1123,7 @@ let window_row_json (r : Store.ops_window_row) : J.t =
   | other -> other
 
 let get_int64_query req k =
-  match Dream.query req k with
+  match Web.query req k with
   | None -> Ok None
   | Some s -> (
       match Int64.of_string s with
@@ -1166,7 +1166,7 @@ let post_tree_get pool auth req =
                            ; ("owner", `String entry.Store.tp_owner) ]))))))
 
 (* one substrate write through the store (unconditional or CAS), then
-   the op row; the JSON answer is returned in Lwt.t position *)
+   the op row; the JSON answer is returned in direct position *)
 let tree_put_write pool auth ~path ~hash ~expected_version ~expected_hash =
   match expected_version with
   | None ->
@@ -1250,14 +1250,14 @@ let post_tree_list pool auth req =
 
 let get_tree_log pool _auth req =
   (match (get_int64_query req "from_seq", get_int64_query req "to_seq") with
-   | Error e, _ | _, Error e -> Lwt.return (Error e)
+   | Error e, _ | _, Error e -> return (Error e)
      | Ok from_seq, Ok to_seq ->
          let from_seq = Option.value from_seq ~default:0L in
          let to_seq = Option.value to_seq ~default:Int64.max_int in
-         (match Dream.query req "prefix" with
+         (match Web.query req "prefix" with
           | Some p -> Store.ops_fold pool ?prefix:(Some p) ~from_seq ~to_seq ()
           | None -> Store.ops_fold pool ~from_seq ~to_seq ())
-         >>= fun ops -> Lwt.return (Ok ops))
+         >>= fun ops -> return (Ok ops))
   >>= (function
         | Error e -> (j_err e)
         | Ok ops ->
@@ -1288,15 +1288,15 @@ let post_ns_fork pool auth req =
 
 let get_tree_state pool _auth req =
   (match get_int64_query req "at_seq" with
-   | Error e -> Lwt.return (Error e)
+   | Error e -> return (Error e)
    | Ok at_seq ->
-       let prefix = Option.value (Dream.query req "prefix") ~default:"" in
+       let prefix = Option.value (Web.query req "prefix") ~default:"" in
        let at_seq = Option.value at_seq ~default:Int64.max_int in
        (match Tree_prims.validate_prefix "prefix" prefix with
-        | Some e -> Lwt.return (Error e)
+        | Some e -> return (Error e)
         | None -> (
             Rewind.state pool ~prefix ~at_seq
-            >>= fun entries -> Lwt.return (Ok (prefix, at_seq, entries)))))
+            >>= fun entries -> return (Ok (prefix, at_seq, entries)))))
   >>= (function
         | Error e -> (j_err e)
         | Ok (prefix, at_seq, entries) ->
@@ -1325,10 +1325,10 @@ let get_tree_state pool _auth req =
 let journal_value pool ~actor ~op ~path ?(value_hash = None) () =
   Store.op_append pool ~op ~path ~value_hash ~prev_version:None ~version:None
     ~actor
-  >>= fun _ -> Lwt.return ()
+  >>= fun _ -> return ()
 
 let put_allowed pool (auth : auth) =
-  if auth.auth_is_admin then Lwt.return true
+  if auth.auth_is_admin then return true
   else Store.has_live_grant pool auth.auth_id
 
 (* POST /api/value/put {"bytes_b64"|"ternary"} -> {hash, len, kind};
@@ -1336,15 +1336,15 @@ let put_allowed pool (auth : auth) =
    surface).  A bare tree value stores into tree_values without a path
    (the federation apply path needs the value present before it can
    create the destination index row).  Returns (code, json) so tests
-   can exercise the core without Dream. *)
-let value_put_kind pool ~(auth : auth) ~kind : (int * J.t) Lwt.t =
+   can exercise the core without Web. *)
+let value_put_kind pool ~(auth : auth) ~kind : (int * J.t) =
   let len =
     match kind with `Bytes b -> String.length b | `Tree t -> String.length t
   in
   let cap = Store.value_max_bytes () in
   let denied code msg =
     journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:"" ()
-    >>= fun () -> Lwt.return (code, `Assoc [ ("error", `String msg) ])
+    >>= fun () -> return (code, `Assoc [ ("error", `String msg) ])
   in
   if len > cap then
     denied 413
@@ -1362,7 +1362,7 @@ let value_put_kind pool ~(auth : auth) ~kind : (int * J.t) Lwt.t =
             journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:hash
               ~value_hash:(Some hash) ()
             >>= fun () ->
-            Lwt.return
+            return
               (201,
                `Assoc
                  [ ("hash", `String hash); ("len", `Int len)
@@ -1374,13 +1374,13 @@ let value_put_kind pool ~(auth : auth) ~kind : (int * J.t) Lwt.t =
             journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:hash
               ~value_hash:(Some hash) ()
             >>= fun () ->
-            Lwt.return
+            return
               (201,
                `Assoc
                  [ ("hash", `String hash); ("len", `Int len)
                  ; ("kind", `String "tree") ]))
 
-let value_put_core pool ~(auth : auth) ~bytes : (int * J.t) Lwt.t =
+let value_put_core pool ~(auth : auth) ~bytes : (int * J.t) =
   value_put_kind pool ~auth ~kind:(`Bytes bytes)
 
 let post_value_put pool auth req =
@@ -1408,7 +1408,7 @@ let value_get_core pool ~(auth : auth) ~hash ~kind =
   let hash = Tuna.Hash.normalize_hex hash in
   let answer code content_type body hdrs =
     journal_value pool ~actor:auth.auth_id ~op:"value-get" ~path:hash ()
-    >>= fun () -> Lwt.return (code, content_type, body, hdrs)
+    >>= fun () -> return (code, content_type, body, hdrs)
   in
   let denied code msg =
     answer code "application/json"
@@ -1424,13 +1424,13 @@ let value_get_core pool ~(auth : auth) ~hash ~kind =
         | Some "bytes" -> (
             Store.byte_value_fetch pool hash
             >>= (function
-                  | Some b -> Lwt.return (Some (Store.Bytes b))
-                  | None -> Lwt.return None))
+                  | Some b -> return (Some (Store.Bytes b))
+                  | None -> return None))
         | Some "tree" -> (
             Store.value_fetch pool hash
             >>= (function
-                  | Some t -> Lwt.return (Some (Store.Tree t))
-                  | None -> Lwt.return None))
+                  | Some t -> return (Some (Store.Tree t))
+                  | None -> return None))
         | _ -> Store.probe_value pool hash
       in
       fetch () >>= function
@@ -1447,11 +1447,11 @@ let value_get_core pool ~(auth : auth) ~hash ~kind =
             ; ("X-Tuna-Length", string_of_int (String.length ternary)) ])
 
 let get_value pool auth req =
-  let hash = Dream.param req "hash" in
-  let kind = Dream.query req "kind" in
+  let hash = Web.param req "hash" in
+  let kind = Web.query req "kind" in
   value_get_core pool ~auth ~hash ~kind
   >>= fun (code, content_type, body, hdrs) ->
-  Dream.respond ~code ~headers:(("Content-Type", content_type) :: hdrs) body
+  Web.respond ~code ~headers:(("Content-Type", content_type) :: hdrs) body
 
 (* -- federation F1 (borg/federation.borg): value exchange --------------
 
@@ -1472,7 +1472,7 @@ let fed_value_core pool ~(auth : auth) ~hash =
   let hash = Tuna.Hash.normalize_hex hash in
   let answer code j =
     journal_value pool ~actor:auth.auth_id ~op:"fed-value" ~path:hash ()
-    >>= fun () -> Lwt.return (code, J.to_string j)
+    >>= fun () -> return (code, J.to_string j)
   in
   let denied code msg = answer code (`Assoc [ ("error", `String msg) ]) in
   Store.value_fetch pool hash
@@ -1504,9 +1504,9 @@ let fed_value_core pool ~(auth : auth) ~hash =
                 | None -> denied 404 ("no value with hash " ^ hash))))
 
 let get_fed_value pool auth req =
-  fed_value_core pool ~auth ~hash:(Dream.param req "hash")
+  fed_value_core pool ~auth ~hash:(Web.param req "hash")
   >>= fun (code, body) ->
-  Dream.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
+  Web.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
 
 (* per-peer bearer identities (federation F1): TUNA_FED_PEERS lists
    comma-separated peer names; each ABSENT name gets a generated token
@@ -1537,7 +1537,7 @@ let boot_fed_peers pool =
   in
   let boot_one name =
     if not (fed_peer_name_ok name) then
-      Lwt.fail (Failure ("boot: invalid TUNA_FED_PEERS name " ^ name))
+      fail (Failure ("boot: invalid TUNA_FED_PEERS name " ^ name))
     else
       let env_name = fed_peer_token_env name in
       let supplied = Sys.getenv_opt env_name in
@@ -1548,16 +1548,16 @@ let boot_fed_peers pool =
              validated against it (the root re-boot discipline) so an
              operator cannot silently rotate a peer credential *)
           (match supplied with
-           | None | Some "" -> Lwt.return ()
+           | None | Some "" -> return ()
            | Some tok -> (
                Store.verify_token pool tok
                >>= function
-               | Some _ -> Lwt.return ()
+               | Some _ -> return ()
                | None ->
-                   Dream.log
+                   Web.log
                      "boot: %s supplied but peer %s already has a different \
                       token; keeping the stored one" env_name name;
-                   Lwt.return ()))
+                   return ()))
       | None -> (
           (* a supplied token (shared across instances) wins; otherwise
              generate and print one ONCE *)
@@ -1572,11 +1572,11 @@ let boot_fed_peers pool =
           if generated then (
             print_string (env_name ^ "=" ^ token ^ "\n");
             flush stdout);
-          Dream.log "boot: created fed peer identity %s (%s)" name i.Store.i_id;
-          Lwt.return ())
+          Web.log "boot: created fed peer identity %s (%s)" name i.Store.i_id;
+          return ())
   in
   let rec go = function
-    | [] -> Lwt.return ()
+    | [] -> return ()
     | n :: rest -> boot_one n >>= fun () -> go rest
   in
   go names
@@ -1672,7 +1672,7 @@ let fed_ops_core pool ~(auth : auth) ~prefix ~after_seq ~limit =
     | `Bad msg ->
         (500, [ ("error", `String ("window chain broken: " ^ msg)) ])
   in
-  Lwt.return
+  return
     ( code
     , `Assoc
         ( [ ("ops", `List ops_json)
@@ -1696,7 +1696,7 @@ let fed_apply_core pool ~(auth : auth) (j : J.t) =
   let deny code msg =
     Store.op_append pool ~op:"fed-apply" ~path:dst ~value_hash:None
       ~prev_version:None ~version:None ~actor:auth.auth_id
-    >>= fun _ -> Lwt.return (code, `Assoc [ ("error", `String msg) ])
+    >>= fun _ -> return (code, `Assoc [ ("error", `String msg) ])
   in
   let parse_all () =
     List.fold_right
@@ -1725,35 +1725,35 @@ let fed_apply_core pool ~(auth : auth) (j : J.t) =
           let hash = Tuna.Hash.normalize_hex hash in
           let got = Tuna.Hash.hex_of_string payload in
           if got <> hash then
-            Lwt.return (Error (Printf.sprintf "value %s does not rehash" hash))
-          else Store.value_put pool ~hash ~ternary:payload >>= fun () -> Lwt.return (Ok ())
+            return (Error (Printf.sprintf "value %s does not rehash" hash))
+          else Store.value_put pool ~hash ~ternary:payload >>= fun () -> return (Ok ())
       | Some hash, Some "bytes", Some payload ->
           let hash = Tuna.Hash.normalize_hex hash in
           (match Base64.decode payload with
            | Error _ ->
-               Lwt.return
+               return
                  (Error (Printf.sprintf "value %s: payload is not base64" hash))
            | Ok b ->
                let got = Store.byte_hash b in
                if got <> hash then
-                 Lwt.return
+                 return
                    (Error (Printf.sprintf "value %s does not rehash" hash))
                else
                  Store.byte_value_put pool ~hash ~bytes:b
-                 >>= fun () -> Lwt.return (Ok ()))
+                 >>= fun () -> return (Ok ()))
       | _ ->
-          Lwt.return
+          return
             (Error "each value needs hash, kind (tree|bytes) and payload")
     in
     let rec ingest = function
-      | [] -> Lwt.return (Ok ())
+      | [] -> return (Ok ())
       | v :: rest -> (
           match v with
           | `Assoc _ -> (
               ingest_value v >>= function
-              | Error e -> Lwt.return (Error e)
+              | Error e -> return (Error e)
               | Ok () -> ingest rest)
-          | _ -> Lwt.return (Error "each value must be a JSON object"))
+          | _ -> return (Error "each value must be a JSON object"))
     in
     ingest values
     >>= (function
@@ -1822,7 +1822,7 @@ let fed_apply_core pool ~(auth : auth) (j : J.t) =
                     ~value_hash:None ~prev_version:None ~version:None
                     ~actor:auth.auth_id
                   >>= fun _ ->
-                  Lwt.return
+                  return
                     ( 200
                     , `Assoc
                         [ ("ok", `Bool true)
@@ -1833,28 +1833,30 @@ let fed_apply_core pool ~(auth : auth) (j : J.t) =
                         ; ("shadowed", `List shadowed_json) ] ))))
 
 let get_fed_ops pool auth req =
-  let prefix = Option.value (Dream.query req "prefix") ~default:"" in
+  let prefix = Option.value (Web.query req "prefix") ~default:"" in
   let after_seq =
-    match Dream.query req "after_seq" with
+    match Web.query req "after_seq" with
     | None -> 0
     | Some s -> ( match int_of_string_opt s with Some v when v >= 0 -> v | _ -> 0)
   in
   let limit =
-    match Dream.query req "limit" with
+    match Web.query req "limit" with
     | None -> 1000
     | Some s -> ( match int_of_string_opt s with Some v -> v | None -> 1000)
   in
-  guard
+  guard (fun () ->
     (fed_ops_core pool ~auth ~prefix ~after_seq ~limit
-     >>= fun (code, body) -> j_ok ~code body)
+     >>= fun (code, body) -> j_ok ~code body))
+
 
 let post_fed_ops_apply pool auth req =
   body_json req
   >>= function
   | Error msg -> j_err msg
   | Ok j ->
-      guard
-        (fed_apply_core pool ~auth j >>= fun (code, body) -> j_ok ~code body)
+      guard (fun () ->
+    (fed_apply_core pool ~auth j >>= fun (code, body) -> j_ok ~code body))
+
 
 (* -- routes (M11): the routing table as data ---------------------------
 
@@ -1873,11 +1875,12 @@ let post_route_put pool auth req =
       | None, _ -> (j_err "missing \"path\"")
       | _, None -> (j_err "missing \"record\"")
       | Some path, Some record ->
-          guard
-            (Routes.publish pool ~caller_id:auth.auth_id
+          guard (fun () ->
+    (Routes.publish pool ~caller_id:auth.auth_id
                ~caller_admin:auth.auth_is_admin ~site_path:path ~record
                ~expected_version:(get_int_opt j "expected_version")
              >>= fun (code, j) -> j_ok ~code j))
+)
 
 let post_route_delete pool auth req =
   body_json req >>= function
@@ -1886,23 +1889,26 @@ let post_route_delete pool auth req =
       match get_string_opt j "path" with
       | None -> (j_err "missing \"path\"")
       | Some path ->
-          guard
-            (Routes.delete pool ~caller_id:auth.auth_id
+          guard (fun () ->
+    (Routes.delete pool ~caller_id:auth.auth_id
                ~caller_admin:auth.auth_is_admin ~site_path:path
                ~expected_version:(get_int_opt j "expected_version")
              >>= fun (code, j) -> j_ok ~code j))
+)
 
 let get_route_get pool auth req =
-  let path = Option.value (Dream.query req "path") ~default:"" in
-  guard
+  let path = Option.value (Web.query req "path") ~default:"" in
+  guard (fun () ->
     (Routes.get pool ~actor:auth.auth_id ~site_path:path
-     >>= fun (code, j) -> j_ok ~code j)
+     >>= fun (code, j) -> j_ok ~code j))
+
 
 let get_route_list pool auth req =
-  let prefix = Option.value (Dream.query req "prefix") ~default:"" in
-  guard
+  let prefix = Option.value (Web.query req "prefix") ~default:"" in
+  guard (fun () ->
     (Routes.list pool ~actor:auth.auth_id ~prefix
-     >>= fun (code, j) -> j_ok ~code j)
+     >>= fun (code, j) -> j_ok ~code j))
+
 
 (* the route-dispatch boundary: adapt a Routes.response to HTTP.  The
    request context reaches program routes as one JSON string-tree input
@@ -1910,8 +1916,8 @@ let get_route_list pool auth req =
    attributed to the service identity (root), authenticated invokers to
    their identity (law 3). *)
 let dispatch_route pool req =
-  Dream.body req >>= fun body ->
-  let target = Dream.target req in
+  Web.body req >>= fun body ->
+  let target = Web.target req in
   let path_part, query =
     match String.index_opt target '?' with
     | Some i ->
@@ -1924,24 +1930,25 @@ let dispatch_route pool req =
       String.sub path_part 1 (String.length path_part - 1)
     else path_part
   in
-  let meth = Dream.method_to_string (Dream.method_ req) in
+  let meth = Web.method_to_string (Web.method_ req) in
   authenticate pool req >>= fun auth ->
   Store.fetch_identity_by_name pool "root" >>= fun service ->
   (match service with
    | None -> (j_err ~code:500 "service identity missing (root)")
    | Some d ->
-       guard
-         (Routes.dispatch pool ~service:d.Store.i_id ~meth ~site_path ~query
+       guard (fun () ->
+    (Routes.dispatch pool ~service:d.Store.i_id ~meth ~site_path ~query
             ~body ~actor:(Option.map (fun a -> a.auth_id) auth)
           >>= fun r ->
-          Dream.respond ~code:r.Routes.code
+          Web.respond ~code:r.Routes.code
             ~headers:(("Content-Type", r.Routes.content_type) :: r.Routes.headers)
             r.Routes.body))
+)
 (* POST /api/runs/:id/gc — retention GC (journal.retention-gc): delete
    the run's journal rows behind the cited tombstone.  Verifiers report
    GONE for this run afterwards, never VERIFIED.  Body: {"policy": str}. *)
 let gc_run pool _auth req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   body_json req >>= function
   | Error msg ->  (j_err msg)
   | Ok j -> (
@@ -1961,44 +1968,44 @@ let gc_run pool _auth req =
 
 (* route list, mounted alongside the M8 page routes by bin/main.ml *)
 let api_routes pool =
-  [ Dream.post "/api/programs" (with_auth pool (post_program pool))
-    ; Dream.get "/api/programs/:hash" (with_auth pool (get_program pool))
-    ; Dream.post "/api/programs/:hash/patch"
+  [ Web.post "/api/programs" (with_auth pool (post_program pool))
+    ; Web.get "/api/programs/:hash" (with_auth pool (get_program pool))
+    ; Web.post "/api/programs/:hash/patch"
         (with_auth pool (patch_program pool))
-    ; Dream.post "/api/runs" (with_auth pool (post_run pool))
-    ; Dream.get "/api/runs" (with_auth pool (list_runs pool))
-    ; Dream.get "/api/runs/verify" (with_auth pool (verify_sweep pool))
-    ; Dream.get "/api/runs/:id/trace" (with_auth pool (get_run_trace pool))
-    ; Dream.get "/api/runs/:id/deriv" (with_auth pool (get_deriv pool))
-    ; Dream.get "/api/runs/:id" (with_auth pool (get_run pool))
-    ; Dream.post "/api/runs/:id/gc" (with_auth pool (gc_run pool))
-    ; Dream.post "/api/runs/:id/live-replay"
+    ; Web.post "/api/runs" (with_auth pool (post_run pool))
+    ; Web.get "/api/runs" (with_auth pool (list_runs pool))
+    ; Web.get "/api/runs/verify" (with_auth pool (verify_sweep pool))
+    ; Web.get "/api/runs/:id/trace" (with_auth pool (get_run_trace pool))
+    ; Web.get "/api/runs/:id/deriv" (with_auth pool (get_deriv pool))
+    ; Web.get "/api/runs/:id" (with_auth pool (get_run pool))
+    ; Web.post "/api/runs/:id/gc" (with_auth pool (gc_run pool))
+    ; Web.post "/api/runs/:id/live-replay"
         (with_auth pool (live_replay_run pool))
-    ; Dream.get "/api/journals/:run_id" (with_auth pool (get_journal pool))
-    ; Dream.post "/api/journals/:run_id/fork"
+    ; Web.get "/api/journals/:run_id" (with_auth pool (get_journal pool))
+    ; Web.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))
-      ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
-      ; Dream.post "/api/identities" (with_auth pool (post_identity pool))
-      ; Dream.get "/api/identities" (with_auth pool (get_identities pool))
-      ; Dream.post "/api/grants/:id/attenuate" (with_auth pool (attenuate_grant pool))
-      ; Dream.get "/api/grants/:id" (with_auth pool (get_grant pool))
-      ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))
-      ; Dream.post "/api/repl" (with_auth pool (post_repl pool))
-      ; Dream.post "/api/tree/get" (with_auth pool (post_tree_get pool))
-      ; Dream.post "/api/tree/put" (with_auth pool (post_tree_put pool))
-      ; Dream.post "/api/tree/list" (with_auth pool (post_tree_list pool))
-      ; Dream.get "/api/tree/log" (with_auth pool (get_tree_log pool))
-      ; Dream.get "/api/tree/state" (with_auth pool (get_tree_state pool))
-      ; Dream.post "/api/ns/fork" (with_auth pool (post_ns_fork pool))
-      ; Dream.post "/api/value/put" (with_auth pool (post_value_put pool))
-      ; Dream.get "/api/value/:hash" (with_auth pool (get_value pool))
-      ; Dream.get "/api/fed/value/:hash" (with_auth pool (get_fed_value pool))
-      ; Dream.get "/api/fed/ops" (with_auth pool (get_fed_ops pool))
-      ; Dream.post "/api/fed/ops/apply" (with_auth pool (post_fed_ops_apply pool))
-      ; Dream.post "/api/route/put" (with_auth pool (post_route_put pool))
-      ; Dream.post "/api/route/delete" (with_auth pool (post_route_delete pool))
-      ; Dream.get "/api/route/get" (with_auth pool (get_route_get pool))
-      ; Dream.get "/api/route/list" (with_auth pool (get_route_list pool)) ]
+      ; Web.post "/api/grants" (with_auth pool (post_grant pool))
+      ; Web.post "/api/identities" (with_auth pool (post_identity pool))
+      ; Web.get "/api/identities" (with_auth pool (get_identities pool))
+      ; Web.post "/api/grants/:id/attenuate" (with_auth pool (attenuate_grant pool))
+      ; Web.get "/api/grants/:id" (with_auth pool (get_grant pool))
+      ; Web.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))
+      ; Web.post "/api/repl" (with_auth pool (post_repl pool))
+      ; Web.post "/api/tree/get" (with_auth pool (post_tree_get pool))
+      ; Web.post "/api/tree/put" (with_auth pool (post_tree_put pool))
+      ; Web.post "/api/tree/list" (with_auth pool (post_tree_list pool))
+      ; Web.get "/api/tree/log" (with_auth pool (get_tree_log pool))
+      ; Web.get "/api/tree/state" (with_auth pool (get_tree_state pool))
+      ; Web.post "/api/ns/fork" (with_auth pool (post_ns_fork pool))
+      ; Web.post "/api/value/put" (with_auth pool (post_value_put pool))
+      ; Web.get "/api/value/:hash" (with_auth pool (get_value pool))
+      ; Web.get "/api/fed/value/:hash" (with_auth pool (get_fed_value pool))
+      ; Web.get "/api/fed/ops" (with_auth pool (get_fed_ops pool))
+      ; Web.post "/api/fed/ops/apply" (with_auth pool (post_fed_ops_apply pool))
+      ; Web.post "/api/route/put" (with_auth pool (post_route_put pool))
+      ; Web.post "/api/route/delete" (with_auth pool (post_route_delete pool))
+      ; Web.get "/api/route/get" (with_auth pool (get_route_get pool))
+      ; Web.get "/api/route/list" (with_auth pool (get_route_list pool)) ]
 
 (* the public artifact directory (pp-slice T3): scripts/deploy/build-public.sh
    writes src.tgz here at boot/refresh; absent file is a plain 404 *)
@@ -2009,81 +2016,73 @@ let public_dir () =
 
 (* assemble the full router: health + JSON API + human pages + static *)
 let router ?(static_dir = "server/static") pool =
-  Dream.router
-    (Dream.get "/health" (health pool)
-    :: Dream.get "/src.tgz" (Dream.from_filesystem (public_dir ()) "src.tgz")
+  Web.router
+    (Web.get "/health" (health pool)
+    :: Web.get "/src.tgz" (Web.from_filesystem (public_dir ()) "src.tgz")
     :: api_routes pool
     @ Pages.open_routes pool
     @ Pages.routes pool
-    @ [ Dream.get "/static/**" (Dream.static static_dir) ]
-    @ [ Dream.any "/**" (dispatch_route pool) ])
+    @ [ Web.get "/static/**" (Web.static static_dir) ]
+    @ [ Web.any "/**" (dispatch_route pool) ])
 
-(* Called by bin/main.ml inside its own Lwt_main.run: bootstraps the
-   root identity, then serves without spawning another event loop. *)
-(* Identity bootstrap: PP_BOOTSTRAP pattern.  First boot (no root row):
-   the token (TUNA_BOOTSTRAP_TOKEN or freshly generated) is printed once
-   and its sha256 stored.  Re-boots: the supplied token MUST verify
-   against the stored hash — a generated token against an existing root
-   is a hard boot error, never a silent new credential. *)
-let serve ~port ~bootstrap_token =
+(* Boot + serve under an ambient Eio context (the eio mainloop lives in
+   bin/main.ml).  Direct style throughout: no Lwt_main, no promise. *)
+let serve ~env ~sw ~port ~bootstrap_token =
   let cfg = Db.config_from_env () in
-  Db.init cfg >>= fun pool ->
-  let boot =
+  Tuna_store.Pgx_eio.with_ctx (Tuna_store.Pgx_eio.Ctx.of_stdenv ~sw env) @@ fun () ->
+  let pool = Db.init cfg in
+  let _boot =
     Store.fetch_identity_by_name pool "root"
-    >>= function
+    |> function
     | Some root -> (
-        Store.verify_token pool bootstrap_token
-        >>= function
-        | Some r when r.Store.i_id = root.Store.i_id -> Lwt.return pool
+        match Store.verify_token pool bootstrap_token with
+        | Some r when r.Store.i_id = root.Store.i_id -> pool
         | _ ->
-            Lwt.fail
-              (Failure
-                 "root identity already exists: boot requires its original \
-                  token in TUNA_BOOTSTRAP_TOKEN") )
+            failwith
+              "root identity already exists: boot requires its original \
+               token in TUNA_BOOTSTRAP_TOKEN")
     | None ->
         print_string ("TUNA_BOOTSTRAP_TOKEN=" ^ bootstrap_token ^ "\n");
         flush stdout;
-        Store.bootstrap_identity pool ~name:"root" ~token:bootstrap_token ()
-        >>= fun root ->
-        Dream.log "boot: created root identity %s" root.Store.i_id;
-        Lwt.return pool
+        let root =
+          Store.bootstrap_identity pool ~name:"root" ~token:bootstrap_token ()
+        in
+        Web.log "boot: created root identity %s" root.Store.i_id;
+        pool
   in
-  boot >>= fun pool ->
   (* accounts tier (pp-slice): TUNA_BOOTSTRAP_PASSWORD ensures root's
      password credential each boot — the PP_BOOTSTRAP analog, but with
      NO insecure default: unset means root signs in by its bearer token
      (the login page's token form); set means password logins work for
      root.  Setting it again with a new value rotates the password. *)
   (match Sys.getenv_opt "TUNA_BOOTSTRAP_PASSWORD" with
-   | Some pw when String.trim pw <> "" ->
-       Store.fetch_identity_by_name pool "root"
-       >>= (function
-            | Some root ->
-                Store.set_password pool ~identity_id:root.Store.i_id
-                  ~password:(String.trim pw)
-            | None -> Lwt.return ())
-   | _ -> Lwt.return ())
-  >>= fun () ->
-  boot_fed_peers pool >>= fun () ->
+   | Some pw when String.trim pw <> "" -> (
+       match Store.fetch_identity_by_name pool "root" with
+       | Some root ->
+           Store.set_password pool ~identity_id:root.Store.i_id
+             ~password:(String.trim pw)
+       | None -> ())
+   | _ -> ());
+  boot_fed_peers pool;
   (* sabra stdlib v1 (borg/stdlib.borg): seed the sabralib dictionary
      by replaying every def record through the ordinary def round.
      Additive, skip-if-exists; each entry lands journaled +
      attributed. *)
   Stdlib_seed.boot pool
     ~execute:(fun ~caller ~command ->
-      Repl_cmd.execute pool ~caller ~command ~inputs:[] ~grant_ids:[]
-        ~fuel:1_000_000 ~size_cap:1_000_000
-        ~compile_deadline:(Run.compile_deadline_now ())
-        ()
-      >>= function
-      | Ok _ -> Lwt.return (Ok ())
-      | Error (code, msg) ->
-          Lwt.return (Error (Printf.sprintf "%d: %s" code msg)))
-    ()
-  >>= fun () ->
-  Dream.log "boot: identity bootstrap ok";
-  Dream.serve ~interface:"127.0.0.1" ~port
-    (Dream.logger
-    @@ router ~static_dir:
-         (Option.value (Sys.getenv_opt "TUNA_STATIC_DIR") ~default:"server/static")
+      match
+        Repl_cmd.execute pool ~caller ~command ~inputs:[] ~grant_ids:[]
+          ~fuel:1_000_000 ~size_cap:1_000_000
+          ~compile_deadline:(Run.compile_deadline_now ()) ()
+      with
+      | Ok _ -> Ok ()
+      | Error (code, msg) -> Error (Printf.sprintf "%d: %s" code msg))
+    ();
+  Web.log "boot: identity bootstrap ok";
+  Web.serve ~env ~sw ~interface:"127.0.0.1" ~port
+    (Web.logger
+    @@ router
+         ~static_dir:
+           (Option.value (Sys.getenv_opt "TUNA_STATIC_DIR")
+              ~default:"server/static")
          pool)

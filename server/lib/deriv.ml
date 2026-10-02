@@ -16,7 +16,7 @@
      calculus fact (the same ruling Replay.verify applies);
    - unknown run / missing program or input rows: the record would
      name bytes the store cannot show. *)
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Store = Tuna_store.Store
 module D = Tuna_deriv.Deriv
@@ -56,29 +56,29 @@ let journal_of_store (j : Store.journal) : D.Journal.t =
   ; j_row_hash = j.Store.j_row_hash }
 
 (* (code, body) like the fed core: 404 unknown, 409 no record. *)
-let of_run pool ~(run_id : string) : (int * string) Lwt.t =
+let of_run pool ~(run_id : string) : (int * string) =
   Store.fetch_run pool run_id
   >>= (function
-        | None -> Lwt.return (err 404 "unknown run id")
+        | None -> return (err 404 "unknown run id")
         | Some run -> (
             match status_of_run run with
-            | Error msg -> Lwt.return (err 409 msg)
+            | Error msg -> return (err 409 msg)
             | Ok status -> (
                 Store.fetch_program pool run.Store.r_program_hash
                 >>= (function
                       | None ->
-                          Lwt.return
+                          return
                             (err 404
                                (Printf.sprintf "program %s missing from the store"
                                   run.Store.r_program_hash))
                       | Some prog -> (
                           let rec inputs acc = function
-                            | [] -> Lwt.return (Ok (List.rev acc))
+                            | [] -> return (Ok (List.rev acc))
                             | h :: rest -> (
                                 Store.fetch_program pool h
                                 >>= (function
                                       | None ->
-                                          Lwt.return
+                                          return
                                             (Error
                                                ( 404,
                                                  Printf.sprintf
@@ -88,7 +88,7 @@ let of_run pool ~(run_id : string) : (int * string) Lwt.t =
                           in
                           inputs [] run.Store.r_input_hashes
                           >>= (function
-                                | Error (code, msg) -> Lwt.return (err code msg)
+                                | Error (code, msg) -> return (err code msg)
                                 | Ok input_ternaries ->
                                     Store.fetch_journals pool run.Store.r_id
                                     >>= fun js ->
@@ -111,4 +111,4 @@ let of_run pool ~(run_id : string) : (int * string) Lwt.t =
                                         ~parent_run_id:run.Store.r_parent_run_id
                                         ~journal:(List.map journal_of_store js)
                                     in
-                                    Lwt.return (200, D.to_string d)))))))
+                                    return (200, D.to_string d)))))))

@@ -1,7 +1,7 @@
 (* M5 store-layer tests.  Integration tests require Postgres
    (scripts/dev.sh start-pg); skipped silently otherwise via
    scripts/test-store.sh gating TUNA_TEST_PG=1. *)
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
@@ -43,7 +43,7 @@ let test_identities () =
   Alcotest.(check string) "token->id" root.S.i_id i.S.i_id;
   S.verify_token p "wrong-token" >>= fun wrong ->
   Alcotest.(check int) "wrong token" 0 (Option.fold ~some:(fun _ -> 1) ~none:0 wrong);
-  Lwt.return ()
+  return ()
 
 (* jsonb round-trips through pgx with its own spacing; compare parsed *)
 let json_equal a b =
@@ -73,7 +73,7 @@ let test_programs () =
   Alcotest.(check bool) "ir kept" true (json_equal_opt prog.S.p_ir prog2.S.p_ir);
   S.fetch_program p not_hash >>= fun fetched ->
   Alcotest.(check bool) "fetch found" true (Option.is_some fetched);
-  Lwt.return ()
+  return ()
 
 let test_runs () =
   Db.init (Db.config_from_env ()) >>= fun p ->
@@ -99,7 +99,7 @@ let test_runs () =
     r.S.r_result_hash;
   S.list_runs p ~program:(Some not_hash) ~limit:10 () >>= fun rs ->
   Alcotest.(check bool) "listed" true (List.exists (fun r -> r.S.r_id = run_id) rs);
-  Lwt.return ()
+  return ()
 
 let test_journals () =
   Db.init (Db.config_from_env ()) >>= fun p ->
@@ -139,7 +139,7 @@ let test_journals () =
   >>= fun () ->
   S.fetch_journals p run_id >>= fun js' ->
   (match S.verify_chain js' with
-   | `Bad _ -> Lwt.return ()
+   | `Bad _ -> return ()
    | `Ok -> Alcotest.fail "tampered journal verified")
 
 let test_grants () =
@@ -167,7 +167,7 @@ let test_grants () =
   S.check_grant p ~id:"ffffffff-0000-0000-0000-000000000000" ~caller:me.S.i_id ()
   >>= fun unknown ->
   (match unknown with
-   | `Unknown -> Lwt.return ()
+   | `Unknown -> return ()
    | _ -> Alcotest.fail "expected unknown")
 
 
@@ -185,7 +185,7 @@ let seed_program p ~caller src =
   let hash = art.C.hash_hex in
   let ir_json = Yojson.Basic.to_string (Api.ir_json_of_artifact art) in
   S.upsert_program p ~hash ~ternary ~ir:(Some ir_json) ~created_by:caller
-  >>= fun _ -> Lwt.return (hash, art)
+  >>= fun _ -> return (hash, art)
 
 let expect_verified _run_id = function
   | Rp.Verified _ -> ()
@@ -242,7 +242,7 @@ let test_run_sharing_v1 () =
         | None -> Alcotest.fail "run vanished"
         | Some run ->
             Rp.verify p ~run ~deadline:Float.infinity ()
-            >>= fun v -> expect_verified run.S.r_id v; Lwt.return ())
+            >>= fun v -> expect_verified run.S.r_id v; return ())
   >>= fun () ->
   (* the loop law: M M under v1 is a finite Loop run, and the row
      still verifies (loop replays to loop, same steps) *)
@@ -262,7 +262,7 @@ let test_run_sharing_v1 () =
         | None -> Alcotest.fail "run vanished"
         | Some run ->
             Rp.verify p ~run ~deadline:Float.infinity ()
-            >>= fun v -> expect_verified run.S.r_id v; Lwt.return ())
+            >>= fun v -> expect_verified run.S.r_id v; return ())
 
 (* The canonical M7 effectful program: echo the input, then negate it.
    Journal: exactly one boundary row (echo), carrying the grant and the
@@ -315,7 +315,7 @@ let test_run_boundary () =
         | Some r2 ->
             Alcotest.(check (option string)) "verify_status recorded"
               (Some "verified") r2.S.r_verify_status;
-            Lwt.return ())
+            return ())
 
 (* grant denial is a journaled error answer; the run continues and the
    replay still verifies (denial is data, never an exception) *)
@@ -340,7 +340,7 @@ let test_run_denial () =
          (Option.is_some j.S.j_error)
    | _ -> Alcotest.fail "bad journal");
   Rp.verify p ~run:row () >>= fun v -> expect_verified row.S.r_id v;
-  Lwt.return ()
+  return ()
 
 (* store/get + store/put through the boundary (migration 0002 prim_kv) *)
 let test_run_store_prims () =
@@ -353,7 +353,7 @@ let test_run_store_prims () =
         | Some (k, v) ->
             Alcotest.(check string) "kv key" "10" k;
             Alcotest.(check string) "kv value" "0" v;
-            Lwt.return ()
+            return ()
         | None -> Alcotest.fail "kv roundtrip failed")
   >>= fun () ->
   S.prim_put p ~key_ternary:"10" ~value_ternary:"10" >>= fun () ->
@@ -361,7 +361,7 @@ let test_run_store_prims () =
   >>= (function
         | Some (_, v) ->
             Alcotest.(check string) "kv overwrite" "10" v;
-            Lwt.return ()
+            return ()
         | None -> Alcotest.fail "kv vanished")
   >>= fun () ->
   (* a run that reads through the boundary *)
@@ -378,7 +378,7 @@ let test_run_store_prims () =
   Alcotest.(check string) "store/get returns the value" "10"
     (Option.value row.S.r_result_ternary ~default:"MISSING");
   Rp.verify p ~run:row () >>= fun v -> expect_verified row.S.r_id v;
-  Lwt.return ()
+  return ()
 
 (* journal tampering is caught by the chain walk *)
 let test_tamper_bad_chain () =
@@ -405,7 +405,7 @@ let test_tamper_bad_chain () =
             Rp.verify p ~run ()
             >>= fun v ->
             (match v with
-             | Rp.Bad_chain _ -> Lwt.return ()
+             | Rp.Bad_chain _ -> return ()
              | _ -> Alcotest.fail "tampered journal must fail the chain walk"))
 
 (* counterfactual fork: the edited answer flows through; history is
@@ -455,12 +455,12 @@ let test_counterfactual_fork () =
   Api.fork p ~parent_run_id:parent.S.r_id ~edits:[ (0, Api.Clear) ]
   >>= fun (bad, _, bv) ->
   (match bv with
-   | Rp.Diverged _ -> Lwt.return ()
+   | Rp.Diverged _ -> return ()
    | _ -> Alcotest.fail "cleared row must diverge the replay")
   >>= fun () ->
   Alcotest.(check string) "divergent fork errored" "error"
     (S.Run_status.to_string bad.S.r_status);
-  Lwt.return ()
+  return ()
 
 (* live replay (replay.live): re-execute against the CURRENT world
    under fresh grants.  Mints a NEW row linked by parent_run_id,
@@ -510,7 +510,7 @@ let test_live_replay () =
              | None -> Alcotest.fail "host change must surface a world diff");
             Alcotest.(check int) "current contract has no mismatch here" 0
               (List.length mismatches);
-            Lwt.return ())
+            return ())
   >>= fun () ->
   (* denied-grant live replay journals the denial, never raises *)
   Rp.live_replay p ~caller:me.S.i_id ~grant_ids:[] ~parent ~fuel:10000
@@ -527,7 +527,7 @@ let test_live_replay () =
                  Alcotest.(check bool) "denial journaled" true
                    (Option.is_some j.S.j_error)
              | _ -> Alcotest.fail "expected one denial row");
-            Lwt.return ())
+            return ())
 
 (* prim-versioning (replay.prim-versioning): a fabricated row pinning an
    older contract is reported FIRST-CLASS as a contract mismatch, and
@@ -574,7 +574,7 @@ let test_contract_mismatch () =
   Rp.verify p ~run:row ()
   >>= fun v ->
   expect_verified row.S.r_id v;
-  Lwt.return ()
+  return ()
 
 (* M10 acceptance wiring: retention (journal.retention-gc).  GC leaves
    a cited tombstone; verifiers report GONE, never VERIFIED.  Redaction
@@ -615,7 +615,7 @@ let test_gc_tombstone () =
                        | Rp.Gone msg ->
                            Alcotest.(check bool) "cited in the verdict" true
                              (String.length msg > 0);
-                           Lwt.return ()
+                           return ()
                        | Rp.Verified _ ->
                            Alcotest.fail "GONE must never report VERIFIED"
                        | _ -> Alcotest.fail "gc'd run must be Gone")))
@@ -640,7 +640,7 @@ let test_redaction_breaks_chain () =
         | Some run ->
             Rp.verify p ~run ~deadline:Float.infinity () >>= fun v ->
             expect_verified run.S.r_id v;
-            Lwt.return ())
+            return ())
   >>= fun () ->
   S.redact_journal_row p ~run_id:row.S.r_id ~seq:0 ~policy:"pii-scrub" ()
   >>= fun () ->
@@ -668,7 +668,7 @@ let test_redaction_breaks_chain () =
              | Rp.Bad_chain msg ->
                  Alcotest.(check bool) "break mentions seq 0" true
                    (String.length msg > 0);
-                 Lwt.return ()
+                 return ()
              | _ -> Alcotest.fail "redaction must be a visible chain break")
             >>= fun () -> Rp.verify_and_record p ~run_id:row.S.r_id ()
             >>= fun _ ->
@@ -678,7 +678,7 @@ let test_redaction_breaks_chain () =
                   | Some run ->
                       Alcotest.(check (option string)) "recorded failed"
                         (Some "failed") run.S.r_verify_status;
-                      Lwt.return ()))
+                      return ()))
 
 (* run-id resolution: full uuids pass through, hex prefixes resolve to
    the single matching run, anything else is None (callers answer 404,
@@ -709,15 +709,14 @@ let test_run_id_resolve () =
        Alcotest.(check string) "resolved id matches" run_id fid;
        Alcotest.(check string) "row id matches" run_id r.S.r_id
    | None -> Alcotest.fail "expected the resolved run");
-  Lwt.return ()
+  return ()
 
 let () =
   match Sys.getenv_opt "TUNA_TEST_PG" with
   | None -> print_endline "store tests skipped (TUNA_TEST_PG not set)"
   | Some _ ->
-    let lwt _name f = Alcotest_lwt.test_case _name `Quick (fun _sw () -> f ()) in
-    Lwt_main.run
-      (Alcotest_lwt.run "store"
+    let lwt _name f = Alcotest.test_case _name `Quick f in
+    Tuna_test_eio.run "store"
          [ ("ping", [ lwt "live" test_ping ])
          ; ("identities", [ lwt "bootstrap+verify" test_identities ])
          ; ("programs", [ lwt "upsert+fetch" test_programs ])
@@ -744,4 +743,4 @@ let () =
                  test_gc_tombstone
              ; lwt "redaction = visible chain break (answer unknown)"
                  test_redaction_breaks_chain
-             ] ) ])
+             ] ) ]

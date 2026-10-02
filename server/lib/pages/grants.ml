@@ -2,7 +2,7 @@
    revoke) over the same Store accessors the JSON API uses.  htmx
    enhances mint + revoke in place; plain forms redirect back. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module J = Yojson.Basic
@@ -62,7 +62,7 @@ let view pool user _req =
        prim_options rows)
 
 let mint pool user req =
-  Dream.form ~csrf:false req
+  Web.form ~csrf:false req
   >>= function
   | `Ok fields -> (
       match List.assoc_opt "prim" fields with
@@ -89,14 +89,14 @@ let mint pool user req =
                    {|<span class="okmsg">minted grant <code>%s</code> (%s)</span>|}
                    (L.esc g.S.g_id) (L.esc prim)
                in
-               if L.is_htmx req then Dream.html html
-               else Dream.redirect req "/grants"
+               if L.is_htmx req then Web.html html
+               else Web.redirect req "/grants"
              with Yojson.Json_error _ ->
                L.err_page ~user "args_attenuation must be valid JSON")))
   | _ -> L.err_page ~user "bad form submission"
 
 let revoke pool user req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   S.fetch_grant pool id
   >>= function
   | None -> L.not_found ~user "unknown grant id"
@@ -107,7 +107,7 @@ let revoke pool user req =
         S.revoke_grant pool id
         >>= fun () ->
         if L.is_htmx req then
-          Dream.html
+          Web.html
             (Printf.sprintf
                {|<tr id="grant-%s"><td><code>%s</code></td><td>%s</td><td><code>%s</code></td><td><code>%s</code></td><td>%s</td><td></td><td></td></tr>|}
                (L.esc g.S.g_id)
@@ -116,4 +116,4 @@ let revoke pool user req =
                (L.esc g.S.g_args_attenuation)
                (L.esc (L.short_hash g.S.g_caller))
                (L.badge "bad" "revoked"))
-        else Dream.redirect req "/grants")
+        else Web.redirect req "/grants")

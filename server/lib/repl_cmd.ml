@@ -37,7 +37,7 @@
    1 = fork left, 2 = fork right; leading '/' tolerated; "" = root),
    the same digits as the patch API and provenance tags. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module J = Yojson.Basic
 module S = Tuna_store.Store
@@ -160,8 +160,8 @@ let outcome ?status ?run_id ?program_hash ?note ?dict_rows ?ternary ?hash
 
 type round_result = (outcome, int * string) result
 
-let err code msg : round_result Lwt.t = Lwt.return (Error (code, msg))
-let err_ msg : round_result Lwt.t = Lwt.return (Error (400, msg))
+let err code msg : round_result = return (Error (code, msg))
+let err_ msg : round_result = return (Error (400, msg))
 
 (* -- journaled rounds (eval / def) ------------------------------------ *)
 
@@ -183,11 +183,11 @@ let journaled_round pool ~caller ~artifact ~input_trees ~grant_ids ~fuel
   Run.execute_run pool ~caller ~program_hash:artifact.B.hash_hex
     ~input_trees ~grant_ids ~parent_run_id:parent ~fuel ~size_cap ()
   >>= (function
-        | Error (code, msg) -> Lwt.return (Error (code, msg))
+        | Error (code, msg) -> return (Error (code, msg))
         | Ok (row, js) ->
             S.repl_state_put pool ~identity_id:caller ~run_id:row.S.r_id
             >>= fun () ->
-            Lwt.return (Ok (row, js, artifact.B.hash_hex)))
+            return (Ok (row, js, artifact.B.hash_hex)))
 
 let run_outcome kind (row : S.run) program_hash =
   outcome ~kind ~status:(S.Run_status.to_string row.S.r_status)
@@ -212,9 +212,9 @@ let do_eval pool ~caller ~grant_ids ~dictionary ~input_trees ~fuel ~size_cap
         journaled_round pool ~caller ~artifact ~input_trees ~grant_ids ~fuel
           ~size_cap ()
         >>= (function
-              | Error (code, msg) -> Lwt.return (Error (code, msg))
+              | Error (code, msg) -> return (Error (code, msg))
               | Ok (row, _js, phash) ->
-                  Lwt.return (Ok (run_outcome "eval" row phash))))
+                  return (Ok (run_outcome "eval" row phash))))
 
 let do_def pool ~caller ~dictionary
     ?(compile_fuel = B.default_compile_fuel)
@@ -233,9 +233,9 @@ let do_def pool ~caller ~dictionary
       journaled_round pool ~caller ~artifact ~input_trees:[] ~grant_ids:[]
         ~fuel:1_000_000 ~size_cap:1_000_000 ()
       >>= (function
-            | Error (code, msg) -> Lwt.return (Error (code, msg))
+            | Error (code, msg) -> return (Error (code, msg))
             | Ok (row, _js, phash) ->
-                Lwt.return
+                return
                   (Ok
                      ({ (run_outcome "def" row phash) with
                         o_ternary = artifact.B.ternary
@@ -249,37 +249,37 @@ let do_def pool ~caller ~dictionary
 let last_result_tree pool ~caller =
   S.repl_state_get pool ~identity_id:caller
   >>= (function
-        | None -> Lwt.return (Error "no previous round yet — eval something first")
+        | None -> return (Error "no previous round yet — eval something first")
         | Some run_id -> (
             S.fetch_run pool run_id >>= function
-            | None -> Lwt.return (Error "repl_state points at a vanished run")
+            | None -> return (Error "repl_state points at a vanished run")
             | Some row -> (
                 match row.S.r_result_ternary with
                 | None ->
-                    Lwt.return
+                    return
                       (Error (Printf.sprintf "last round (%s) produced no result tree" run_id))
                 | Some t -> (
                     match Tuna.Canon.of_string t with
                     | Error (off, msg) ->
-                        Lwt.return
+                        return
                           (Error
                              (Printf.sprintf
                                 "stored result unparseable at offset %d: %s" off
                                 msg))
                     | Ok tree ->
-                        Lwt.return (Ok (tree, row.S.r_result_hash))))))
+                        return (Ok (tree, row.S.r_result_hash))))))
 
 let program_tree pool h =
   S.fetch_program pool h >>= function
-  | None -> Lwt.return (Error (Printf.sprintf "unknown program hash %s" h))
+  | None -> return (Error (Printf.sprintf "unknown program hash %s" h))
   | Some prog -> (
       match Tuna.Canon.of_string prog.S.p_ternary with
       | Error (off, msg) ->
-          Lwt.return
+          return
             (Error
                (Printf.sprintf "stored program unparseable at offset %d: %s" off
                   msg))
-      | Ok t -> Lwt.return (Ok (t, Some prog.S.p_hash)))
+      | Ok t -> return (Ok (t, Some prog.S.p_hash)))
 
 let do_get pool ~caller path hash_opt =
   match P.normalize_path path with
@@ -297,7 +297,7 @@ let do_get pool ~caller path hash_opt =
           | None -> err_ (Printf.sprintf "path %S escapes the tree" path)
           | Some sub ->
               let ternary = Tuna.Canon.encode sub in
-              Lwt.return
+              return
                 (Ok
                    (outcome ~kind:"get" ~ternary ~hash:(Tuna.Hash.hex_of_tree sub)
                       ?program_hash:phash
@@ -345,7 +345,7 @@ let do_patch pool ~caller path new_ternary hash_opt =
                       S.upsert_program pool ~hash ~ternary ~ir:None
                         ~created_by:(Some caller)
                       >>= fun _ ->
-                      Lwt.return
+                      return
                         (Ok
                            (outcome ~kind:"patch" ~ternary ~hash
                               ?program_hash:phash
@@ -372,7 +372,7 @@ let do_first_diff pool a b =
        | Ok ta, Ok tb -> (
            match P.first_diff ta tb with
            | None ->
-               Lwt.return
+               return
                  (Ok
                     (outcome ~kind:"first-diff"
                        ~note:
@@ -385,7 +385,7 @@ let do_first_diff pool a b =
                  | Some s -> Tuna.Hash.hex_of_tree s
                  | None -> h (* identical ancestors; whole-tree hash *)
                in
-               Lwt.return
+               return
                  (Ok
                     (outcome ~kind:"first-diff"
                        ~ternary:d ~hash:d
@@ -401,7 +401,7 @@ let do_first_diff pool a b =
 let do_dict pool ~caller =
   S.dict_list pool ~identity_id:caller
   >>= fun rows ->
-  Lwt.return
+  return
     (Ok
        (outcome ~kind:"dict"
           ~dict_rows:(List.map (fun d -> (d.S.d_name, d.S.d_ternary)) rows)
@@ -411,7 +411,7 @@ let do_dict pool ~caller =
 
 let do_undef pool ~caller name =
   S.dict_del pool ~identity_id:caller ~name >>= fun () ->
-  Lwt.return (Ok (outcome ~kind:"undef" ~note:("undefined " ^ name) ()))
+  return (Ok (outcome ~kind:"undef" ~note:("undefined " ^ name) ()))
 
 (* -- the round -------------------------------------------------------- *)
 
@@ -439,8 +439,8 @@ let execute pool ~caller ~command ~inputs ~grant_ids ~fuel ~size_cap
     ?(compile_fuel = B.default_compile_fuel)
     ?(compile_size_cap = B.default_compile_size_cap)
     ?(compile_deadline = Float.infinity) () :
-    round_result Lwt.t =
-  Lwt.catch
+    round_result =
+  catch
     (fun () ->
       S.dict_list pool ~identity_id:caller
       >>= fun rows ->

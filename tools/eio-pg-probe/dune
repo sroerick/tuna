@@ -1,0 +1,3 @@
+(executable
+ (name eio_pg_probe)
+ (libraries tuna_store pgx eio eio.unix eio_main))

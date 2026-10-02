@@ -4,7 +4,11 @@
    root bearer token comes from TUNA_BOOTSTRAP_TOKEN, or is generated
    (32 random bytes) and printed ONCE to stdout — the operator copies
    it at first boot; only its sha256 is stored (Store.bootstrap_identity,
-   name "root", is_admin).  Re-boots with the same token are no-ops. *)
+   name "root", is_admin).  Re-boots with the same token are no-ops.
+
+   rim-eio: the entry point is an Eio mainloop.  No Lwt_main, no
+   bridge; the whole server runs on one Eio domain and the store/HTTP
+   layers are direct style. *)
 
 let read_port () =
   match Sys.getenv_opt "TUNA_HTTP_PORT" with
@@ -29,5 +33,7 @@ let () =
     | _ -> random_token ()
   in
   (* printing is serve's job: only a FRESH credential gets printed *)
-  Dream.log "boot: http on 127.0.0.1:%d" port;
-  Lwt_main.run (Tuna_server.Api.serve ~port ~bootstrap_token:token)
+  Tuna_server.Web.log "boot: http on 127.0.0.1:%d" port;
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  Tuna_server.Api.serve ~env ~sw ~port ~bootstrap_token:token

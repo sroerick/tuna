@@ -5,7 +5,7 @@
    own poll attribute once the run is finished.  Without JS: refresh
    links + the verify form posts to the same URL and redirects back. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module L = Layout
@@ -91,7 +91,7 @@ let verify_button run_id =
     run_id run_id
 
 let view pool user req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   S.fetch_run_resolved pool id
   >>= function
   | None -> L.not_found ~user "unknown run id"
@@ -100,7 +100,7 @@ let view pool user req =
         (if r0.S.r_verify_status = None && finished r0 then
            Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
            >>= fun _ -> S.fetch_run pool id
-       else Lwt.return (Some r0))
+       else return (Some r0))
       >>= function
       | None -> L.not_found ~user "run row vanished"
         | Some r -> (
@@ -154,7 +154,7 @@ let view pool user req =
 
 (* The journal tick fragment (no-JS fallback: a plain page with the table). *)
 let journal_frag pool user req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   S.fetch_run_resolved pool id
   >>= function
   | None -> L.not_found ~user "unknown run id"
@@ -162,7 +162,7 @@ let journal_frag pool user req =
       S.fetch_journals pool id
       >>= fun js ->
       let html = journal_div r.S.r_id js (not (finished r)) in
-      if L.is_htmx req then Dream.html html
+      if L.is_htmx req then Web.html html
       else
         L.page ~user ~title:"tuna — journal"
           (Printf.sprintf
@@ -176,9 +176,9 @@ let journal_frag pool user req =
    authoritative statement; the trace just shows the firings behind
    them, one row at a time. *)
 let trace_page pool user req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   let page_size =
-    match Dream.query req "limit" with
+    match Web.query req "limit" with
     | Some s -> (
         match int_of_string_opt s with
         | Some v when v > 0 && v <= 1000 -> v
@@ -186,7 +186,7 @@ let trace_page pool user req =
     | None -> 200
   in
   let after =
-    match Dream.query req "after" with
+    match Web.query req "after" with
     | Some s -> (
         match int_of_string_opt s with Some v when v >= 0 -> v | _ -> -1)
     | None -> -1
@@ -258,12 +258,12 @@ let trace_page pool user req =
 (* Verify button POST: run the replay verifier now, surface the verdict
    (fragment for htmx; redirect back to the run page for plain forms). *)
 let verify_post pool user req =
-  let id = Dream.param req "id" in
+  let id = Web.param req "id" in
   S.fetch_run_resolved pool id
   >>= function
   | None -> L.not_found ~user "unknown run id"
   | Some (id, _) -> (
       Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
       >>= fun v ->
-      if L.is_htmx req then Dream.html (verify_fragment v)
-      else Dream.redirect req ("/runs/" ^ id))
+      if L.is_htmx req then Web.html (verify_fragment v)
+      else Web.redirect req ("/runs/" ^ id))

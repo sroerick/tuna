@@ -11,7 +11,7 @@
    (routes.borg law 2: reserved surfaces match first; the routes chapter
    grows its pinned list here by book change). *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module L = Layout
@@ -91,13 +91,13 @@ let code pool _user _req =
    invented), body generated fresh per request so the origin is right
    behind any reverse proxy. *)
 let agent_json _pool req =
-  let base = Ag.base_url_of_headers (Dream.all_headers req) in
-  Dream.respond
+  let base = Ag.base_url_of_headers (Web.all_headers req) in
+  Web.respond
     ~headers:[ ("Content-Type", "application/json; charset=utf-8") ]
     (Yojson.Basic.pretty_to_string (Ag.agent_json ~base_url:base ()))
 
 let agent_txt _pool req =
-  let base = Ag.base_url_of_headers (Dream.all_headers req) in
-  Dream.respond
+  let base = Ag.base_url_of_headers (Web.all_headers req) in
+  Web.respond
     ~headers:[ ("Content-Type", "text/plain; charset=utf-8") ]
     (Ag.agent_markdown ~base_url:base ())

@@ -15,15 +15,13 @@
 
 (executable
  (name demand_tests)
- (modules demand_tests)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server
-   alcotest-lwt lwt))
+ (modules demand_tests tuna_test_eio)
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server alcotest eio eio_main eio.unix))
 
 (executable
  (name delegation_tests)
- (modules delegation_tests)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server
-   alcotest-lwt lwt))
+ (modules delegation_tests tuna_test_eio)
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server alcotest eio eio_main eio.unix))
 
 ; demand-memo (borg/sharing.borg): PG-gated, own scratch db
 (rule
@@ -76,20 +74,18 @@
 
 (executable
  (name store_tests)
- (modules store_tests)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest-lwt
-   lwt))
+ (modules store_tests tuna_test_eio)
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest eio eio_main eio.unix))
 
 (executable
  (name tree_substrate_tests)
- (modules tree_substrate_tests)
- (libraries tuna tuna_compiler tuna_store tuna_server alcotest-lwt lwt))
+ (modules tree_substrate_tests tuna_test_eio)
+ (libraries tuna tuna_compiler tuna_store tuna_server alcotest eio eio_main eio.unix))
 
 (executable
  (name m11_tests)
- (modules m11_tests)
- (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest-lwt
-   lwt))
+ (modules m11_tests tuna_test_eio)
+ (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest eio eio_main eio.unix))
 
 (executable
  (name repl_tests)
@@ -146,10 +142,9 @@
 ; M12 federation F1 acceptance tests (value exchange): same PG gate, its
 ; own scratch database so the PG suites never share one.
  (executable
-  (name fed_tests)
-  (modules fed_tests)
-  (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif
-    alcotest-lwt lwt))
+ (name fed_tests)
+ (modules fed_tests tuna_test_eio)
+ (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest eio eio_main eio.unix))
 
 (rule
  (alias runtest)
@@ -162,9 +157,8 @@
 ; own scratch db so parallel PG suites never share one.
 (executable
  (name session_tests)
- (modules session_tests)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx
-   alcotest-lwt lwt alcotest))
+ (modules session_tests tuna_test_eio)
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest eio eio_main eio.unix))
 
 (rule
  (alias runtest)
@@ -187,9 +181,8 @@
 
 (executable
  (name deriv_tests)
- (modules deriv_tests)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server tuna_deriv
-   alcotest-lwt lwt))
+ (modules deriv_tests tuna_test_eio)
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server tuna_deriv alcotest eio eio_main eio.unix))
 
 ; derivation records (borg/deriv.borg): same PG gate, own scratch db
 ; (tuna_test_deriv) so the PG suites never share one.

@@ -15,7 +15,7 @@
    4. off by default: without demand:true the garden is never consulted
       or written. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
@@ -25,14 +25,14 @@ let setup () =
   Db.init (Db.config_from_env ()) >>= fun p ->
   Db.apply_migrations p
     ~dir:(try Sys.getenv "TUNA_TEST_MIGRATIONS" with Not_found -> "../migrations")
-  >>= fun _ -> Lwt.return p
+  >>= fun _ -> return p
 
 let who p name = S.bootstrap_identity p ~name ~token:(name ^ "-token") ()
 
 let upsert p ~ternary =
   let hash = Tuna.Hash.hex_of_string ternary in
   S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None
-  >>= fun _ -> Lwt.return hash
+  >>= fun _ -> return hash
 
 (* T-family unfolded at run time (the same shape sharing_tests uses):
    the compiled artifact's v1 firing count is O(d) distinct.  A fixed
@@ -56,7 +56,7 @@ let run_once p ~caller ~program_hash ~demand =
     ~fuel:100_000 ~semantics:"v1" ~demand ~size_cap:1_000_000 ()
   >>= function
   | Error (_, msg) -> Alcotest.fail ("run failed: " ^ msg)
-  | Ok (row, _js) -> Lwt.return row
+  | Ok (row, _js) -> return row
 
 let test_clean_firing_cached_and_reused () =
   setup () >>= fun p ->
@@ -73,7 +73,7 @@ let test_clean_firing_cached_and_reused () =
     ~size_cap:1_000_000 ()
   >>= (function
         | Error (_, msg) -> Alcotest.fail ("run failed: " ^ msg)
-        | Ok (row, _) -> Lwt.return row)
+        | Ok (row, _) -> return row)
   >>= fun r1 ->
   Alcotest.(check int) "run1: no garden hits (cold)" 0 r1.S.r_demand_hits;
   Alcotest.(check bool) "run1: demand_sharing recorded" true
@@ -88,7 +88,7 @@ let test_clean_firing_cached_and_reused () =
     ~size_cap:1_000_000 ()
   >>= (function
         | Error (_, msg) -> Alcotest.fail ("run2 failed: " ^ msg)
-        | Ok (row, _) -> Lwt.return row)
+        | Ok (row, _) -> return row)
   >>= fun r2 ->
   let s2 = Option.value r2.S.r_step_count ~default:(-1) in
   Alcotest.(check bool) "run2: garden hits > 0" true (r2.S.r_demand_hits > 0);
@@ -97,7 +97,7 @@ let test_clean_firing_cached_and_reused () =
   (* same result hash: clean firings are pure, so the answer is identical *)
   Alcotest.(check (option string)) "same result" r1.S.r_result_hash
     r2.S.r_result_hash;
-  Lwt.return ()
+  return ()
 
 let test_dirty_firings_never_cached () =
   setup () >>= fun p ->
@@ -125,7 +125,7 @@ let test_dirty_firings_never_cached () =
       ~semantics:"v1" ~demand:true ~size_cap:1_000_000 ()
     >>= (function
           | Error (_, msg) -> Alcotest.fail ("dirty run failed: " ^ msg)
-          | Ok (row, _) -> Lwt.return row)
+          | Ok (row, _) -> return row)
   in
   run_demand () >>= fun r1 ->
   (* the only firing is dirty: zero clean firings, nothing persisted *)
@@ -141,7 +141,7 @@ let test_dirty_firings_never_cached () =
   Alcotest.(check int) "run2: still no garden hits" 0 r2.S.r_demand_hits;
   S.demand_memo_list p ~caller:a.S.i_id () >>= fun rows2 ->
   Alcotest.(check int) "run2: still no garden rows" 0 (List.length rows2);
-  Lwt.return ()
+  return ()
 
 let test_own_garden_scope () =
   setup () >>= fun p ->
@@ -157,7 +157,7 @@ let test_own_garden_scope () =
       ~size_cap:1_000_000 ()
     >>= (function
           | Error (_, msg) -> Alcotest.fail ("run failed: " ^ msg)
-          | Ok (row, _) -> Lwt.return row)
+          | Ok (row, _) -> return row)
   in
   (* a computes and caches into ITS OWN garden *)
   runDemand a.S.i_id >>= fun ra1 ->
@@ -172,7 +172,7 @@ let test_own_garden_scope () =
   runDemand b.S.i_id >>= fun rb2 ->
   Alcotest.(check bool) "b: own garden warm on repeat" true
     (rb2.S.r_demand_hits > 0);
-  Lwt.return ()
+  return ()
 
 let test_off_by_default () =
   setup () >>= fun p ->
@@ -187,15 +187,14 @@ let test_off_by_default () =
   S.demand_memo_list p ~caller:a.S.i_id ()
   >>= fun rows ->
   Alcotest.(check int) "nothing written when off" 0 (List.length rows);
-  Lwt.return ()
+  return ()
 
 let () =
-  let lwt name f = Alcotest_lwt.test_case name `Quick (fun _sw () -> f ()) in
-  Lwt_main.run
-    (Alcotest_lwt.run "demand"
+  let lwt name f = Alcotest.test_case name `Quick f in
+  Tuna_test_eio.run "demand"
        [ ( "demand-memo"
          , [ lwt "clean firings cached and reused" test_clean_firing_cached_and_reused
            ; lwt "dirty firings never cached" test_dirty_firings_never_cached
            ; lwt "own-garden scope" test_own_garden_scope
            ; lwt "off by default" test_off_by_default
-           ] ) ])
+           ] ) ]

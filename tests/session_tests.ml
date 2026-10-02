@@ -2,7 +2,7 @@
    credentials, opaque sessions, expiry/revoke.  PG-gated via
    scripts/test-store.sh like the other store suites (own scratch db
    tuna_test_sessions). *)
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
@@ -35,7 +35,7 @@ let test_hash_format () =
   Alcotest.(check bool) "secure_equal eq" true (C.secure_equal "abcdef" "abcdef");
   Alcotest.(check bool) "secure_equal ne" false (C.secure_equal "abcdef" "abcdeg");
   Alcotest.(check bool) "secure_equal len" false (C.secure_equal "abcdef" "abcdef0");
-  Lwt.return ()
+  return ()
 
 let with_pg f =
   Db.init (Db.config_from_env ())
@@ -65,7 +65,7 @@ let test_passwords () =
       S.verify_password p ~username:"accounts-test-unknown" ~password:"hunter2"
       >>= fun unknown ->
       Alcotest.(check bool) "unknown user -> deny" true (Option.is_none unknown);
-      Lwt.return ())
+      return ())
 
 let test_sessions () =
   with_pg
@@ -102,7 +102,7 @@ let test_sessions () =
       S.verify_session p tok >>= fun r1 ->
       Alcotest.(check bool) " revoke one leaves nothing (earlier revoke held)" true
         (Option.is_none r1);
-      Lwt.return ())
+      return ())
 
 let test_auth_log () =
   with_pg
@@ -134,15 +134,14 @@ let test_auth_log () =
         true (List.exists (fun r -> r = ("password", "false")) all);
       Alcotest.(check bool) "session mint logged"
         true (List.exists (fun r -> fst r = "session") all);
-      Lwt.return ())
+      return ())
 
 let () =
   match Sys.getenv_opt "TUNA_TEST_PG" with
   | None -> print_endline "session tests skipped (TUNA_TEST_PG not set)"
   | Some _ ->
-    let lwt _name f = Alcotest_lwt.test_case _name `Quick (fun _sw () -> f ()) in
-    Lwt_main.run
-      (Alcotest_lwt.run "sessions"
+    let lwt _name f = Alcotest.test_case _name `Quick f in
+    Tuna_test_eio.run "sessions"
          [ ( "hash-format"
            , [ lwt "interim format round-trip, fail-closed, dummy" test_hash_format ] )
          ; ("passwords", [ lwt "set+verify / wrong / unknown" test_passwords ])
@@ -150,4 +149,4 @@ let () =
            , [ lwt "mint+verify+revoke+expiry+lifetimes" test_sessions ] )
          ; ( "auth-log"
            , [ lwt "password+session attempts land in auth_log" test_auth_log ] )
-         ])
+         ]

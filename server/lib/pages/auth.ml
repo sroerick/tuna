@@ -16,7 +16,7 @@
    /api/* from a logged-in session, PP's same stance; CSRF risk is the
    recorded limitation, mitigated only by SameSite=Lax for now). *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module L = Layout
@@ -27,23 +27,23 @@ let cookie_name = "tuna_session"
 let session_ttl_seconds = 60 * 60 * 24 * 14
 
 (* Resolve the page identity from the session cookie (None = anonymous). *)
-let identity_of_req pool req : S.identity option Lwt.t =
-  match Dream.cookie req ~decrypt:false cookie_name with
-  | None -> Lwt.return None
+let identity_of_req pool req : S.identity option =
+  match Web.cookie req ~decrypt:false cookie_name with
+  | None -> return None
   | Some token -> S.verify_session pool token
 
 (* Pages are behind the session; anonymous requests are sent to login. *)
 let require_auth pool handler req =
   identity_of_req pool req
   >>= function
-  | None -> Dream.redirect req "/login"
+  | None -> Web.redirect req "/login"
   | Some user -> handler user req
 
 let set_session resp req token =
-  Dream.set_cookie resp req ~encrypt:false ~http_only:true
+  Web.set_cookie resp req ~encrypt:false ~http_only:true
     ~same_site:(Some `Lax) ~path:(Some "/") cookie_name token
 
-let drop_session resp req = Dream.drop_cookie resp req cookie_name
+let drop_session resp req = Web.drop_cookie resp req cookie_name
 
 (* Mint a session row and hand it out through the cookie; returns the
    (already-redirecting) response with the cookie attached. *)
@@ -51,7 +51,7 @@ let start_session pool resp req ~identity_id =
   S.mint_session pool ~identity_id ~ttl_seconds:session_ttl_seconds
   >>= fun token ->
   set_session resp req token;
-  Lwt.return resp
+  return resp
 
 let login_body =
   {|<h2>login</h2>
@@ -72,7 +72,7 @@ and a session is minted for it.</p>
 let login_get _req = L.page ~title:"tuna — login" login_body
 
 let login_post pool req =
-  Dream.form ~csrf:false req
+  Web.form ~csrf:false req
   >>= function
   | `Ok fields -> (
       let field name = List.assoc_opt name fields in
@@ -82,7 +82,7 @@ let login_post pool req =
           >>= function
           | None -> L.err_page ~code:401 "unknown identity or wrong password"
           | Some i ->
-              Dream.redirect req "/"
+              Web.redirect req "/"
               >>= fun resp -> start_session pool resp req ~identity_id:i.S.i_id)
       | _ -> (
           match field "token" with
@@ -92,18 +92,18 @@ let login_post pool req =
               >>= function
               | None -> L.err_page ~code:401 "unknown identity or token"
               | Some i ->
-                  Dream.redirect req "/"
+                  Web.redirect req "/"
                   >>= fun resp ->
                   start_session pool resp req ~identity_id:i.S.i_id)))
   | _ -> L.err_page "bad form submission"
 
 let logout_get pool req =
-  match Dream.cookie req ~decrypt:false cookie_name with
-  | None -> Dream.redirect req "/login"
+  match Web.cookie req ~decrypt:false cookie_name with
+  | None -> Web.redirect req "/login"
   | Some token ->
       S.revoke_session pool token
       >>= fun () ->
-      Dream.redirect req "/login"
+      Web.redirect req "/login"
       >>= fun resp ->
       drop_session resp req;
-      Lwt.return resp
+      return resp
