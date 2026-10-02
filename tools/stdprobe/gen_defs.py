@@ -161,5 +161,19 @@ d("int-canonical", lam("n",
 d("int-zero", "%200")
 d("int-one", "%202100")
 
+# int-neg: canonicalize, then flip a nonzero sign. zero in -> %200 out
+# (never mints -0). junk -> canonicalize first, so junk -> +0 -> +0.
+d("int-neg", lam("n",
+  L(lam("c",
+    dispatch(L("pair", "%0", "%0"),
+             lam("j", L("pair", "%0", "%0")),
+             lam2("s", "m",
+               dispatch(L("pair", "%0", "%0"),
+                        lam("j2", L("pair", L("not", "s"), "m")),
+                        lam2("u", "v", L("pair", L("not", "s"), "m")),
+                        "m")),
+             "c")),
+    L("int-canonical", "n"))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")

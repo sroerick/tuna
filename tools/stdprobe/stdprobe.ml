@@ -65,6 +65,7 @@ let () =
   d "int-canonical" "(lambda (n) ((tree-case (pair %0 %0) (lambda (c) (pair %0 %0)) (lambda (sign) (lambda (mag) ((lambda (m) ((tree-case (pair %0 %0) (lambda (c2) (pair (is-stem sign) m)) (lambda (u2) (lambda (v2) (pair (is-stem sign) m)))) m)) (mag-canonical mag))))) n))";
   d "int-zero" "%200";
   d "int-one" "%202100";
+  d "int-neg" "(lambda (n) ((lambda (c) ((tree-case (pair %0 %0) (lambda (j) (pair %0 %0)) (lambda (s) (lambda (m) ((tree-case (pair %0 %0) (lambda (j2) (pair (not s) m)) (lambda (u) (lambda (v) (pair (not s) m)))) m)))) c)) (int-canonical n)))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -116,6 +117,12 @@ let () =
   eval "int-canonical" ["%10"];            (* junk stem int -> +0 *)
   eval "int-canonical" ["int-zero"];       (* alias pins *)
   eval "int-canonical" ["int-one"];
+  eval "int-neg" ["int-one"];            (* +1 -> -1 *)
+  eval "int-neg" ["%2102100"];           (* -1 -> +1 *)
+  eval "int-neg" ["int-zero"];           (* 0 -> 0, never -0 *)
+  eval "int-neg" ["%2100"];              (* -0 in -> +0 out *)
+  eval "int-neg" ["%0"];                 (* junk -> +0 *)
+  eval "int-neg" ["%20202100"];          (* +2 -> -2 *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];
