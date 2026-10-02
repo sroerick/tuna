@@ -59,7 +59,7 @@ let routes pool =
 let open_routes pool =
   [ Dream.get "/login" A.login_get
   ; Dream.post "/login" (A.login_post pool)
-  ; Dream.get "/logout" A.logout_get
+  ; Dream.get "/logout" (A.logout_get pool)
   ; Dream.get "/programs/lookup"
       (A.require_auth pool (fun _user req ->
            let hash =

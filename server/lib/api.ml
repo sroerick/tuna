@@ -117,9 +117,12 @@ let bearer_token req =
   | _ -> None
 
 let authenticate pool req =
+  (* the rim (pp-slice accounts): bearer FIRST (the agent tier,
+     unchanged), then the session cookie (the browser tier: a
+     logged-in session may drive /api/* exactly like PP's pp_session;
+     CSRF is the recorded honest limitation, SameSite=Lax only) *)
   match bearer_token req with
-  | None -> Lwt.return None
-  | Some token ->
+  | Some token -> (
       Store.verify_token pool token
       >>= function
       | None -> Lwt.return None
@@ -128,7 +131,20 @@ let authenticate pool req =
             (Some
                { auth_id = i.Store.i_id
                ; auth_name = i.Store.i_name
-               ; auth_is_admin = i.Store.i_is_admin })
+               ; auth_is_admin = i.Store.i_is_admin }))
+  | None -> (
+      match Dream.cookie req ~decrypt:false Auth.cookie_name with
+      | None -> Lwt.return None
+      | Some tok ->
+          Store.verify_session pool tok
+          >>= function
+          | None -> Lwt.return None
+          | Some i ->
+              Lwt.return
+                (Some
+                   { auth_id = i.Store.i_id
+                   ; auth_name = i.Store.i_name
+                   ; auth_is_admin = i.Store.i_is_admin }))
 
 (* 5xx guard: domain/store errors become a JSON 500 with the message;
    Dream's default handler would otherwise answer html. *)
@@ -1888,6 +1904,21 @@ let serve ~port ~bootstrap_token =
         Lwt.return pool
   in
   boot >>= fun pool ->
+  (* accounts tier (pp-slice): TUNA_BOOTSTRAP_PASSWORD ensures root's
+     password credential each boot — the PP_BOOTSTRAP analog, but with
+     NO insecure default: unset means root signs in by its bearer token
+     (the login page's token form); set means password logins work for
+     root.  Setting it again with a new value rotates the password. *)
+  (match Sys.getenv_opt "TUNA_BOOTSTRAP_PASSWORD" with
+   | Some pw when String.trim pw <> "" ->
+       Store.fetch_identity_by_name pool "root"
+       >>= (function
+            | Some root ->
+                Store.set_password pool ~identity_id:root.Store.i_id
+                  ~password:(String.trim pw)
+            | None -> Lwt.return ())
+   | _ -> Lwt.return ())
+  >>= fun () ->
   boot_fed_peers pool >>= fun () ->
   (* sabra stdlib v1 (borg/stdlib.borg): seed the sabralib dictionary
      by replaying every def record through the ordinary def round.

@@ -1126,6 +1126,136 @@ let verify_token p token =
    | [ r ] -> Lwt.return (Some (identity_of_row r))
    | _ -> Lwt.return None)
 
+(* -- accounts: passwords + browser sessions (0013, pp-slice) -------
+
+   The browser tier over the SAME identities: kind-tagged credentials
+   (v1: kind='password', INTERIM sha256$salt$digest — the PP legacy
+   format, argon2id named as planned in the honest-limitations tone of
+   both READMEs) and opaque session tokens (auth_sessions: only the
+   sha256 is stored, expiry + revoke-on-logout, exactly PP's
+   mint/lookup/revoke shape on flat 0001-style rows).  Bearer auth
+   above is untouched — the agent tier.  auth_log rows run alongside
+   so throttling/forensics have data, not guesses. *)
+
+(* Log an auth attempt.  Never fails a login: log rows are telemetry,
+   pp-slice has no throttle yet (chapter honest-limitations). *)
+let log_auth p ?(identity_id : string option) ~kind ~success () =
+  Lwt.catch
+    (fun () ->
+      Db.q_unit
+        ~params:[ p_opt identity_id; p_str kind; p_bool success ]
+        p
+        "INSERT INTO auth_log (identity_id, kind, success) \
+         VALUES ($1::uuid, $2, $3)"
+      >>= fun () -> Lwt.return ())
+    (fun _ -> Lwt.return ())
+
+(* Set (or rotate) an identity's password.  Upsert: one live password row
+   per identity (UNIQUE(identity_id, kind)); each call rehashes with a
+   fresh salt — a repeated set is a rotation, and boot-time ensure
+   (TUNA_BOOTSTRAP_PASSWORD) rewrites the row identically when the
+   operator leaves it alone (the salt churns but the effective secret
+   does not). *)
+let set_password p ~identity_id ~password =
+  let hash = Credentials.hash_password password in
+  Db.q_unit
+    ~params:[ p_str identity_id; p_str "password"; p_str hash ]
+    p
+    "INSERT INTO credentials (identity_id, kind, secret_hash) \
+     VALUES ($1::uuid, $2, $3) \
+     ON CONFLICT (identity_id, kind) \
+     DO UPDATE SET secret_hash = EXCLUDED.secret_hash"
+  >>= fun () -> Lwt.return ()
+
+(* Username+password verify -> identity.  Unknown usernames still pay
+   one dummy verify so known/unknown cost the same (timing flatten);
+   the row AND the hash check both have to pass, and neither failure
+   path names which half failed. *)
+let verify_password p ~username ~password =
+  fetch_identity_by_name p (String.trim username)
+  >>= (function
+       | None ->
+           let _ =
+             Credentials.verify_password password
+               ~stored:Credentials.dummy_hash
+           in
+           log_auth p ~kind:"password" ~success:false ()
+           >>= fun () -> Lwt.return None
+       | Some i ->
+           Db.q ~params:[ p_str i.i_id ] p
+             "SELECT secret_hash FROM credentials \
+              WHERE identity_id = $1::uuid AND kind = 'password'"
+           >>= (function
+               | [ r ] when
+                   Credentials.verify_password password
+                     ~stored:(text r 0 "credentials.secret") ->
+                   log_auth p ~identity_id:i.i_id ~kind:"password" ~success:true ()
+                   >>= fun () ->
+                   (* last_used_at is telemetry: a failed touch never
+                      fails the login (PP's same keep division) *)
+                   Lwt.catch
+                     (fun () ->
+                       Db.q_unit ~params:[ p_str i.i_id ] p
+                         "UPDATE credentials SET last_used_at = now() \
+                          WHERE identity_id = $1::uuid AND kind = 'password'"
+                       >>= fun () -> Lwt.return ())
+                     (fun _ -> Lwt.return ())
+                   >>= fun () -> Lwt.return (Some i)
+               | _ ->
+                   (* wrong password, no row, or more rows - one
+                      uniform deny, same log shape *)
+                   log_auth p ~identity_id:i.i_id ~kind:"password" ~success:false ()
+                   >>= fun () -> Lwt.return None))
+
+(* Mint an opaque session token for a login.  The raw token leaves the
+   process exactly once (cookie value); auth_sessions stores only its
+   sha256.  Expiry is the caller's TTL seconds (default at the login
+   handler). *)
+let mint_session p ~identity_id ~ttl_seconds =
+  let token = Credentials.mint_session_token () in
+  Db.q_unit
+    ~params:
+      [ p_str identity_id
+      ; p_str (Tuna.Hash.hex_of_string token)
+      ; p_int64 (Int64.of_int ttl_seconds) ]
+    p
+    "INSERT INTO auth_sessions (identity_id, token_hash, expires_at) \
+     VALUES ($1::uuid, $2, now() + ($3::text || ' seconds')::interval)"
+  >>= fun () ->
+  log_auth p ~identity_id ~kind:"session" ~success:true ()
+  >>= fun () -> Lwt.return token
+
+(* Verify a session cookie value -> identity.  Live = sha256 hit AND
+   not revoked AND not expired; everything else is anonymous.  Misses
+   are NOT logged: session lookups are per-page-request traffic, log
+   rows would dilute (mints and logins carry the accounts story). *)
+let verify_session p token =
+  if String.length token = 0 then Lwt.return None
+  else
+    Db.q ~params:[ p_str (Tuna.Hash.hex_of_string token) ] p
+      "SELECT i.id::text, i.name, i.token_hash, i.is_admin \
+       FROM auth_sessions s JOIN identities i ON i.id = s.identity_id \
+       WHERE s.token_hash = $1 AND s.revoked_at IS NULL \
+       AND s.expires_at > now() LIMIT 1"
+  >>= fun rows ->
+    (match rows with
+     | [] -> Lwt.return None
+     | [ r ] -> Lwt.return (Some (identity_of_row r))
+     | _ -> Lwt.return None)
+
+(* Revoke-by-token (logout).  Idempotent: an already-revoked or unknown
+   token is still a successful logout from the caller's view. *)
+let revoke_session p token =
+  Lwt.catch
+    (fun () ->
+      Db.q_unit
+        ~params:[ p_str (Tuna.Hash.hex_of_string token) ]
+        p
+        "UPDATE auth_sessions SET revoked_at = now() \
+         WHERE token_hash = $1 AND revoked_at IS NULL"
+      >>= fun () -> Lwt.return ())
+    (fun _ -> Lwt.return ())
+
 (* -- tree substrate: derived path index + chained op log (M10) --------
 
    migrations 0005/0006.  Law (tuna.borg watch note): content-addressed
