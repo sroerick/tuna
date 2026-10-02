@@ -223,6 +223,30 @@ magnitudes = worst-case carry for add):
   structural vocabulary (bools/lists/tree-eq/cmp-free layers all
   price in the hundreds-to-thousands of steps - usable).
 
+## F7 — PRIM DRIFT (math-prims)
+
+> borg/math-prims.borg pre-registration: the host mirror and the sabra
+> reference can diverge silently. TRIGGER: any differential vector
+> disagrees post-landing.
+
+**Status: not triggered** (2026-10-03). 12 landed cells in
+tests/math_prim_tests.ml (30 small vectors in-test against the live
+reference; 64-bit goldens from tests/math_prim_golden.ml; junk-corner
+probes for the recorded passthrough split) all agree prim ==
+reference on the make.  Future drift is visible as a test failure.
+
+## F8 — PRIM CREEP (math-prims)
+
+> borg/math-prims.borg pre-registration: arithmetic working invites
+> everything else landing as prims instead of conventions. TRIGGER:
+> any prim whose answer a pure def could produce under 10k v0 steps
+> at probe scale without a named workload under it.
+
+**Status: not triggered** (2026-10-03). The family is exactly the
+five F6-named members (math/add, math/sub, math/mul, math/cmp,
+math/neg); the ledger invariant stays pure (verify-8 [8.5]); no
+further prim has been proposed through any channel.
+
 ---
 
 ## RUNTIME PURITY THESIS — the pure-step core (not an F-class failure)

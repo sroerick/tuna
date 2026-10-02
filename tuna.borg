@@ -95,6 +95,9 @@
    "borg/stdlib.borg"
   )
   (inline
+   "borg/math-prims.borg"
+  )
+  (inline
    "borg/forensics.borg"
   )
   (inline

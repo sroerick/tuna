@@ -90,6 +90,15 @@ journal views with replay-verify buttons, grants admin, REPL.
       without it, a prim call whose arguments are all constants would
       fire during compilation (prims only run inside a run).
 
+      The prim family includes the journaled math prims
+      (`math/add`, `math/sub`, `math/mul`, `math/cmp`, `math/neg`;
+      borg/math-prims.borg — the F6 consequence): host-mirrored law-5
+      sign-magnitude int ops answered at O(bits) per call under the
+      same grant/journal/replay law as every other prim. The pure
+      sabra defs (sabralib dictionary) remain the reference semantics
+      and the replay-recomputable check layer; tests gate the prims
+      against them (tests/math_prim_tests.ml).
+
 ## Surfaces
 
 ### CLI (`cli/bin/main.exe`)
