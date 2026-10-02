@@ -94,6 +94,9 @@
   (inline
    "borg/stdlib.borg"
   )
+  (inline
+   "borg/forensics.borg"
+  )
  (* agent note (|2026-09-15 STORAGE SUBSTRATE WATCH (operator review
       session, PP archaeology). Pricklypear's one-tree substrate
       autopsy, tl;dr: its "everything is a tree" storage bet froze at
@@ -133,6 +136,56 @@
       granted arguments (SPEC 4.4 ambient-authority ban stands).
       M9 REPL untouched. Gate before push: build, runtest,
       differential, smoke.|) *)
+ (* agent note (|2026-10-02 DESIGN REVIEW SESSION with the operator
+      (host-agent conversation over the roadmap, naming, and the
+      monetization proposals). Outcomes recorded so neither the next
+      loop nor the next operator conversation relitigates:
+      (1) stdlib v1 chapter landed this session (borg/stdlib.borg,
+      commit 47d43de) and carries the vocabulary-first dogfood gate:
+      no in-calculus product logic until its vocabulary and
+      acceptance exist, else dogfood false-negatives a bare
+      language. (2) forensics chapter added (borg/forensics.borg):
+      the 'extremely debuggable' pitch made falsifiable on a
+      deliberate-fault corpus with frozen gates and F7; of the two
+      count laws bruited in review only determinism survives - a
+      constant swap preserves the count while changing behavior,
+      and the chapter refuses to resurrect the stronger claim.
+      (3) F5/F6 trigger numbers accepted as written, owner-retunable
+      in the open. OPERATOR VOCABULARY SEAL (pin it): 'tuna is the
+      Haskell to Nopales' OCaml' - effects as asked/answered/
+      re-answered data surrounding a pure fold, versus ambient
+      state woven through evaluation; the distinction is existing
+      book law (journal chapter, runtime purity thesis) now with
+      operator phrasing to hand future agents. NAMING: sabra (v0
+      runner-up) is the owner's leaning for the language split
+      (tuna = system, sabra = surface dialect); owner's call,
+      frozen nowhere, nothing depends on it - stdlib chapter
+      artifacts are name-stable either way. ECONOMICS: SPECULATIVE,
+      PARKED, expressly NOT spec'd (direction only): artifact
+      gating is unforceable by architecture - the hash IS the
+      capability, bytes must flow to run or verify, replay identity
+      inverts pay-per-use - so royalties, minting and per-use fees
+      do not spec on this substrate. The enforceable seam is
+      settlement only (a club may gate payouts, never execution);
+      the honest value forms, IF ever wanted: metered tenancy
+      priced on fuel (the substrate-native unit - every run row
+      carries exact steps plus its semantics pin), an
+      open-collective-shaped maintenance tithe anchored externally
+      (operators, patrons, host revenue), and witness logs
+      (certificate-transparency pattern) as the only honest 'proof
+      of proof' - third parties publishing their exit-0 deriv-check
+      records; verification itself stays free, exit-0, forever, no
+      gates ever. Litmus recorded: FOLLOW THE OUTSIDE MONEY - if
+      every collectable dollar traces to another member's entry
+      fee, it is the same pyramid in a new hat. The one genuinely
+      novel direction noted (not scheduled): sealed deriv records
+      as receipts for agent work - the dogfood path someday is PP
+      workstream cards sealed via the planned F3 bridge, AFTER
+      forensics (which runs fully in-tree); no marketplaces, no
+      tokens, and receipts get built only when a stranger asks.
+      Sequencing stands: stdlib v1 -> forensics -> F3 bridge;
+      product candidates (ledger first) ride the stdlib mole
+      scenario acceptance. |) *)
  (inline
   "borg/acceptance.borg"
  )

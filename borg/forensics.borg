@@ -1,0 +1,148 @@
+(project tuna-forensics
+ (doc "Tuna book chapter: divergence forensics - the debuggability
+      research question made falsifiable. The 2026-10-02 design
+      review hypothesis: sabra code with the stdlib vocabulary is
+      EXTREMELY debuggable relative to conventional stacks - at
+      least for agent debuggers, whose surface is diffable
+      structure, not prose. This chapter converts the adjective into
+      a protocol over existing artifacts (sealed records,
+      first-diff, journal forks, patch CAS, replay verification), a
+      deliberate-fault corpus, and numeric gates the book can pass
+      or fail in public. Sequenced after stdlib v1: the fault
+      corpus injects into stdlib-bound programs, honoring the
+      vocabulary-first dogfood gate.")
+ (status planned)
+ (convention ocaml-dune)
+ (section forensics-v1
+  (doc "The protocol is a LOOP over existing API objects with zero
+        ephemeral state: every fact in a debugging session is a
+        hash-addressed artifact, so a forensics transcript replays
+        in another agent's hands from nothing but the starting
+        hashes. No new kernel code is in scope (core byte-identical
+        rule as stdlib); implementation lands as scripts plus one
+        verify number.")
+  (status planned)
+  (subsection protocol
+   (status planned)
+   (details
+    (doc (|
+      SEAL. The failing run rides its deriv record: pinned program
+      and input bytes, hash-chained journal, result hash, exact
+      step count. Investigation starts from a portable object,
+      never a live session.
+      DIFF. first-diff over the known-good and failing program
+      trees (and over the two records' output trees) walks to the
+      first divergent path; the answer carries the path plus both
+      subtree hashes.
+      CAUSE. World-answered or code-answered? A journal fork
+      re-executes with an edited prim answer: if the outcome moves,
+      the divergence is journal-shaped; if not, it lives in the
+      trees. Trace summaries add the per-firing digest view, and a
+      divergent run's Loop closure already names the offending
+      (fun, arg) pair - the infinite loop that names itself.
+      LOCATE. Tree path -> callsite pair (program hash + path,
+      AGENTS rule 8 law) -> provenance -> IR node + source span.
+      Every step of the localization chain names hash-addressed
+      facts, nothing else.
+      FIX. Structural patch at the divergent path with CAS
+      (expected old-subtree hash = the diff's failing subtree),
+      producing a fresh program hash; old rows stay history.
+      PROVE. Replay-verify the fix against the same recorded
+      journal (world frozen), then a fresh live run where the fault
+      class calls for one; record status and the new count beside
+      the fault table.
+      HANDOFF. Every query and cited artifact in the transcript is
+      itself re-runnable; two agents handed the same starting
+      hashes must reach the same localization, deterministically.
+      That is the collaboration claim - debugging without shared
+      state. |))))
+  (subsection fault-corpus
+   (status planned)
+   (details
+    (doc (|
+      N >= 12 deliberate faults over stdlib-v1-bound programs, four
+      classes:
+      CLASS 1 STRUCTURAL - a flipped ternary digit or a swapped arm
+      in a pinned subtree; the mutation path is the expected
+      answer; first-diff should land exactly on it.
+      CLASS 2 SEMANTIC - a wrong dictionary def consumed by an
+      unchanged caller; the program-hash first-diff lands at the
+      def boundary; provenance names the def's IR span.
+      CLASS 3 WORLD-VIA-JOURNAL - the prim answer in a forkable
+      recorded run is wrong, never the program; the trees are
+      identical, so only the fork protocol can localize it. This
+      class exists to catch the siren call of tree-only debugging.
+      CLASS 4 DIVERGENCE - an omega-shaped fault; the expected
+      protocol answer is the Loop closure pair, never a fuel burn.
+      Corpus files live in scripts/forensics-corpus/ with per-fault
+      expected-path annotations; faults are produced by scripted
+      mutation (never hand-edited), so the corpus is itself
+      reproducible, and every injected mutation lands as a
+      journaled CAS patch - the corpus is auditable history like
+      everything else. |))))
+  (subsection measurable-claims
+   (status planned)
+   (details
+    (doc (|
+      Gates the chapter can pass or fail in public. Numbers stay
+      owner-mutable until make freezes them; after freeze, a miss
+      is a FINDING, never a quietly relabeled test.
+      1. LOCALIZATION. >= 90% of class-1 faults localized to the
+         exact mutation path by first-diff alone; >= 80% of
+         class-2 faults to the mutated def's boundary.
+      2. QUERY BUDGET. A single class-1/2 fault is fully localized
+         (record -> callsite path + IR span) within <= 8 API
+         queries; a class-3 fault within <= 12 including the fork.
+      3. COLLABORATION. Two protocol runs from identical starting
+         hashes agree on every localization answer exactly;
+         transcript queries are part of the compared state.
+      4. COUNTERFACTUAL. Every class-3 fault's fork reaches a
+         different terminal status, and replay-verify passes both
+         records.
+      5. UNATTENDED. The full loop seal->handoff runs as
+         scripts/verify-9-forensics.sh against the live server
+         with zero human state; exit 0 green, 1 any-miss, 2
+         malformed, mirroring deriv-check exit semantics.
+      CLAIMS DELIBERATELY NOT MADE (recorded so future agents do
+      not overreach; the review briefing line 'count preservation
+      proves behavior preservation' was wrong and dies here): step
+      count is NOT a behavior-equivalence oracle across different
+      tree shapes - a constant swap changes behavior and preserves
+      the count (counterexample pinned in the corpus). The count
+      law pins identical program + inputs across engines, and is a
+      workload signal (broken base cases flame up as count or fuel
+      deltas) plus a record-integrity pin (deriv equality) - which
+      is all this corpus claims through it. |))))
+  (subsection acceptance
+   (status planned)
+   (details
+    (doc (|
+      1. The corpus lands with scripted mutation sources plus
+         expected annotations; every injection is a journaled CAS
+         patch.
+      2. scripts/verify-9-forensics.sh reports the measured number
+         beside each gate; a miss is recorded in FINDINGS.md under
+         the failure definition below, never an unpassed test kept
+         adjacent-undocumented.
+      3. CORE UNTOUCHED: interpreter/, compiler/, common/ stay
+         byte-identical; delta confined to scripts/ (server/cli
+         only if a finding legitimately forces protocol surface).
+      4. SEQUENCING GATE: make follows stdlib v1's acceptance -
+         faults ride stdlib programs, so this corpus says nothing
+         until the vocabulary exists.
+      5. borge lint/report green; the full battery green. |))))
+  (subsection pre-registered-failure
+   (status planned)
+   (details
+    (doc (|
+      F7 SUPERLATIVE OVERREACH. TRIGGER: any frozen gate 1-5
+      misses. THEN: the operator pitch language drops the word
+      EXTREMELY and retains 'a debugging discipline over
+      hash-addressed artifacts - receipts all the way down'; the
+      artifacts stay load-bearing (records remain receipts, forks
+      remain counterfactuals), and the superlative dies in
+      FINDINGS.md, not in marketing - same regime F5/F6. The
+      inverse overreach is also pre-failed: gates passing scopes
+      the claim to stdlib-v1-scale programs and agent debuggers
+      only; any blast radius out to 'all agent work' is a future
+      chapter with its own corpus, never this one's marketing. |))))))
