@@ -1,0 +1,9 @@
+name stdlib_not
+program 22102000
+arg 10
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 0
+expect_steps 2

@@ -1,0 +1,9 @@
+name stdlib_wait1
+program 21200212002121200212002120102120002010
+arg 1110
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 11212011111010
+expect_steps 14

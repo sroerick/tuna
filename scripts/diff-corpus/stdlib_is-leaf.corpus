@@ -1,0 +1,9 @@
+name stdlib_is-leaf
+program 221020020200
+arg 0
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 10
+expect_steps 1

@@ -1,0 +1,9 @@
+name stdlib_nat-pred
+program 2202110010
+arg 1110
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 110
+expect_steps 3

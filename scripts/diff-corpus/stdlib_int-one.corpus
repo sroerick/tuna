@@ -1,0 +1,9 @@
+name stdlib_int-one
+program 1202100
+arg 0
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 22021000
+expect_steps 0

@@ -1,0 +1,9 @@
+name stdlib_sum-fn
+program 212120112121100101020212021212021200101120020202001121201121211001010
+arg 1110
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 1110
+expect_steps 78

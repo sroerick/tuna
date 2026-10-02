@@ -1,0 +1,9 @@
+name stdlib_tree-case
+program 212121212011200020211002020211002010
+arg 1110
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 0
+expect_steps 13

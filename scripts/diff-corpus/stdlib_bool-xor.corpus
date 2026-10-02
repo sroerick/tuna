@@ -1,0 +1,9 @@
+name stdlib_bool-xor
+program 21212011212120212120021200212011200212011021201010202002210200021100102010
+arg 0
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 10
+expect_steps 32

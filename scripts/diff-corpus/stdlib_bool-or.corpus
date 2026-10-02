@@ -1,0 +1,9 @@
+name stdlib_bool-or
+program 21212011212121201120002020102020200102010
+arg 0
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 10
+expect_steps 15

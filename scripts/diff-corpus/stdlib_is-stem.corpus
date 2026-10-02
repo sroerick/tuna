@@ -1,0 +1,9 @@
+name stdlib_is-stem
+program 220201020200
+arg 10
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 10
+expect_steps 2

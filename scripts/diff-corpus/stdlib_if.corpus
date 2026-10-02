@@ -1,0 +1,9 @@
+name stdlib_if
+program 21212120021020201110200200
+arg 200
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 200
+expect_steps 9

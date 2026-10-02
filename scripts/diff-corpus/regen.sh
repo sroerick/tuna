@@ -127,4 +127,14 @@ emit mul_ch_2_3
 def church3_succ_zero 20000 50000 $CHURCH3 $SUCC_CH $CHURCH0 $NOT $FALSE
 emit church3_succ_zero
 
+# --- sabra stdlib v1 (borg/stdlib.borg acceptance 2) ----------------
+# one entry per stdlib def; programs are compiled (lambda (w) <case>),
+# so the twin measures RUNTIME steps.  Ends stay small (F6).
+dune build tools/stdprobe/corpusgen.exe
+CG=_build/default/tools/stdprobe/corpusgen.exe
+for slug in $($CG --list); do
+  $CG "$slug" > "$tmp.def"
+  emit "$slug"
+done
+
 echo "all corpus entries regenerated; refeval == CL twin on every entry"

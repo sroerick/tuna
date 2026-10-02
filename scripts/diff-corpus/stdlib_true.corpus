@@ -1,0 +1,9 @@
+name stdlib_true
+program 110
+arg 0
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 2100
+expect_steps 0
