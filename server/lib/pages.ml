@@ -48,6 +48,8 @@ let routes pool =
     ; (`Get, "/grants", Grants.view pool)
     ; (`Post, "/grants/mint", Grants.mint pool)
     ; (`Post, "/grants/:id/revoke", Grants.revoke pool)
+    ; (`Get, "/identities", Identities.view pool)
+    ; (`Post, "/identities/mint", Identities.mint pool)
     ; (`Get, "/repl", Repl.view pool)
       ; (`Post, "/repl/eval", Repl.eval pool)
     ; (`Get, "/view/:hash", Value_view.view pool)

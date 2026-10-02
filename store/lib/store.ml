@@ -1116,6 +1116,31 @@ let bootstrap_identity p ?(is_admin = true) ~name ~token () =
        | None -> store_error "bootstrap_identity: insert succeeded but fetch failed"
                  )
 
+(* admin mint (pp-slice T2): a NEW non-admin (default) identity with
+   its own bearer token.  The raw token is returned to the caller ONCE
+   and never stored (only sha256); the identity row is do-nothing on a
+   name collision (ON CONFLICT DO NOTHING) so a duplicate mint cannot
+   silently overwrite an existing identity's token — the caller sees
+   the existing row's id but the returned token will not verify. *)
+let mint_identity p ?(is_admin = false) ~name ~token () =
+  Db.q_unit
+    ~params:[ p_str name; p_str (Tuna.Hash.hex_of_string token); p_bool is_admin ]
+    p
+    "INSERT INTO identities (name, token_hash, is_admin) VALUES ($1, $2, $3) \
+     ON CONFLICT (name) DO NOTHING"
+  >>= fun () ->
+  fetch_identity_by_name p name
+  >>= (function
+       | Some i -> Lwt.return i
+       | None -> store_error "mint_identity: insert succeeded but fetch failed")
+
+(* the identities roster (admin page/API): never carries token hashes *)
+let list_identities p () =
+  Db.q p
+    "SELECT id::text, name, token_hash, is_admin FROM identities ORDER BY name"
+  >>= fun rows ->
+  Lwt.return (List.map identity_of_row rows)
+
 (* token verify (sha256 lookup) — the only identity query by secret *)
 let verify_token p token =
   Db.q ~params:[ p_str (Tuna.Hash.hex_of_string token) ] p

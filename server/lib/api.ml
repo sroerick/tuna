@@ -873,6 +873,66 @@ let revoke_grant pool auth req =
               >>= fun () ->
                (j_ok (`Assoc [ ("revoked", `String id) ])))
 
+(* -- identities (pp-slice T2: admin-only minting) --------------------
+
+   Minting is the one admin gate that is not a grant: only an admin
+   identity may create another identity.  The response carries the
+   bearer token ONCE (only its sha256 is stored); pass "password" to
+   also set an initial browser credential.  The new identity is
+   NON-ADMIN unless the caller explicitly asks for admin=true — the
+   slice's default posture.  GET lists the roster (never token
+   hashes). *)
+
+let post_identity pool auth req =
+  if not auth.auth_is_admin then
+    (j_err ~code:403 "only an admin identity may mint identities")
+  else
+    body_json req >>= function
+    | Error msg -> (j_err msg)
+    | Ok j -> (
+        match get_string_opt j "name" with
+        | None -> (j_err "missing \"name\"")
+        | Some name -> (
+            let name = String.trim name in
+            if name = "" then (j_err "\"name\" must be non-empty")
+            else
+              let token = Tokens.random_token_hex () in
+              Store.fetch_identity_by_name pool name
+              >>= (function
+                    | Some _ -> (j_err ~code:409 "identity name already exists")
+                    | None ->
+                        let is_admin =
+                          Option.value (get_bool_opt j "is_admin") ~default:false
+                        in
+                        Store.mint_identity pool ~is_admin ~name ~token ()
+                        >>= fun i ->
+                        (match get_string_opt j "password" with
+                         | Some pw when String.trim pw <> "" ->
+                             Store.set_password pool ~identity_id:i.Store.i_id
+                               ~password:pw
+                         | _ -> Lwt.return ())
+                        >>= fun () ->
+                        (j_ok ~code:201
+                           (`Assoc
+                             [ ("id", `String i.Store.i_id)
+                             ; ("name", `String i.Store.i_name)
+                             ; ("is_admin", `Bool i.Store.i_is_admin)
+                             ; ("token", `String token) ])))))
+
+let get_identities pool _auth _req =
+  Store.list_identities pool ()
+  >>= fun ids ->
+  (j_ok
+     (`Assoc
+       [ ( "identities"
+         , `List
+             (List.map
+                (fun (i : Store.identity) ->
+                  `Assoc
+                    [ ("id", `String i.i_id); ("name", `String i.i_name)
+                    ; ("is_admin", `Bool i.i_is_admin) ])
+                ids) ) ]))
+
 (* delegation-attenuation (grants.borg §delegation-attenuation): mint a
    narrower grant FROM an existing one.  Only the holder may attenuate
    (the store enforces holder + live lineage + proven narrowing); the
@@ -1843,6 +1903,8 @@ let api_routes pool =
     ; Dream.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))
       ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
+      ; Dream.post "/api/identities" (with_auth pool (post_identity pool))
+      ; Dream.get "/api/identities" (with_auth pool (get_identities pool))
       ; Dream.post "/api/grants/:id/attenuate" (with_auth pool (attenuate_grant pool))
       ; Dream.get "/api/grants/:id" (with_auth pool (get_grant pool))
       ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))
