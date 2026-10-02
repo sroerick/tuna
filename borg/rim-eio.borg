@@ -12,17 +12,41 @@
       Eio.Net, http_kit family) turned the migration from research
       problem into playbook; family law stands: direct-style
       everywhere, NO Lwt_eio bridge, NO dual rims, NO flag - PP
-      Phase 5 deleted the bridge and the flag on evidence.")
- (status planned)
+      Phase 5 deleted the bridge and the flag on evidence.
+
+      2026-10-02 LANDED (this pass): all three stages shipped in one
+      series on this branch - driver (direct-style eio over
+      Tuna_interp.Flat: step/answer loop, prim suspension as a VALUE,
+      TUNA_RUN_MAX_SECONDS as the loop's OWN cancellation discipline),
+      store (pgx_lwt -> pure pgx over Eio.Net, store/lib/pgx_eio.ml
+      + direct.ml identity monad, pool as an Eio Mutex/Condition
+      free-list; every SQL string and row shape byte-identical), and
+      http (Dream -> httpun_eio, server/lib/web.ml; routes.ml
+      response-records were already Dream-free so only the adaptation
+      layer entered). Lwt and Dream departed store/ and server/ dune
+      deps; main.ml is an Eio_main mainloop. Battery identical-answers
+      on the isolated eio instance: dune runtest green, differential
+      24/24, smoke-api 14/14, smoke-ui 17/17, smoke-public 12/12,
+      verify-1..11 11/11. Core untouched (interpreter/ compiler/
+      common/ diff-empty vs master). Clock pins reproduced: run cap ->
+      status deadline_exceeded at the 4096-firing poll, row unverified;
+      compile cap -> HTTP 400 "compile failed: ... wall-clock budget",
+      never a pinner. F12 NOT TRIGGERED.
+
+      NUMBERING: the pre-registered failure below was authored as
+      "F8", but F8 is already PRIM CREEP (math-prims) in FINDINGS.md;
+      renumbered F12 (F10/F11 are accounts) in the same pass, per the
+      F7->F9 precedent the forensics chapter set.")
+ (status implemented)
  (convention ocaml-dune)
  (section rim-eio-v1
   (doc "Three mechanical stages, risk-ordered, each refereed by
         existing scripts - the migration invents no new acceptance
         machinery. The core is untouched by construction (purity
-        chapter); only the rim re-binds.")
-  (status planned)
+        chapter); only the rim re-binds. All three landed 2026-10-02;")
+  (status implemented)
   (subsection driver
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Replace server/lib/run.ml's Tuna_interp.Flat_drive.Make (Lwt)
@@ -43,7 +67,7 @@
       calculus fact). Referee: differential 24/24 + verify-3
       (replay identity) + verify-5 (divergence) + prim suites. |))))
   (subsection store
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       pgx_lwt -> pure pgx over Eio.Net, porting PP's Io_eio pattern
@@ -55,7 +79,7 @@
       the PG suites as the gate. This stage changes IO plumbing
       only; every SQL string and row shape stays byte-identical. |))))
   (subsection http
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Dream -> httpun_eio. The Dream surface is bounded and
@@ -70,7 +94,7 @@
       stage. The htmx UI must render byte-equivalently: smoke-ui
       17/17 is the referee, not a redesigned corpus. |))))
   (subsection acceptance
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       1. CORE UNTOUCHED: interpreter/, compiler/, common/ diff-
@@ -95,10 +119,10 @@
          referee it was KEPT to be (monad-parameterized pure code
          - the parameter goes to Id in tests, nothing to Lwt). |))))
   (subsection pre-registered-failure
-   (status planned)
+   (status implemented)
    (details
     (doc (|
-      F8 RIM REGRESSION. TRIGGER: the eio rim cannot reproduce the
+      F12 RIM REGRESSION. TRIGGER: the eio rim cannot reproduce the
       run-boundary clock policies (deadline/compile/fork caps),
       OR the battery goes red in a way that is not a straight port
       artifact, OR stage cost balloons beyond the playbook

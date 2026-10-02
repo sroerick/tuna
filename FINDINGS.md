@@ -281,6 +281,35 @@ chapter agent note.
 
 ---
 
+## F12 — RIM REGRESSION (rim-eio)
+
+> borg/rim-eio.borg pre-registration (authored as "F8", renumbered
+> F12 — F8 is PRIM CREEP; F10/F11 are accounts): TRIGGER: the eio rim
+> cannot reproduce the run-boundary clock policies (deadline/compile/
+> fork caps), OR the battery goes red in a way that is not a straight
+> port artifact, OR stage cost balloons beyond the playbook estimate
+> without a named cause.
+
+**Status: not triggered** (2026-10-02). The Lwt -> eio migration
+landed in place on branch `rim-eio` (commit series from `57d0dc5`):
+direct-style eio driver over `Tuna_interp.Flat` (prim suspension as a
+value; `TUNA_RUN_MAX_SECONDS` became the loop's own cancellation
+discipline), `store/lib/pgx_eio.ml` (pure pgx over Eio.Net) + a
+`Direct` identity monad replacing Lwt coloring, and `server/lib/web.ml`
+(httpun_eio) replacing Dream. Lwt/Dream departed store/ and server/
+dune deps; `main.ml` is an `Eio_main` mainloop. Battery on the isolated
+eio instance: `dune runtest` green, differential 77/77 (24/24 fixture
+subset included), smoke-api 14/14, smoke-ui 17/17, smoke-public 12/12,
+verify-1..11 11/11 — every step count unchanged. Core untouched
+(interpreter/, compiler/, common/ diff-empty vs master). Clock pins
+reproduced exactly: run cap -> status `deadline_exceeded` at the
+4096-firing poll with the row unverified; compile cap -> HTTP 400
+"compile failed: ... exceeded the wall-clock budget", never a pinner.
+The Lwt rim remains a legal labeled stage per the purity thesis had
+this triggered; it did not, so the swap stands. No bridge, no flag.
+
+---
+
 ## RUNTIME PURITY THESIS — the pure-step core (not an F-class failure)
 
 This is not one of F1–F4; it is the operator thesis itself (tuna.borg
