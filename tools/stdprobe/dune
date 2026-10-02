@@ -1,4 +1,4 @@
 (executables
- (names stdprobe fuelprobe)
- (modules stdprobe fuelprobe stddefs)
+ (names stdprobe fuelprobe freeze)
+ (modules stdprobe fuelprobe freeze stddefs)
  (libraries tuna tuna_interp tuna_compiler))
