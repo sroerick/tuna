@@ -131,7 +131,15 @@ A sibling ralph loop is running on branch `pp-slice` in the worktree
   count-preservation counterexample (constant swap preserves count,
   changes behavior) is pinned in the corpus per the chapter.
 
-## T5 Book flip + battery [ ] (borge lint clean; README battery + FINDINGS F9 + corpus README landed; commit/push pending)
+## T5 Book flip + battery [x]
+- borg/forensics.borg flipped planned -> implemented (agent note +
+  measured numbers) in commit 1903a4c.
+- README battery names verify-1..10; FINDINGS.md F9 placeholder;
+  corpus README with protocol + fault table.
+- Full battery green against live 18091: dune build @all, dune runtest,
+  smoke-api 14/14, smoke-ui 17/17, verify-1..10 all exit 0;
+  borge lint 0 errors/0 warnings, borge report clean.
+- Committed 1903a4c, pushed origin/master. GOAL COMPLETE.
 - Flip `borg/forensics.borg` planned -> implemented with agent notes +
   measured numbers (same commit as the F9 + verify-10 renumbering).
 - Add verify-10-forensics.sh to README's Tests & acceptance battery.
