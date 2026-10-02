@@ -196,6 +196,9 @@
       product candidates (ledger first) ride the stdlib mole
       scenario acceptance. |) *)
  (inline
+  "borg/accounts.borg"
+ )
+ (inline
   "borg/acceptance.borg"
  )
 )

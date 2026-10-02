@@ -16,7 +16,8 @@
    no rebuild and no redeploy.
 
    Dispatch (law 2): reserved surfaces (Pages, /api/*, /health,
-   /login, /logout) match first, ALWAYS - the router mounts this
+   /login, /logout, and the pp-slice hard-public face) match first,
+   ALWAYS - the router mounts this
    dispatch after every reserved matcher, and a publish whose site-path
    collides with a reserved prefix is a journaled denial.  The
    reserved-prefix list is pinned in routes.borg (transcribed here,
@@ -48,7 +49,11 @@ module J = Yojson.Basic
 (* routes.borg law 2, pinned list *)
 let reserved =
   [ "api"; "health"; "login"; "logout"; "frag"; "grants"; "programs"
-  ; "runs"; "repl"; "value"; "route"; "static"; "view"; "todo" ]
+  ; "runs"; "repl"; "value"; "route"; "static"; "view"; "todo"
+  ; "identities"
+    (* pp-slice hard-public face (borg/accounts.borg); anonymous by
+       design, so they must never be shadowable by a route record *)
+  ; "welcome"; "code"; "agent.txt"; "src.tgz"; ".well-known" ]
 
 let reserved_site_path sp =
   match String.index_opt sp '/' with
