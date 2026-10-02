@@ -73,7 +73,22 @@
          ops are priced like unary bloat per byte-values law 4);
          journaled math prims (see the numeric-fuel failure below);
          surface sugar - letrec, list or number literals - belongs
-         to a DIALECT chapter, not here. |))))
+         to a DIALECT chapter, not here. OPERATOR HUNCH PINNED
+         2026-10-02, naming that chapter's first moves in advance:
+         BRACKET FORMS AS CONSTRUCTION ([a b c] desugars at the
+         reader to cons-applications the compiler already accepts
+         - zero IR change, zero core change, structural
+         construction contributes zero triage: data forms that
+         cannot evaluate, parens stay computation - the grammar
+         shows the cost model law 4 already states) plus NUMBER
+         LITERALS decoding to int law 5. nopales-side pin, to be
+         recorded in the PP book: brackets FORBIDDEN there, so the
+         paren-habitat / bracket-calculus tell survives the F3
+         bridge. Identity is the soft driver; the MEASURED need
+         is fixture/corpus authoring (mole postings, forensics
+         faults) where hand-ternary is hostile. Syntax stays
+         frozen until this stdlib's make lands - Forth law
+         intact. |))))
   (subsection core-v1
    (status planned)
    (details
