@@ -13,7 +13,7 @@
 
 (project tuna-acceptance
  (doc "Tuna book chapter: acceptance — validation criteria and pre-registered failure definitions for v1. This is a research project: define what failure looks like before building, so ambiguity cannot keep it alive.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section acceptance
   (doc "How we will know v1 worked, and — because this is research — how we will know it failed. Failures are findings only if they are named in advance.")

@@ -22,9 +22,12 @@
       attenuation shipped (§delegation-attenuation: parent_grant
       lineage, proven narrowing, live-lineage revocation; audit was
       already verify-6). The grant-token/revocation partial->implemented
-      flip noted below is long done; the chapter is implemented.|) *)
+      flip noted below is long done; the chapter is implemented. 2026-10-02
+      HAIRLINE CLOSE: project status flipped planned -> implemented —
+      every grants stanza has been implemented since delegation-
+      attenuation; the parent status was stale.|) *)
  (doc "Tuna book chapter: grants — the capability model. Nothing inside the calculus is resolvable by name; a run touches the world only through grant tokens physically passed to it as tree arguments.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section grants
   (doc "Capability grants as the security model: grants are arguments, the evaluator guarantees reachability, the host defines policy.")

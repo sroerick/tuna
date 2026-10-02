@@ -50,6 +50,21 @@
     slice is self-contained.|) *)
  (status in-progress)
  (convention ocaml-dune)
+ (* agent note (|2026-10-02 F3 DISPOSITION (remainder pass): F1/F2 are
+    implemented and refereed; F3 is NOT shippable from this repo alone.
+    F3's first named prerequisite — PP attribution (acted_by) — has
+    never shipped (grep of /home/roerick/dev/wyo.tech/pricklypear: no
+    acted_by anywhere), and the second — bearer parity — is a PP-side
+    change (PP delegated Bearer == tuna identity token), not a tuna
+    edit. The tuna side F3 needs is ALREADY present and verified: the
+    /api/tree/* surface (get/put/cas/list/log/state) is the client
+    surface a PP prims library would call, and /api/fed/* is the peer
+    surface; both are bearer-gated and journaled. So F3 stays
+    in-progress as a cross-repo handoff, blocked on PP acting_by
+    landing first — recorded here rather than left ambiguous. No
+    dummy bridge, no forged attribution: pre-registered failure 3 (a
+    bridge write attributed to the wrong actor) forbids the shortcut.
+    Re-open when PP ships acted_by; the tuna half is a thin client.)|) *)
  (section federation
   (doc "Three phases, each independently shippable, each with pre-registered failure. F1 implemented 2026-09-18; F2 implemented 2026-10-01; F3 still out of scope.")
   (status in-progress)

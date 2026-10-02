@@ -26,9 +26,12 @@
       inline payloads are ternary TEXT (args_ternary/result_ternary)
       not jsonb; no host_build column yet; oversized payloads are
       answered+journaled as errors under Prims.payload_cap (65536)
-      rather than blob-spilled. |) *)
+      rather than blob-spilled. 2026-10-02 HAIRLINE CLOSE: project
+      status flipped planned -> implemented — row-schema,
+      counterfactual-edits, retention-gc, hash-chain all shipped and
+      verify-refereed.|) *)
  (doc "Tuna book chapter: journal — the effect record. Every boundary event is journaled; the journal is the recorded environment and the only non-derivable artifact in the system.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section journal
   (doc "The journal: append rows per run at each prim boundary event. Everything else in the system is derivable from hashes plus semantics; the journal is what the world actually answered.")
