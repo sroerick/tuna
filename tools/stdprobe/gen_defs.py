@@ -95,17 +95,17 @@ d("list-reverse", lam("xs",
 d("list-map", lam("g", lam("xs",
   L("list-fold", lam("h", lam("acc", L("pair", L("g", "h"), "acc"))), "%0", "xs"))))
 
-REF_STEP = lam("h", lam("acc", L("pair", L("nat-pred", L("first", "acc")),
-  L(L("if", L("%0", "h"), L("second", "acc")),
-    L("bool-and", L("is-zero", L("first", "acc")), L("is-leaf", L("second", "acc")))))))
-# list-ref: countdown recursion via rec-fix (the fold-right acc flows
-# tail->head, so a fold-based countdown would count from the END)
+# list-ref: countdown recursion in tree-case ARM BODIES only (compile
+# reduction is eager in application ARGUMENT positions); dispatch on
+# the index itself so a branch is selected before any recursion fires.
 REF_FN = lam("self", lam("i", lam("xs",
   dispatch("%0",
            lam("c", "%0"),
            lam("hd", lam("tl",
-             L(L("if", L("%0", "hd"), L("self", L("nat-pred", "i"), "tl")),
-                L("is-zero", "i")))),
+             dispatch(L("%0", "hd"),
+                      lam("c", L("self", "c", "tl")),
+                      lam("u", lam("v", "%0")),
+                      "i"))),
            "xs"))))
 d("ref-fn", REF_FN)
 d("list-ref", lam("i", lam("xs", L(L("rec-fix", "ref-fn"), "i", "xs"))))

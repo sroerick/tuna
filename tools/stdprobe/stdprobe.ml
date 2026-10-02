@@ -54,7 +54,7 @@ let () =
   d "list-append" "(lambda (xs) (lambda (ys) (list-fold (lambda (h) (lambda (acc) (pair h acc))) ys xs)))";
   d "list-reverse" "(lambda (xs) (list-fold (lambda (h) (lambda (acc) (list-append acc (pair h %0)))) %0 xs))";
   d "list-map" "(lambda (g) (lambda (xs) (list-fold (lambda (h) (lambda (acc) (pair (g h) acc))) %0 xs)))";
-  d "ref-fn" "(lambda (self) (lambda (i) (lambda (xs) ((tree-case %0 (lambda (c) %0) (lambda (hd) (lambda (tl) ((if (%0 hd) (self (nat-pred i) tl)) (is-zero i))))) xs))))";
+  d "ref-fn" "(lambda (self) (lambda (i) (lambda (xs) ((tree-case %0 (lambda (c) %0) (lambda (hd) (lambda (tl) ((tree-case (%0 hd) (lambda (c) (self c tl)) (lambda (u) (lambda (v) %0))) i)))) xs))))";
   d "list-ref" "(lambda (i) (lambda (xs) ((rec-fix ref-fn) i xs)))";
   d "sum-fn" "(lambda (self) (lambda (n) ((tree-case %0 (lambda (c) (%0 (self c))) (lambda (l) (lambda (r) %0))) n)))";
   d "nat-sum" "(rec-fix sum-fn)";
