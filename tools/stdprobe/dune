@@ -1,0 +1,4 @@
+(executable
+ (name stdprobe)
+ (modules stdprobe)
+ (libraries tuna tuna_interp tuna_compiler))
