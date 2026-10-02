@@ -93,7 +93,7 @@ let take_conn ({ cfg; free; size; _ } as p) =
 
 (* NOTE: a connection whose protocol stream breaks is put back and will
    fail on next use; v0 does not replace it (single dev server, short
-   lifetime).  Revisit if a long-lived daemon needs self-healing. *)
+   lifetime).  Revisit if a long-lived service needs self-healing. *)
 let with_pool ({ free; _ } as p) f =
   take_conn p >>= fun c ->
   Lwt.finalize

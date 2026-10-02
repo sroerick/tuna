@@ -56,7 +56,7 @@
          Open decision (v0's questions, carried): bearer-style token vs
          row id. v1 chooses ROW IDs: the row is inspectable, revocable,
          and attributable; the bearer trade (tamper-proof standalone
-         tokens) buys nothing inside a daemon that always checks the row
+         tokens) buys nothing inside a habitat that always checks the row
          anyway.
     |))
    )

@@ -25,7 +25,7 @@
       3. THE ROUTE RECORD IS THE CAPABILITY. Template routes serve
          bytes to any caller, anonymous included - a public site needs
          it. Program routes execute the stored program as a
-         daemon-attributed run whose only capability is the record's
+         habitat-attributed run whose only capability is the record's
          own grant_prefix; the visitor carries nothing. Authenticated
          invokers get their identity on the run row.
       4. RESULT CONTRACT. A program route's run must end in a value

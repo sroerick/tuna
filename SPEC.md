@@ -11,7 +11,7 @@ evaluating text against ambient habitat state, it runs content-addressed
 trees under explicit grants and treats every run as a durable, replayable
 record.
 
-One sentence: a store-backed daemon where the unit of execution is a
+One sentence: a store-backed habitat where the unit of execution is a
 hash-addressed tree, executed by five rewrite rules under a fuel budget,
 with all effects at a journaled, capability-gated boundary.
 
@@ -31,7 +31,7 @@ with all effects at a journaled, capability-gated boundary.
 
 ## 3. Architecture
 
-A single daemon over a durable store, in Pricklypear's shape: HTTP API in
+A single habitat over a durable store, in Pricklypear's shape: HTTP API in
 front, Postgres behind. Embeddable as a library later (the Nopales
 pattern); v0 is standalone.
 

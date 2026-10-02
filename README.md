@@ -1,6 +1,6 @@
 # tuna
 
-Standalone **tree-calculus evaluator daemon**: a pure tree-calculus
+Standalone **tree-calculus evaluator habitat**: a pure tree-calculus
 core, an auditable effect boundary, and a journal that makes every run
 faithfully replayable. Trees are exactly
 

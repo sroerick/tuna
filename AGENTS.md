@@ -1,6 +1,6 @@
 # AGENTS.md — Tuna
 
-Standalone tree-calculus evaluator daemon. Read `SPEC.md` (v0 handoff
+Standalone tree-calculus evaluator habitat. Read `SPEC.md` (v0 handoff
 spec) and `tuna.borg` + `borg/*.borg` (the v1 borge book) before
 changing behavior; the book is the source of truth and code must
 converge to it.

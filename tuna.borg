@@ -1,7 +1,7 @@
 (project tuna
  (doc (|
       Tuna is a standalone evaluator for tree calculus (Barry Jay /
-      Johannes Bader): a store-backed daemon where the unit of
+      Johannes Bader): a store-backed habitat where the unit of
       execution is a content-hash-addressed tree, executed by five
       rewrite rules under a fuel and size budget, with all effects at
       a journaled, capability-gated boundary.

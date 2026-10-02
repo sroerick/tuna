@@ -334,7 +334,7 @@ let test_template_route () =
     (match J.Util.member "ok" pj with `Bool b -> b | _ -> false);
   (* anonymous dispatch: byte-identical, the record's content_type, the
      X-Tuna-Route header (law 3 + acceptance 1) *)
-  Rt.dispatch p ~daemon:me.S.i_id ~meth:"GET" ~site_path:"hello" ~query:None
+  Rt.dispatch p ~service:me.S.i_id ~meth:"GET" ~site_path:"hello" ~query:None
     ~body:"" ~actor:None
   >>= fun r ->
   Alcotest.(check int) "anonymous dispatch 200" 200 r.Rt.code;
@@ -344,7 +344,7 @@ let test_template_route () =
   Alcotest.(check (option string)) "X-Tuna-Route header" (Some "hello")
     (header r.Rt.headers "X-Tuna-Route");
   (* law 5: method mismatch answers plain 404 *)
-  Rt.dispatch p ~daemon:me.S.i_id ~meth:"POST" ~site_path:"hello" ~query:None
+  Rt.dispatch p ~service:me.S.i_id ~meth:"POST" ~site_path:"hello" ~query:None
     ~body:"" ~actor:None
   >>= fun r404 ->
   Alcotest.(check int) "method mismatch 404" 404 r404.Rt.code;
@@ -378,7 +378,7 @@ let test_reserved_shadow () =
   (* the reserved surface still answers: dispatch never serves a
      reserved site path (law 2 - static wins, always; the reserved
      matchers mount before the routes catch-all in Api.router) *)
-  Rt.dispatch p ~daemon:me.S.i_id ~meth:"GET" ~site_path:"health" ~query:None
+  Rt.dispatch p ~service:me.S.i_id ~meth:"GET" ~site_path:"health" ~query:None
     ~body:"" ~actor:None
   >>= fun r ->
   Alcotest.(check int) "dispatch over a reserved path 404s" 404 r.Rt.code;
@@ -405,7 +405,7 @@ let test_program_route () =
   >>= fun (pcode, _) ->
   Alcotest.(check int) "program route published" 201 pcode;
   let invoker = me.S.i_id in
-  Rt.dispatch p ~daemon:me.S.i_id ~meth:"GET" ~site_path:"compute" ~query:None
+  Rt.dispatch p ~service:me.S.i_id ~meth:"GET" ~site_path:"compute" ~query:None
     ~body:"" ~actor:(Some invoker)
   >>= fun r ->
   Alcotest.(check int) "program route 200" 200 r.Rt.code;
@@ -436,8 +436,8 @@ let test_program_route () =
   >>= fun () ->
   S.fetch_journals p run_id >>= fun _js -> Lwt.return ()
   >>= fun () ->
-  (* and an anonymous visitor gets a daemon-attributed run (law 3) *)
-  Rt.dispatch p ~daemon:me.S.i_id ~meth:"GET" ~site_path:"compute" ~query:None
+  (* and an anonymous visitor gets a service-attributed run (law 3) *)
+  Rt.dispatch p ~service:me.S.i_id ~meth:"GET" ~site_path:"compute" ~query:None
     ~body:"" ~actor:None
   >>= fun r2 ->
   Alcotest.(check int) "anonymous program dispatch 200" 200 r2.Rt.code;
@@ -446,7 +446,7 @@ let test_program_route () =
   >>= (function
         | None -> Alcotest.fail "anonymous run row vanished"
         | Some row ->
-            Alcotest.(check string) "anonymous run attributed to the daemon"
+            Alcotest.(check string) "anonymous run attributed to the service"
               me.S.i_id (Option.value row.S.r_caller ~default:"");
             Lwt.return ())
 
@@ -491,7 +491,7 @@ let test_route_capability_and_lifecycle () =
     ~record:tmpl2 ~expected_version:None
   >>= fun (ok_code, _) ->
   Alcotest.(check int) "scoped covering grant publishes" 201 ok_code;
-  Rt.dispatch p ~daemon:me.S.i_id ~meth:"GET" ~site_path:"tmp/x" ~query:None
+  Rt.dispatch p ~service:me.S.i_id ~meth:"GET" ~site_path:"tmp/x" ~query:None
     ~body:"" ~actor:None
   >>= fun r1 ->
   Alcotest.(check int) "serves before delete" 200 r1.Rt.code;
@@ -502,7 +502,7 @@ let test_route_capability_and_lifecycle () =
   Alcotest.(check int) "delete with covering grant 200" 200 del_code;
   Alcotest.(check bool) "delete carries the deleted version" true
     (Option.is_some (json_int dj "deleted_version"));
-  Rt.dispatch p ~daemon:me.S.i_id ~meth:"GET" ~site_path:"tmp/x" ~query:None
+  Rt.dispatch p ~service:me.S.i_id ~meth:"GET" ~site_path:"tmp/x" ~query:None
     ~body:"" ~actor:None
   >>= fun r2 ->
   Alcotest.(check int) "deleted route answers 404" 404 r2.Rt.code;

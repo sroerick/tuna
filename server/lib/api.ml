@@ -1758,7 +1758,7 @@ let get_route_list pool auth req =
 (* the route-dispatch boundary: adapt a Routes.response to HTTP.  The
    request context reaches program routes as one JSON string-tree input
    {method, path, query, body_hash, actor}; anonymous runs are
-   attributed to the daemon identity (root), authenticated invokers to
+   attributed to the service identity (root), authenticated invokers to
    their identity (law 3). *)
 let dispatch_route pool req =
   Dream.body req >>= fun body ->
@@ -1777,12 +1777,12 @@ let dispatch_route pool req =
   in
   let meth = Dream.method_to_string (Dream.method_ req) in
   authenticate pool req >>= fun auth ->
-  Store.fetch_identity_by_name pool "root" >>= fun daemon ->
-  (match daemon with
-   | None -> (j_err ~code:500 "daemon identity missing (root)")
+  Store.fetch_identity_by_name pool "root" >>= fun service ->
+  (match service with
+   | None -> (j_err ~code:500 "service identity missing (root)")
    | Some d ->
        guard
-         (Routes.dispatch pool ~daemon:d.Store.i_id ~meth ~site_path ~query
+         (Routes.dispatch pool ~service:d.Store.i_id ~meth ~site_path ~query
             ~body ~actor:(Option.map (fun a -> a.auth_id) auth)
           >>= fun r ->
           Dream.respond ~code:r.Routes.code

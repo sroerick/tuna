@@ -24,8 +24,8 @@
 
    Law 3: template routes serve bytes to any caller, anonymous
    included; program routes execute the stored program as a
-   daemon-attributed run (caller = the invoking identity when the
-   request carries a valid bearer, else the daemon) whose ONLY
+   service-attributed run (caller = the invoking identity when the
+   request carries a valid bearer, else the service) whose ONLY
    capability is the record's own grant_prefix - minted fresh per run
    as a prim-"*" grant scoped to that prefix and live-checked by the
    run boundary like any other grant; the visitor carries nothing.
@@ -433,15 +433,15 @@ let serve_template pool ~record ~site_path =
             (respond ~code:200 ~content_type:record.r_content_type body
                ~headers:[ ("X-Tuna-Route", site_path) ]))
 
-let serve_program pool ~daemon ~record ~site_path ~meth ~query ~body ~actor =
+let serve_program pool ~service ~record ~site_path ~meth ~query ~body ~actor =
   let program_hash = Option.get record.r_program in
-  let run_caller = match actor with Some a -> a | None -> daemon in
+  let run_caller = match actor with Some a -> a | None -> service in
   let grants =
     match record.r_grant_prefix with
     | None -> Lwt.return []
     | Some pfx ->
         S.mint_grant pool ~prim:"*" ~args_attenuation:"null"
-          ~path_prefix:(Some pfx) ~caller:run_caller ~minted_by:(Some daemon) ()
+          ~path_prefix:(Some pfx) ~caller:run_caller ~minted_by:(Some service) ()
         >>= fun g -> Lwt.return [ g.S.g_id ]
   in
   let ctx =
@@ -506,7 +506,7 @@ let serve_program pool ~daemon ~record ~site_path ~meth ~query ~body ~actor =
                     site_path program_hash msg))
         | Ok (row, _js) -> finish row)
 
-let dispatch pool ~daemon ~meth ~site_path ~query ~body ~actor : response Lwt.t
+let dispatch pool ~service ~meth ~site_path ~query ~body ~actor : response Lwt.t
     =
   let meth = String.uppercase_ascii meth in
   if reserved_site_path site_path then Lwt.return plain_404
@@ -533,6 +533,6 @@ let dispatch pool ~daemon ~meth ~site_path ~query ~body ~actor : response Lwt.t
                         else
                           match record.r_program with
                           | Some _ ->
-                              serve_program pool ~daemon ~record ~site_path
+                              serve_program pool ~service ~record ~site_path
                                 ~meth ~query ~body ~actor
                           | None -> serve_template pool ~record ~site_path))))
