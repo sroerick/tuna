@@ -45,6 +45,13 @@ type divergence = {
   first_diff_path : string; (* "" = root / not applicable *)
   recorded_hash : string option;
   replayed_hash : string option;
+  (* replay.prim-versioning: the pinned contract of the diverged row and
+     the CURRENT contract, so an upgrade (contract mismatch) is
+     distinguishable from a regression.  Faithful replay itself never
+     depends on these (recorded answers are data); they are reported. *)
+  recorded_contract : string option;
+  current_contract : string option;
+  contract_mismatch : bool;
 }
 
 exception Diverged of divergence
@@ -123,7 +130,10 @@ let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ~program
                  name !next
            ; first_diff_path = ""
            ; recorded_hash = None
-           ; replayed_hash = None })
+           ; replayed_hash = None
+           ; recorded_contract = None
+           ; current_contract = Some Prims.contract
+           ; contract_mismatch = false })
     else
       let row = arr.(!next) in
       let diverge ?(first_diff_path = "") ~recorded_hash ~replayed_hash reason =
@@ -135,7 +145,10 @@ let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ~program
              ; reason
              ; first_diff_path
              ; recorded_hash
-             ; replayed_hash })
+             ; replayed_hash
+             ; recorded_contract = Some row.S.j_prim_contract
+             ; current_contract = Some Prims.contract
+             ; contract_mismatch = row.S.j_prim_contract <> Prims.contract })
       in
       if row.S.j_prim <> name then
         diverge ~recorded_hash:(Some row.S.j_prim) ~replayed_hash:(Some name)
@@ -180,6 +193,143 @@ let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ~program
   in
   Eng.eval ~host ~mode ~fuel ~size_cap ~deadline ~program inputs
   >>= fun outcome -> Lwt.return (outcome, !next)
+
+(* -- prim contract versioning (replay.prim-versioning) --------------- *)
+
+(* A row pins the contract it was recorded under.  Current = the
+   build's Prims.contract.  A mismatch means the prim layer changed
+   semantics since the row was journaled: reported FIRST-CLASS so an
+   upgrade is distinguishable from a regression. *)
+type contract_mismatch = {
+  cm_seq : int;
+  cm_prim : string;
+  cm_recorded_contract : string;
+  cm_current_contract : string;
+  cm_recorded_build : string;
+}
+
+let contract_mismatches (rows : S.journal list) : contract_mismatch list =
+  List.filter_map
+    (fun (j : S.journal) ->
+      if j.S.j_prim_contract = Prims.contract then None
+      else
+        Some
+          { cm_seq = j.S.j_seq
+          ; cm_prim = j.S.j_prim
+          ; cm_recorded_contract = j.S.j_prim_contract
+          ; cm_current_contract = Prims.contract
+          ; cm_recorded_build = j.S.j_host_build })
+    rows
+
+let has_contract_mismatch rows = contract_mismatches rows <> []
+
+(* -- journal-versus-journal world diff (replay.live) ------------------ *)
+
+(* The operations analog of program first-diff: align the recorded and
+   live journals BY SEQ and compare the result of each accepted call
+   (result hash, or the error text).  The first seq whose answer
+   changed is the world diff; extra/missing rows also diff. *)
+type world_diff = {
+  wd_seq : int;
+  wd_kind : string; (* result_hash | error | extra | missing | prim | args *)
+  wd_prim : string;
+  wd_recorded_hash : string option;
+  wd_live_hash : string option;
+  wd_recorded_error : string option;
+  wd_live_error : string option;
+  wd_first_diff_path : string;
+}
+
+let answer_of (j : S.journal) : [ `Hash of string | `Error of string | `None ] =
+  match (j.S.j_result_hash, j.S.j_error) with
+  | Some h, _ -> `Hash h
+  | None, Some e -> `Error e
+  | None, None -> `None
+
+let diff_journals (recorded : S.journal list) (live : S.journal list) :
+    world_diff option =
+  let ra = Array.of_list recorded and la = Array.of_list live in
+  let n = max (Array.length ra) (Array.length la) in
+  let rec go i =
+    if i >= n then None
+    else if i >= Array.length la then
+      let r = ra.(i) in
+      Some
+        { wd_seq = r.S.j_seq
+        ; wd_kind = "missing"
+        ; wd_prim = r.S.j_prim
+        ; wd_recorded_hash = r.S.j_result_hash
+        ; wd_live_hash = None
+        ; wd_recorded_error = r.S.j_error
+        ; wd_live_error = None
+        ; wd_first_diff_path = "" }
+    else if i >= Array.length ra then
+      let l = la.(i) in
+      Some
+        { wd_seq = l.S.j_seq
+        ; wd_kind = "extra"
+        ; wd_prim = l.S.j_prim
+        ; wd_recorded_hash = None
+        ; wd_live_hash = l.S.j_result_hash
+        ; wd_recorded_error = None
+        ; wd_live_error = l.S.j_error
+        ; wd_first_diff_path = "" }
+    else
+      let r = ra.(i) and l = la.(i) in
+      if r.S.j_prim <> l.S.j_prim then
+        Some
+          { wd_seq = r.S.j_seq
+          ; wd_kind = "prim"
+          ; wd_prim = r.S.j_prim
+          ; wd_recorded_hash = r.S.j_result_hash
+          ; wd_live_hash = l.S.j_result_hash
+          ; wd_recorded_error = r.S.j_error
+          ; wd_live_error = l.S.j_error
+          ; wd_first_diff_path = "" }
+      else
+        match (answer_of r, answer_of l) with
+        | `Hash rh, `Hash lh when rh <> lh ->
+            let first_diff_path =
+              match (r.S.j_result_ternary, l.S.j_result_ternary) with
+              | Some rt, Some lt -> (
+                  match (Tuna.Canon.of_string rt, Tuna.Canon.of_string lt) with
+                  | Ok a, Ok b -> first_diff_path a b
+                  | _ -> "")
+              | _ -> ""
+            in
+            Some
+              { wd_seq = r.S.j_seq
+              ; wd_kind = "result_hash"
+              ; wd_prim = r.S.j_prim
+              ; wd_recorded_hash = Some rh
+              ; wd_live_hash = Some lh
+              ; wd_recorded_error = None
+              ; wd_live_error = None
+              ; wd_first_diff_path = first_diff_path }
+        | `Error re, `Error le when re <> le ->
+            Some
+              { wd_seq = r.S.j_seq
+              ; wd_kind = "error"
+              ; wd_prim = r.S.j_prim
+              ; wd_recorded_hash = None
+              ; wd_live_hash = None
+              ; wd_recorded_error = Some re
+              ; wd_live_error = Some le
+              ; wd_first_diff_path = "" }
+        | `Hash _, `Error _ | `Error _, `Hash _ | `Hash _, `None
+        | `None, `Hash _ | `Error _, `None | `None, `Error _ ->
+            Some
+              { wd_seq = r.S.j_seq
+              ; wd_kind = "result_hash"
+              ; wd_prim = r.S.j_prim
+              ; wd_recorded_hash = r.S.j_result_hash
+              ; wd_live_hash = l.S.j_result_hash
+              ; wd_recorded_error = r.S.j_error
+              ; wd_live_error = l.S.j_error
+              ; wd_first_diff_path = "" }
+        | `Hash _, `Hash _ | `Error _, `Error _ | `None, `None -> go (i + 1)
+  in
+  go 0
 
 (* -- verification ----------------------------------------------------- *)
 
@@ -230,6 +380,39 @@ let load_run_parts pool ~(run : S.run) :
                       | Ok inputs ->
                           S.fetch_journals pool run.S.r_id
                           >>= fun js -> Lwt.return (Ok (program, inputs, js))))))
+
+(* Live replay (replay.live): re-execute the parent's program + inputs
+   against the CURRENT world under FRESH grants.  It mints its own run
+   row (parent_run_id = the parent) and journal via Run.execute; the
+   result is never verification state (the new row is unverified).  The
+   world diff is the journal-versus-journal answer comparison; contract
+   mismatches between the parent's pinned contract and the current build
+   are reported alongside. *)
+let live_replay pool ~caller ~grant_ids ~(parent : S.run) ~fuel ~size_cap () :
+    ((S.run * S.journal list * world_diff option * contract_mismatch list),
+     string)
+    result
+    Lwt.t =
+  if parent.S.r_status = S.Run_status.Running then
+    Lwt.return (Error "run is still running")
+  else
+    load_run_parts pool ~run:parent
+    >>= (function
+          | Error msg -> Lwt.return (Error msg)
+          | Ok (program, inputs, recorded) ->
+              S.fetch_program pool parent.S.r_program_hash
+              >>= (function
+                    | None -> Lwt.return (Error "program row missing")
+                    | Some prog ->
+                        Run.execute pool ~caller ~grant_ids
+                          ~program_hash:parent.S.r_program_hash ~program
+                          ~ir_json:prog.S.p_ir ~inputs
+                          ~parent_run_id:(Some parent.S.r_id)
+                          ~semantics:parent.S.r_semantics ~fuel ~size_cap ()
+                        >>= fun (row, live) ->
+                        let diff = diff_journals recorded live in
+                        let mismatches = contract_mismatches recorded in
+                        Lwt.return (Ok (row, live, diff, mismatches))) )
 
 (* Verify one run row against its journal (no state written). *)
 let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
@@ -309,7 +492,11 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                                     replay"
                                ; first_diff_path = ""
                                ; recorded_hash = row.S.j_result_hash
-                               ; replayed_hash = outcome_hash outcome })
+                               ; replayed_hash = outcome_hash outcome
+                               ; recorded_contract = Some row.S.j_prim_contract
+                               ; current_contract = Some Prims.contract
+                               ; contract_mismatch =
+                                   row.S.j_prim_contract <> Prims.contract })
                         else
                           (* replay identity: status + result + steps *)
                           let recorded_hash = run.S.r_result_hash in
@@ -336,7 +523,10 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                                       recorded run row"
                                  ; first_diff_path
                                  ; recorded_hash
-                                 ; replayed_hash = replayed })
+                                 ; replayed_hash = replayed
+                                 ; recorded_contract = None
+                                 ; current_contract = Some Prims.contract
+                                 ; contract_mismatch = false })
                           else if
                             outcome_status outcome
                             <> S.Run_status.to_string run.S.r_status
@@ -351,7 +541,10 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                                       recorded run row"
                                  ; first_diff_path = ""
                                  ; recorded_hash
-                                 ; replayed_hash = replayed })
+                                 ; replayed_hash = replayed
+                                 ; recorded_contract = None
+                                 ; current_contract = Some Prims.contract
+                                 ; contract_mismatch = false })
                           else if
                             (not run.S.r_demand_sharing)
                             && Some (outcome_steps outcome) <> run.S.r_step_count
@@ -366,7 +559,10 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                                       recorded run row"
                                  ; first_diff_path = ""
                                  ; recorded_hash
-                                 ; replayed_hash = replayed })
+                                 ; replayed_hash = replayed
+                                 ; recorded_contract = None
+                                 ; current_contract = Some Prims.contract
+                                 ; contract_mismatch = false })
                           else Lwt.return (Verified outcome))
                       (function
                         | Diverged d -> Lwt.return (Diverged d)
@@ -429,7 +625,11 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
                                         the replay"
                                    ; first_diff_path = ""
                                    ; recorded_hash = row.S.j_result_hash
-                                   ; replayed_hash = outcome_hash outcome }
+                                   ; replayed_hash = outcome_hash outcome
+                                   ; recorded_contract = Some row.S.j_prim_contract
+                                   ; current_contract = Some Prims.contract
+                                   ; contract_mismatch =
+                                       row.S.j_prim_contract <> Prims.contract }
                                  in
                                  S.update_run_result pool ~id:run_id
                                    ~status:S.Run_status.Error ()

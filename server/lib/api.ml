@@ -481,7 +481,10 @@ let verdict_json pool ~(program_hash : string) (run_id : string)
           ; ("prim", `String d.Replay.prim)
           ; ("first_diff_path", `String d.Replay.first_diff_path)
           ; ("recorded_hash", opt_str d.Replay.recorded_hash)
-          ; ("replayed_hash", opt_str d.Replay.replayed_hash) ])
+          ; ("replayed_hash", opt_str d.Replay.replayed_hash)
+          ; ("recorded_contract", opt_str d.Replay.recorded_contract)
+          ; ("current_contract", opt_str d.Replay.current_contract)
+          ; ("contract_mismatch", `Bool d.Replay.contract_mismatch) ])
   | Replay.Unverifiable msg ->
       Lwt.return
         (`Assoc
@@ -759,6 +762,76 @@ let fork_journal pool _auth req =
                       ; ("forked_from", `String run_id)
                       ; ("verify", vj)
                       ; ("journal", `List (List.map journal_json njs)) ])))
+
+(* -- live replay (replay.live; replay.prim-versioning) ---------------- *)
+
+(* Contract-mismatch as a first-class field: the row was recorded under
+   prim X vN (host build B) but this build speaks vM.  An upgrade is
+   distinguishable from a regression because the mismatch is named,
+   not folded into the result diff. *)
+let contract_mismatch_json (cm : Replay.contract_mismatch) : J.t =
+  `Assoc
+    [ ("seq", `Int cm.Replay.cm_seq)
+    ; ("prim", `String cm.Replay.cm_prim)
+    ; ("recorded_contract", `String cm.Replay.cm_recorded_contract)
+    ; ("current_contract", `String cm.Replay.cm_current_contract)
+    ; ("recorded_build", `String cm.Replay.cm_recorded_build)
+    ; ( "summary"
+      , `String
+          (Printf.sprintf
+             "recorded under prim %s contract v%s (host_build %s), current \
+              v%s"
+             cm.Replay.cm_prim cm.Replay.cm_recorded_contract
+             cm.Replay.cm_recorded_build cm.Replay.cm_current_contract) ) ]
+
+let world_diff_json (d : Replay.world_diff) : J.t =
+  `Assoc
+    [ ("seq", `Int d.Replay.wd_seq)
+    ; ("kind", `String d.Replay.wd_kind)
+    ; ("prim", `String d.Replay.wd_prim)
+    ; ("recorded_hash", opt_str d.Replay.wd_recorded_hash)
+    ; ("live_hash", opt_str d.Replay.wd_live_hash)
+    ; ("recorded_error", opt_str d.Replay.wd_recorded_error)
+    ; ("live_error", opt_str d.Replay.wd_live_error)
+    ; ("first_diff_path", `String d.Replay.wd_first_diff_path) ]
+
+(* POST /api/runs/:id/live-replay — re-execute against the CURRENT
+   world under caller-supplied FRESH grants.  Mints a new run row
+   (parent_run_id links the original) and journal; the row is
+   UNVERIFIED (live replay is a debugging mode, never verification).
+   The world diff is journal-versus-journal; contract mismatches are
+   first-class.  Denied grants journal a denial, never raise. *)
+let live_replay_run pool auth req =
+  let id = Dream.param req "id" in
+  body_json req >>= function
+  | Error msg -> j_err msg
+  | Ok j -> (
+      let fuel = Option.value (get_int_opt j "fuel") ~default:10_000 in
+      let size_cap = Option.value (get_int_opt j "size_cap") ~default:10_000 in
+      Store.fetch_run_resolved pool id
+      >>= (function
+            | None -> j_err ~code:404 "unknown run id"
+            | Some (parent_id, parent) ->
+                Replay.live_replay pool ~caller:auth.auth_id
+                  ~grant_ids:(strings_of j "grants") ~parent ~fuel ~size_cap
+                  ()
+                >>= (function
+                      | Error msg -> j_err msg
+                      | Ok (row, live, wdiff, mismatches) ->
+                          j_ok ~code:201
+                            (`Assoc
+                              [ ("run", run_json row)
+                              ; ("live_replayed_from", `String parent_id)
+                              ; ( "world_diff"
+                                , (match wdiff with
+                                   | Some d -> world_diff_json d
+                                   | None -> `Null) )
+                              ; ( "contract_mismatches"
+                                , `List
+                                    (List.map contract_mismatch_json
+                                       mismatches) )
+                              ; ( "journal"
+                                , `List (List.map journal_json live) ) ]))))
 
 (* -- REPL (M9): the agent surface of the round-based REPL ------------- *)
 
@@ -1899,6 +1972,8 @@ let api_routes pool =
     ; Dream.get "/api/runs/:id/deriv" (with_auth pool (get_deriv pool))
     ; Dream.get "/api/runs/:id" (with_auth pool (get_run pool))
     ; Dream.post "/api/runs/:id/gc" (with_auth pool (gc_run pool))
+    ; Dream.post "/api/runs/:id/live-replay"
+        (with_auth pool (live_replay_run pool))
     ; Dream.get "/api/journals/:run_id" (with_auth pool (get_journal pool))
     ; Dream.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))

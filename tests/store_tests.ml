@@ -462,6 +462,120 @@ let test_counterfactual_fork () =
     (S.Run_status.to_string bad.S.r_status);
   Lwt.return ()
 
+(* live replay (replay.live): re-execute against the CURRENT world
+   under fresh grants.  Mints a NEW row linked by parent_run_id,
+   unverified, and a world diff naming the changed seq when the host
+   returns differently.  Denied grants journal the denial. *)
+let test_live_replay () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m7-root" ~token:"m7-token" () >>= fun me ->
+  S.mint_grant p ~prim:"store/get" ~args_attenuation:"{}"
+    ~caller:me.S.i_id ()
+  >>= fun g ->
+  (* the recorded world: key "10" -> value "0" *)
+  S.prim_put p ~key_ternary:"10" ~value_ternary:"0" >>= fun () ->
+  seed_program p ~caller:(Some me.S.i_id)
+    "(lambda (x) (prim \"store/get\" x))"
+  >>= fun (hash, art) ->
+  let key = Tuna.Canon.parse "10" in
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:None ~inputs:[ key ] ~fuel:10000
+    ~size_cap:100000 ()
+  >>= fun (parent, pjs) ->
+  Alcotest.(check string) "recorded value" "0"
+    (Option.value parent.S.r_result_ternary ~default:"MISSING");
+  (* the world moves on: the key now reads "10" *)
+  S.prim_put p ~key_ternary:"10" ~value_ternary:"10" >>= fun () ->
+  Rp.live_replay p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~parent
+    ~fuel:10000 ~size_cap:100000 ()
+  >>= (function
+        | Error msg -> Alcotest.failf "live replay failed: %s" msg
+        | Ok (live, ljs, wdiff, mismatches) ->
+            Alcotest.(check (option string)) "provenance link" (Some parent.S.r_id)
+              live.S.r_parent_run_id;
+            Alcotest.(check (option string)) "live replay is unverified" None
+              live.S.r_verify_status;
+            Alcotest.(check string) "live result reflects the new world" "10"
+              (Option.value live.S.r_result_ternary ~default:"MISSING");
+            Alcotest.(check int) "same number of journal rows"
+              (List.length pjs) (List.length ljs);
+            (match wdiff with
+             | Some d ->
+                 Alcotest.(check int) "world diff names the changed seq" 0
+                   d.Rp.wd_seq;
+                 Alcotest.(check string) "diff kind is a result change"
+                   "result_hash" d.Rp.wd_kind;
+                 Alcotest.(check string) "diff names the prim" "store/get"
+                   d.Rp.wd_prim
+             | None -> Alcotest.fail "host change must surface a world diff");
+            Alcotest.(check int) "current contract has no mismatch here" 0
+              (List.length mismatches);
+            Lwt.return ())
+  >>= fun () ->
+  (* denied-grant live replay journals the denial, never raises *)
+  Rp.live_replay p ~caller:me.S.i_id ~grant_ids:[] ~parent ~fuel:10000
+    ~size_cap:100000 ()
+  >>= (function
+        | Error msg -> Alcotest.failf "denied live replay raised: %s" msg
+        | Ok (live, ljs, _, _) ->
+            Alcotest.(check string) "denied live run still normal" "normal"
+              (S.Run_status.to_string live.S.r_status);
+            (match ljs with
+             | [ j ] ->
+                 Alcotest.(check (option string)) "no grant spent" None
+                   j.S.j_grant_id;
+                 Alcotest.(check bool) "denial journaled" true
+                   (Option.is_some j.S.j_error)
+             | _ -> Alcotest.fail "expected one denial row");
+            Lwt.return ())
+
+(* prim-versioning (replay.prim-versioning): a fabricated row pinning an
+   older contract is reported FIRST-CLASS as a contract mismatch, and
+   faithful replay stays unconditional (recorded answers are data).
+   Also asserts Prims.contract is the single source: every journal row
+   the boundary writes pins exactly that value. *)
+let test_contract_mismatch () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~name:"m7-root" ~token:"m7-token" () >>= fun me ->
+  S.mint_grant p ~prim:"echo" ~args_attenuation:"{}" ~caller:me.S.i_id ()
+  >>= fun g ->
+  seed_program p ~caller:(Some me.S.i_id) "(lambda (x) (prim \"echo\" x))"
+  >>= fun (hash, art) ->
+  Rn.execute p ~caller:me.S.i_id ~grant_ids:[ g.S.g_id ] ~program_hash:hash
+    ~program:art.C.tree ~ir_json:None ~inputs:[ Tuna.Canon.parse "10" ]
+    ~fuel:10000 ~size_cap:100000 ()
+  >>= fun (row, js) ->
+  (* the boundary pins the single source literal *)
+  (match js with
+   | [ j ] ->
+       Alcotest.(check string) "row pins Prims.contract" Tuna_server.Prims.contract
+         j.S.j_prim_contract
+   | _ -> Alcotest.fail "expected one row");
+  (match Rp.contract_mismatches js with
+   | [] -> ()
+   | _ -> Alcotest.fail "current-contract row must not mismatch");
+  let fabricated =
+    { (List.hd js) with S.j_prim_contract = "1"; S.j_host_build = "tuna-old" }
+  in
+  (match Rp.contract_mismatches [ fabricated ] with
+   | [ cm ] ->
+       Alcotest.(check int) "mismatch seq" 0 cm.Rp.cm_seq;
+       Alcotest.(check string) "mismatch prim" "echo" cm.Rp.cm_prim;
+       Alcotest.(check string) "recorded contract" "1"
+         cm.Rp.cm_recorded_contract;
+       Alcotest.(check string) "current contract is Prims.contract"
+         Tuna_server.Prims.contract cm.Rp.cm_current_contract;
+       Alcotest.(check string) "recorded build" "tuna-old" cm.Rp.cm_recorded_build
+   | _ -> Alcotest.fail "fabricated old-contract row must be a mismatch");
+  Alcotest.(check bool) "has_contract_mismatch true" true
+    (Rp.has_contract_mismatch [ fabricated ]);
+  (* faithful replay of the fabricated row is still unconditional: the
+     recorded answer is data, so the run VERIFIES despite the mismatch *)
+  Rp.verify p ~run:row ()
+  >>= fun v ->
+  expect_verified row.S.r_id v;
+  Lwt.return ()
+
 (* M10 acceptance wiring: retention (journal.retention-gc).  GC leaves
    a cited tombstone; verifiers report GONE, never VERIFIED.  Redaction
    is a visible chain break; the run can never verify again. *)
@@ -620,6 +734,10 @@ let () =
               ; lwt "counterfactual fork re-executes" test_counterfactual_fork
               ; lwt "v1 sharing: distinct-work row verifies under its own law"
                   test_run_sharing_v1
+              ; lwt "live replay mints a linked unverified row + world diff"
+                  test_live_replay
+              ; lwt "contract mismatch is first-class; faithful replay stays unconditional"
+                  test_contract_mismatch
               ] )
          ; ( "m10"
            , [ lwt "gc leaves a cited tombstone; verifier reports GONE"

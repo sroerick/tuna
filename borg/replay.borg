@@ -2,19 +2,30 @@
  (* agent note (|M7 loop: faithful (Replay.verify / verify_and_record,
     server/lib/replay.ml) + divergence-surface (Diverged{div_seq;
     callsite_path; prim; reason; first_diff_path; recorded_hash;
-    replayed_hash} surfaced as JSON via api.ml verdict_json) are
+    replayed_hash; recorded_contract; current_contract;
+    contract_mismatch} surfaced as JSON via api.ml verdict_json) are
     implemented and tested (tests/store_tests.ml m7 suites: replay
     identity, grant-denial run verifies, tamper -> bad chain, edited
     fork re-executes; scripts/smoke-api.sh [11]-[13]). Replay identity
     = chain walk + sequential journal-fed re-execution (the SAME
     Prim_eval engine instance, so step accounting cannot drift) +
     status/result-hash/step-count equality against the run row.
-    prim-versioning: prim_contract "1" is pinned per row and replay is
-    unconditional (server/lib/prims.ml), but contract-mismatch fields
-    in the divergence surface and live replay remain open; the
-    hand-checked first_diff_path corpus is M10 acceptance.|) *)
+    §live (M-live loop): Replay.live_replay re-executes program+inputs
+    against the CURRENT world under caller grants; it mints a NEW run
+    row (parent_run_id = parent) + journal and NEVER writes
+    verify_status (the new row is unverified). The world diff is
+    journal-versus-journal (diff_journals aligns by seq on result-hash /
+    error / prim / extra / missing, with first_diff_path for tree-shaped
+    changes); denied grants journal a denial. Surface: POST
+    /api/runs/:id/live-replay {grants:[ids], fuel, size_cap}. §prim-
+    versioning: Prims.contract is the single source ("2"); the boundary
+    pins it per row; contract mismatches are first-class on the verdict
+    and live-replay surfaces (recorded_contract/current_contract/
+    contract_mismatch + recorded_build), while faithful replay stays
+    unconditional. Acceptance: scripts/verify-11-replay-live.sh.
+    the hand-checked first_diff_path corpus is M10 acceptance.|) *)
  (doc "Tuna book chapter: replay — verification, divergence detection, and the debugging surface. Replay is a consistency proof between the pure core and the journal, not a debugging afterthought.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section replay
   (doc "Re-executing recorded runs: faithful replay for verification, live replay for debugging, counterfactual replay for exploration; divergence reported as structural diffs designed for agents.")
@@ -57,7 +68,7 @@
 
   (subsection live
    (doc "Live replay — a debugging mode, not verification")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          Live replay re-executes against the CURRENT world (prim calls
@@ -73,6 +84,21 @@
          Live replay is explicitly NOT replay-verification: under live
          replay neither step counts nor result hashes are invariants,
          only diagnostics are.
+
+         Implementation (server/lib/replay.ml Replay.live_replay): the
+         parent's program + inputs are re-executed through the SAME run
+         boundary (Run.execute) against the live host under caller-
+         supplied grants, minting a NEW run row whose parent_run_id is
+         the original.  The new row is never given a verify_status.
+         The world-diff is journal-versus-journal (diff_journals):
+         align the recorded and live journals by seq and name the first
+         changed answer (result_hash | error | prim | extra | missing);
+         tree-shaped changes carry first_diff_path; a pure run with no
+         changes reports a null diff.  Surface: POST
+         /api/runs/:id/live-replay {"grants":[ids],"fuel","size_cap"}
+         -> {run, live_replayed_from, world_diff, contract_mismatches,
+         journal}.  Grant denial at a prim boundary journals the denial
+         (never an exception), exactly like a normal run.
     |))
    )
   )
@@ -109,7 +135,7 @@
 
   (subsection prim-versioning
    (doc "Pinning the prim contract: what a journal does and does not pin")
-   (status partial)
+   (status implemented)
    (details
     (doc (|
          A journal pins what the host RETURNED, under prim_contract and
@@ -135,6 +161,23 @@
          inversion" finding — the security came from the prim layer
          all along. The versioning discipline is what makes that finding
          MEASURABLE rather than anecdotal.
+
+         Implementation: Prims.contract is the SINGLE source (currently
+         "2"); the boundary (Run) pins it on every journal row and
+         nothing else writes a literal.  A row records prim_contract and
+         host_build; Replay.contract_mismatches compares each row's
+         pinned contract to Prims.contract, and the divergence/live-
+         replay JSON carries recorded_contract, current_contract,
+         contract_mismatch, and the recorded build as first-class fields
+         ("recorded under prim X contract vN (host_build B), current
+         vM"), so an upgrade is distinguishable from a regression.  A
+         mismatch count is read as the length of the
+         contract_mismatches array on a live replay (zero for rows this
+         build wrote); it rises only when prims changed behavior under
+         an unchanged contract — definitionally cheating — or when a
+         genuine contract bump lands.  Faithful replay remains
+         unconditional: the recorded answers are data, so a run verifies
+         under any current contract (asserted in tests/store_tests.ml).
     |))
    )
   )
