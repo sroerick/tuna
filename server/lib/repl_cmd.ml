@@ -452,7 +452,10 @@ let execute pool ~caller ~command ~inputs ~grant_ids ~fuel ~size_cap
          underlay (its rows ARE the std rows). *)
       Stdlib_seed.dict_rows_under pool ~caller
       >>= fun std_rows ->
-      let rows = std_rows @ rows in
+      (* NB the ternary-fold below CONSES, so the assoc handed to the
+         compiler is the REVERSE of this list; sexp.ml is last-wins,
+         hence caller rows must come FIRST here. *)
+      let rows = rows @ std_rows in
       (match
          List.fold_left
            (fun acc d ->
