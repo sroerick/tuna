@@ -77,6 +77,7 @@ let () =
   d "mag-sub-fn" "(lambda (self) (lambda (a) (lambda (b) (lambda (w) ((tree-case %0 (lambda (rj8) %0) (lambda (ahd) (lambda (atl) ((tree-case ((tree-case a (lambda (rj4) (mag-ripsub a)) (lambda (rj5) (lambda (rj6) (mag-ripsub a)))) w) (lambda (rj7) ((tree-case a (lambda (rj4) (mag-ripsub a)) (lambda (rj5) (lambda (rj6) (mag-ripsub a)))) w)) (lambda (bhd) (lambda (btl) (pair (bool-xor ahd (bool-xor bhd w)) (self atl btl (bool-or (bool-and bhd w) (bool-and (not ahd) (bool-or bhd w)))))))) b)))) a)))))";
   d "mag-sub" "(lambda (a) (lambda (b) (mag-canonical (((rec-fix mag-sub-fn) a) b %0))))";
   d "int-add" "(lambda (a) (lambda (b) ((lambda (ca) ((lambda (cb) ((tree-case cb (lambda (j0) cb) (lambda (sa) (lambda (ma) ((tree-case ca (lambda (j8) ca) (lambda (sb) (lambda (mb) ((if (pair sa (mag-add ma mb)) ((tree-case (pair sb (mag-sub mb ma)) (lambda (c) ((tree-case (pair %0 %0) (lambda (j3) (pair sa (mag-sub ma mb))) (lambda (j4) (lambda (j5) (pair sa (mag-sub ma mb))))) c)) (lambda (j6) (lambda (j7) (pair sa (mag-sub ma mb))))) (mag-cmp ma mb))) (not (bool-xor sa sb)))))) cb)))) ca)) (int-canonical b))) (int-canonical a))))";
+  d "int-sub" "(lambda (a) (lambda (b) (int-add a (int-neg b))))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -176,6 +177,13 @@ let () =
   eval "int-add" ["%2100"; "%202100"];    (* junk -0 + 1 = 1 *)
   eval "int-add" ["%20210202100"; "%202102100"]; (* 5 + 3 = 8 *)
   eval "int-add" ["%2102102100"; "%20210202100"]; (* -3 + 5 = 2 *)
+  eval "int-sub" ["%20210202100"; "%202102100"]; (* 5 - 3 = 2 *)
+  eval "int-sub" ["%202102100"; "%20210202100"]; (* 3 - 5 = -2 *)
+  eval "int-sub" ["%2102102100"; "%210210202100"]; (* -3 - -5 = 2 *)
+  eval "int-sub" ["%202102100"; "%202102100"]; (* 3 - 3 = 0 *)
+  eval "int-sub" ["%202100"; "%2102100"];     (* 1 - -1 = 2 *)
+  eval "int-sub" ["%0"; "%200"];            (* junk + 0 = 0 *)
+  eval "int-sub" ["%202020202100"; "%20210202100"]; (* 8 - 5 = 3 *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];

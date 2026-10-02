@@ -296,5 +296,9 @@ d("int-add", lam("a", lam("b",
   L(lam("ca", L(lam("cb", IA_CAWORK), L("int-canonical", "b"))),
     L("int-canonical", "a")))))
 
+# int-sub: add + neg (the chapter's own words). Canonicity inherited.
+d("int-sub", lam("a", lam("b",
+  L("int-add", "a", L("int-neg", "b")))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
