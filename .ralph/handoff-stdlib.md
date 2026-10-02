@@ -1,5 +1,17 @@
 # HANDOFF — sabra stdlib v1 (borg/stdlib.borg §implementation)
 
+**CLOSED 2026-10-03.** Every §4 item below landed (commits
+9a456f3..50900cf): L3 ints one-at-a-time through the probe, fuel table
+measured (F6 OBSERVED, F5 clean — FINDINGS.md), vocabulary frozen to
+stdlib/v1/{core.defs,manifest}, host delta (seeding + resolution
+probe) in server/lib/stdlib_seed.ml, scripts/verify-8-stdlib.sh all
+six acceptance items green, corpus 24->77, ledger bridge deriv-sealed,
+book flipped implemented, borge lint clean. Facts 7b (tree-case arm
+law) and 7c (engine first-arg law) below were NEW hard-won findings
+from this landing. Original text follows for the record.
+
+---
+
 Date: 2026-10-02. State: defs validated through L2 in the scratch probe;
 one known-broken def (list-ref) with a diagnosed fix; L3 ints + all host
 infrastructure not started. Nothing committed. Uncommitted files:
