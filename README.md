@@ -102,6 +102,41 @@ REPL command grammar (`eval`/`def`/`undef`/`get`/`patch`/`first-diff`/
 def rounds are first-class journaled runs, chained per identity via
 `parent_run_id`; structural commands are store queries.
 
+### Federation (M12, `borg/federation.borg`)
+
+Two tuna instances exchange values by hash and converge by shipping
+verified ops windows. `TUNA_FED_PEERS` boots one non-admin identity per
+peer (`fed-peer-<name>`); a supplied `TUNA_FED_PEER_TOKEN_<NAME>` is the
+same bearer on every instance.
+
+```
+GET  /api/fed/value/:hash           → {hash, kind, payload}: tree = canonical
+                                      ternary (a program hash resolves as its
+                                      own ternary), bytes = base64. The peer
+                                      rehashes on receipt; reads are
+                                      hash-gated (any bearer), journaled
+                                      op fed-value.
+GET  /api/fed/ops?prefix=&after_seq=&limit=
+                                    → contiguous op window {ops[], head,
+                                      last_seq, verified}; each row carries
+                                      its true prev_hash so a prefix-filtered
+                                      (non-contiguous) window verifies per row.
+POST /api/fed/ops/apply             {"src_prefix","dst_prefix","ops",
+                                      "values":[{hash,kind,payload}]}
+                                      re-verifies the chain, rehashes inline
+                                      values, checks per-peer authz (peer
+                                      <name> writes only ns/<name>/...;
+                                      admin any), folds atomically into the
+                                      destination. Append-only, no merge:
+                                      a re-apply shadows under a fresh
+                                      version, divergence is two namespaces.
+```
+
+`scripts/fed-sync.sh <peer> <local> <token> <src> <dst> [after-seq]`
+drives a full value-pull + ops-pull + apply round with client-side
+rehash verification (`scripts/fed-pull.sh` remains the single-value
+client).
+
 ### Effects (prims) and the boundary
 
 Programs call out at a prim boundary: `(prim "name" args...)` compiles

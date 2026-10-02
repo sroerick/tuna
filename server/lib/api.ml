@@ -23,6 +23,13 @@
                                             ternary) - the peer rehashes on
                                             receipt and trusts nothing but
                                             the hash
+     GET  /api/fed/ops                      federation F2 ops-chain sync (pull):
+                                            a verifiable op window
+                                            {ops[], head, last_seq, verified}
+                                            with op_hash linkage checked
+     POST /api/fed/ops/apply                federation F2 ops-chain sync (push):
+                                            fold a verified window into a
+                                            peer namespace ns/<peer>/...
      POST /api/repl                         the REPL round (M9: eval/def/get/
                                             patch/first-diff/dict under the
                                             caller's identity dictionary; eval
@@ -867,6 +874,14 @@ let tree_op_json (o : Store.tree_op) : J.t =
     ; ("ts", `Int (Int64.to_int o.Store.o_ts_unix))
     ; ("op_hash", `String o.Store.o_op_hash) ]
 
+(* a pull window row: the op fields plus the TRUE global predecessor
+   hash (Store.ops_window augments the row with it), so a peer can
+   verify each row - and apply it - without the contiguous neighbours. *)
+let window_row_json (r : Store.ops_window_row) : J.t =
+  match tree_op_json r.Store.w_op with
+  | `Assoc kvs -> `Assoc (kvs @ [ ("prev_hash", `String r.Store.w_prev_hash) ])
+  | other -> other
+
 let get_int64_query req k =
   match Dream.query req k with
   | None -> Ok None
@@ -1076,11 +1091,16 @@ let put_allowed pool (auth : auth) =
   if auth.auth_is_admin then Lwt.return true
   else Store.has_live_grant pool auth.auth_id
 
-(* POST /api/value/put {"bytes_b64"} -> {hash, len}; dedup is a no-op
-   re-put returning the same hash (byte-values.borg surface).  Returns
-   (code, json) so tests can exercise the core without Dream. *)
-let value_put_core pool ~(auth : auth) ~bytes : (int * J.t) Lwt.t =
-  let len = String.length bytes in
+(* POST /api/value/put {"bytes_b64"|"ternary"} -> {hash, len, kind};
+   dedup is a no-op re-put returning the same hash (byte-values.borg
+   surface).  A bare tree value stores into tree_values without a path
+   (the federation apply path needs the value present before it can
+   create the destination index row).  Returns (code, json) so tests
+   can exercise the core without Dream. *)
+let value_put_kind pool ~(auth : auth) ~kind : (int * J.t) Lwt.t =
+  let len =
+    match kind with `Bytes b -> String.length b | `Tree t -> String.length t
+  in
   let cap = Store.value_max_bytes () in
   let denied code msg =
     journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:"" ()
@@ -1093,27 +1113,53 @@ let value_put_core pool ~(auth : auth) ~bytes : (int * J.t) Lwt.t =
     put_allowed pool auth
     >>= function
     | false -> denied 403 "value/put: caller holds no unrevoked grant"
-    | true ->
-        let hash = Store.byte_hash bytes in
-        Store.byte_value_put pool ~hash ~bytes
-        >>= fun () ->
-        journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:hash
-          ~value_hash:(Some hash) ()
-        >>= fun () ->
-        Lwt.return (201, `Assoc [ ("hash", `String hash); ("len", `Int len) ])
+    | true -> (
+        match kind with
+        | `Bytes b ->
+            let hash = Store.byte_hash b in
+            Store.byte_value_put pool ~hash ~bytes:b
+            >>= fun () ->
+            journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:hash
+              ~value_hash:(Some hash) ()
+            >>= fun () ->
+            Lwt.return
+              (201,
+               `Assoc
+                 [ ("hash", `String hash); ("len", `Int len)
+                 ; ("kind", `String "bytes") ])
+        | `Tree t ->
+            let hash = Tuna.Hash.hex_of_string t in
+            Store.value_put pool ~hash ~ternary:t
+            >>= fun () ->
+            journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:hash
+              ~value_hash:(Some hash) ()
+            >>= fun () ->
+            Lwt.return
+              (201,
+               `Assoc
+                 [ ("hash", `String hash); ("len", `Int len)
+                 ; ("kind", `String "tree") ]))
+
+let value_put_core pool ~(auth : auth) ~bytes : (int * J.t) Lwt.t =
+  value_put_kind pool ~auth ~kind:(`Bytes bytes)
 
 let post_value_put pool auth req =
   body_json req >>= function
   | Error msg -> (j_err msg)
   | Ok j -> (
-      match get_string_opt j "bytes_b64" with
-      | None -> (j_err "missing \"bytes_b64\"")
-      | Some b64 -> (
+      match (get_string_opt j "bytes_b64", get_string_opt j "ternary") with
+      | Some b64, _ -> (
           match Base64.decode b64 with
           | Error _ -> (j_err "bytes_b64 is not valid base64")
           | Ok bytes ->
-              value_put_core pool ~auth ~bytes
-              >>= fun (code, j) -> (j_ok ~code j)))
+              value_put_core pool ~auth ~bytes >>= fun (code, j) -> (j_ok ~code j))
+      | None, Some ternary -> (
+          match parse_ternary ternary with
+          | Error m -> (j_err ("ternary: " ^ m))
+          | Ok _ ->
+              value_put_kind pool ~auth ~kind:(`Tree ternary)
+              >>= fun (code, j) -> (j_ok ~code j))
+      | None, None -> (j_err "missing \"bytes_b64\" or \"ternary\""))
 
 (* GET /api/value/:hash[?kind=bytes|tree] -> payload + headers; kind
    pins the store (byte-values.borg law 1), absent from both is a 404
@@ -1262,16 +1308,39 @@ let boot_fed_peers pool =
     if not (fed_peer_name_ok name) then
       Lwt.fail (Failure ("boot: invalid TUNA_FED_PEERS name " ^ name))
     else
+      let env_name = fed_peer_token_env name in
+      let supplied = Sys.getenv_opt env_name in
       Store.fetch_identity_by_name pool ("fed-peer-" ^ name)
       >>= function
-      | Some _ -> Lwt.return ()
+      | Some _ ->
+          (* an existing peer keeps its stored token; a supplied token is
+             validated against it (the root re-boot discipline) so an
+             operator cannot silently rotate a peer credential *)
+          (match supplied with
+           | None | Some "" -> Lwt.return ()
+           | Some tok -> (
+               Store.verify_token pool tok
+               >>= function
+               | Some _ -> Lwt.return ()
+               | None ->
+                   Dream.log
+                     "boot: %s supplied but peer %s already has a different \
+                      token; keeping the stored one" env_name name;
+                   Lwt.return ()))
       | None -> (
-          let token = random_token_hex () in
+          (* a supplied token (shared across instances) wins; otherwise
+             generate and print one ONCE *)
+          let token, generated =
+            match supplied with
+            | Some t when t <> "" -> (t, false)
+            | _ -> (random_token_hex (), true)
+          in
           Store.bootstrap_identity pool ~is_admin:false
             ~name:("fed-peer-" ^ name) ~token ()
           >>= fun i ->
-          print_string (fed_peer_token_env name ^ "=" ^ token ^ "\n");
-          flush stdout;
+          if generated then (
+            print_string (env_name ^ "=" ^ token ^ "\n");
+            flush stdout);
           Dream.log "boot: created fed peer identity %s (%s)" name i.Store.i_id;
           Lwt.return ())
   in
@@ -1280,6 +1349,281 @@ let boot_fed_peers pool =
     | n :: rest -> boot_one n >>= fun () -> go rest
   in
   go names
+
+(* -- federation F2 (borg/federation.borg): ops-chain sync --------------
+
+   Pull: GET /api/fed/ops?prefix=&after_seq=&limit= returns op windows
+   with their op_hash linkage verified (internal-linkage only for windows
+   that do not start at seq 1; a seq-1 window anchors from genesis - the
+   d7e0ae7 lesson).  Push: POST /api/fed/ops/apply accepts a verified
+   window into a peer-scoped namespace ns/<peer>/... and re-derives the
+   index by fold (Store.fed_apply).  Per-peer authz: the calling identity
+   must be peer <name> writing ns/<name>/..., or an admin.  Conflict law
+   v0: append-only, no merge - a re-apply mints a fresh version (shadow),
+   divergence surfaces as two namespaces, never silently reconciled.
+   Rejects are journaled, never absorbed. *)
+
+let saturating_succ s = if s = Int64.max_int then s else Int64.succ s
+
+(* parse one op row from the pull's JSON back into (Store.tree_op,
+   prev_hash), so a puller can verify the window and apply it.  Missing
+   fields are an error, never a silently-defaulted row. *)
+let parse_tree_op_json (j : J.t) : (Store.tree_op * string, string) result =
+  let str k = get_string_opt j k in
+  let int64_opt k =
+    match member_opt k j with
+    | Some (`Int i) -> Some (Int64.of_int i)
+    | _ -> None
+  in
+  match
+    (str "path", str "op", str "actor", str "op_hash", str "prev_hash",
+     int64_opt "seq")
+  with
+  | Some path, Some op, Some actor, Some op_hash, Some prev_hash, Some seq ->
+      Ok
+        ( { Store.o_seq = seq
+          ; o_path = path
+          ; o_op = op
+          ; o_value_hash = str "value_hash"
+          ; o_prev_version = int64_opt "prev_version"
+          ; o_version = int64_opt "version"
+          ; o_actor = actor
+          ; o_ts_unix = Option.value (int64_opt "ts") ~default:0L
+          ; o_op_hash = op_hash }
+        , prev_hash )
+  | _ ->
+      Error
+        "op row must carry seq (int), path, op, actor, op_hash, prev_hash"
+
+(* the peer name if [auth_name] is a fed peer identity, else None *)
+let fed_peer_of_name name =
+  let pfx = "fed-peer-" in
+  if String.length name > String.length pfx
+     && String.sub name 0 (String.length pfx) = pfx
+  then Some (String.sub name (String.length pfx) (String.length name - String.length pfx))
+  else None
+
+(* Pull a contiguous op window [after_seq+1 .. after_seq+limit].  Each
+   row carries its TRUE global predecessor hash, so verification is
+   per-row and prefix filtering is sound (a filtered subsequence has
+   gaps but each row stays independently checkable).  An optional
+   [prefix] only filters which verified rows are RETURNED; [last_seq]
+   still advances over the global window, keeping after_seq
+   contiguous. *)
+let fed_ops_core pool ~(auth : auth) ~prefix ~after_seq ~limit =
+  let limit = max 1 (min limit 5000) in
+  let from_seq = saturating_succ (Int64.of_int after_seq) in
+  Store.ops_window pool ~from_seq ~limit
+  >>= fun rows ->
+  Store.ops_head_seq pool
+  >>= fun head ->
+  let more = List.length rows >= limit in
+  let chain = Store.verify_window_rows rows in
+  let last_seq =
+    match List.rev rows with
+    | [] -> Int64.of_int after_seq
+    | r :: _ -> r.Store.w_op.Store.o_seq
+  in
+  let keep r =
+    prefix = "" || Store.prefix_match prefix r.Store.w_op.Store.o_path
+  in
+  let ops_json =
+    List.map
+      (fun (r : Store.ops_window_row) -> window_row_json r)
+      (List.filter keep rows)
+  in
+  Store.op_append pool ~op:"fed-ops" ~path:prefix ~value_hash:None
+    ~prev_version:None ~version:None ~actor:auth.auth_id
+  >>= fun _ ->
+  let code, extra =
+    match chain with
+    | `Ok -> (200, [ ("error", `Null) ])
+    | `Bad msg ->
+        (500, [ ("error", `String ("window chain broken: " ^ msg)) ])
+  in
+  Lwt.return
+    ( code
+    , `Assoc
+        ( [ ("ops", `List ops_json)
+          ; ("head", `Int (Int64.to_int head))
+          ; ("after_seq", `Int after_seq)
+          ; ("last_seq", `Int (Int64.to_int last_seq))
+          ; ("limit", `Int limit)
+          ; ("more", `Bool more)
+          ; ("verified", `Bool (chain = `Ok)) ]
+        @ extra ) )
+
+let fed_apply_core pool ~(auth : auth) (j : J.t) =
+  let src = Option.value (get_string_opt j "src_prefix") ~default:"" in
+  let dst = Option.value (get_string_opt j "dst_prefix") ~default:"" in
+  let ops =
+    match member_opt "ops" j with Some (`List l) -> l | _ -> []
+  in
+  let values =
+    match member_opt "values" j with Some (`List l) -> l | _ -> []
+  in
+  let deny code msg =
+    Store.op_append pool ~op:"fed-apply" ~path:dst ~value_hash:None
+      ~prev_version:None ~version:None ~actor:auth.auth_id
+    >>= fun _ -> Lwt.return (code, `Assoc [ ("error", `String msg) ])
+  in
+  let parse_all () =
+    List.fold_right
+      (fun oj acc ->
+        match acc with
+        | Error _ -> acc
+        | Ok acc -> (
+            match parse_tree_op_json oj with
+            | Error e -> Error e
+            | Ok o -> Ok (o :: acc)))
+      ops (Ok [])
+  in
+  if ops = [] then deny 400 "body needs a non-empty \"ops\" array"
+  else if src = "" then deny 400 "src_prefix must be non-empty"
+  else if dst = "" then deny 400 "dst_prefix must be non-empty"
+  else
+    (* ingest inline values BEFORE applying: each must rehash to its
+       claimed hash (the peer trusts nothing but the hash, so apply is
+       self-contained and no separate value-put grant is needed). *)
+    let ingest_value v =
+      match
+        (get_string_opt v "hash", get_string_opt v "kind",
+         get_string_opt v "payload")
+      with
+      | Some hash, Some "tree", Some payload ->
+          let hash = Tuna.Hash.normalize_hex hash in
+          let got = Tuna.Hash.hex_of_string payload in
+          if got <> hash then
+            Lwt.return (Error (Printf.sprintf "value %s does not rehash" hash))
+          else Store.value_put pool ~hash ~ternary:payload >>= fun () -> Lwt.return (Ok ())
+      | Some hash, Some "bytes", Some payload ->
+          let hash = Tuna.Hash.normalize_hex hash in
+          (match Base64.decode payload with
+           | Error _ ->
+               Lwt.return
+                 (Error (Printf.sprintf "value %s: payload is not base64" hash))
+           | Ok b ->
+               let got = Store.byte_hash b in
+               if got <> hash then
+                 Lwt.return
+                   (Error (Printf.sprintf "value %s does not rehash" hash))
+               else
+                 Store.byte_value_put pool ~hash ~bytes:b
+                 >>= fun () -> Lwt.return (Ok ()))
+      | _ ->
+          Lwt.return
+            (Error "each value needs hash, kind (tree|bytes) and payload")
+    in
+    let rec ingest = function
+      | [] -> Lwt.return (Ok ())
+      | v :: rest -> (
+          match v with
+          | `Assoc _ -> (
+              ingest_value v >>= function
+              | Error e -> Lwt.return (Error e)
+              | Ok () -> ingest rest)
+          | _ -> Lwt.return (Error "each value must be a JSON object"))
+    in
+    ingest values
+    >>= (function
+          | Error e -> deny 400 e
+          | Ok () ->
+    match
+      (Tree_prims.validate_prefix "src_prefix" src
+      , Tree_prims.validate_prefix "dst_prefix" dst)
+    with
+    | Some e, _ | _, Some e -> deny 400 e
+    | None, None -> (
+        match parse_all () with
+        | Error e -> deny 400 e
+        | Ok parsed -> (
+            let rows =
+              List.map (fun (o, h) -> { Store.w_op = o; w_prev_hash = h }) parsed
+            in
+            match Store.verify_window_rows rows with
+            | `Bad msg -> deny 400 ("window chain broken: " ^ msg)
+            | `Ok ->
+            let allowed =
+              if auth.auth_is_admin then true
+              else
+                match fed_peer_of_name auth.auth_name with
+                | Some peer ->
+                    let ns = "ns/" ^ peer ^ "/" in
+                    String.length dst >= String.length ns
+                    && String.sub dst 0 (String.length ns) = ns
+                | None -> false
+            in
+            if not allowed then
+              deny 403
+                (Printf.sprintf
+                   "identity %s may not write destination %S (peers write \
+                    only ns/<peer>/...)" auth.auth_name dst)
+            else
+              Store.fed_apply pool ~actor:auth.auth_id ~dst_prefix:dst
+                ~src_prefix:src parsed
+              >>= fun result ->
+              match result with
+              | `Refused msg -> deny 400 msg
+              | `Applied applied ->
+                  let applied_json =
+                    List.map
+                      (fun (path, sseq, aseq, newv) ->
+                        `Assoc
+                          [ ("path", `String path)
+                          ; ("source_seq", `Int (Int64.to_int sseq))
+                          ; ("applied_seq", `Int (Int64.to_int aseq))
+                          ; ("version", `Int (Int64.to_int newv)) ])
+                      applied
+                  in
+                  let shadowed =
+                    List.filter (fun (_, _, _, v) -> v <> 1L) applied
+                  in
+                  let shadowed_json =
+                    List.map
+                      (fun (path, sseq, _, v) ->
+                        `Assoc
+                          [ ("path", `String path)
+                          ; ("source_seq", `Int (Int64.to_int sseq))
+                          ; ("version", `Int (Int64.to_int v)) ])
+                      shadowed
+                  in
+                  Store.op_append pool ~op:"fed-apply" ~path:dst
+                    ~value_hash:None ~prev_version:None ~version:None
+                    ~actor:auth.auth_id
+                  >>= fun _ ->
+                  Lwt.return
+                    ( 200
+                    , `Assoc
+                        [ ("ok", `Bool true)
+                        ; ("src_prefix", `String src)
+                        ; ("dst_prefix", `String dst)
+                        ; ("applied", `List applied_json)
+                        ; ("applied_count", `Int (List.length applied))
+                        ; ("shadowed", `List shadowed_json) ] ))))
+
+let get_fed_ops pool auth req =
+  let prefix = Option.value (Dream.query req "prefix") ~default:"" in
+  let after_seq =
+    match Dream.query req "after_seq" with
+    | None -> 0
+    | Some s -> ( match int_of_string_opt s with Some v when v >= 0 -> v | _ -> 0)
+  in
+  let limit =
+    match Dream.query req "limit" with
+    | None -> 1000
+    | Some s -> ( match int_of_string_opt s with Some v -> v | None -> 1000)
+  in
+  guard
+    (fed_ops_core pool ~auth ~prefix ~after_seq ~limit
+     >>= fun (code, body) -> j_ok ~code body)
+
+let post_fed_ops_apply pool auth req =
+  body_json req
+  >>= function
+  | Error msg -> j_err msg
+  | Ok j ->
+      guard
+        (fed_apply_core pool ~auth j >>= fun (code, body) -> j_ok ~code body)
 
 (* -- routes (M11): the routing table as data ---------------------------
 
@@ -1412,6 +1756,8 @@ let api_routes pool =
       ; Dream.post "/api/value/put" (with_auth pool (post_value_put pool))
       ; Dream.get "/api/value/:hash" (with_auth pool (get_value pool))
       ; Dream.get "/api/fed/value/:hash" (with_auth pool (get_fed_value pool))
+      ; Dream.get "/api/fed/ops" (with_auth pool (get_fed_ops pool))
+      ; Dream.post "/api/fed/ops/apply" (with_auth pool (post_fed_ops_apply pool))
       ; Dream.post "/api/route/put" (with_auth pool (post_route_put pool))
       ; Dream.post "/api/route/delete" (with_auth pool (post_route_delete pool))
       ; Dream.get "/api/route/get" (with_auth pool (get_route_get pool))

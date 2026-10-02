@@ -57,9 +57,15 @@ let validate_path what s =
   else None
 
 (* like validate_path but the empty string is the whole-namespace
-   prefix (the API list surface only; prim calls validate strictly) *)
+   prefix, and a trailing '/' is allowed (prefixes name a namespace,
+   not a path).  The API/prim list surfaces use this. *)
 let validate_prefix what s =
-  if s = "" then None else validate_path what s
+  if s = "" then None
+  else if s.[String.length s - 1] = '/' then
+    if String.length s = 1 then
+      Some (Printf.sprintf "%s: prefix must not be just '/'" what)
+    else validate_path what (String.sub s 0 (String.length s - 1))
+  else validate_path what s
 
 let check_path what s =
   match validate_path what s with Some e -> Error e | None -> Ok s

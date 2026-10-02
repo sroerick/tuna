@@ -1333,3 +1333,187 @@ let ns_fork p ~src_prefix ~dst_prefix ~actor =
             >>= fun _ -> log_copies rest
       in
       log_copies copies)
+
+(* -- federation F2: ops-chain sync (borg/federation.borg) ------------- *)
+
+(* head seq of the whole log (0L for an empty log).  Used by the pull
+   surface and, inside a transaction, to assert "this apply's window
+   lands exactly on top of the head I fetched" (no intervening append). *)
+let ops_head_seq p =
+  Db.q p "SELECT COALESCE(MAX(seq), 0) FROM tree_ops"
+  >>= function
+  | [ r ] -> Lwt.return (int64 r 0 "tree_ops.head")
+  | _ -> store_error "tree_ops head: unexpected row count"
+
+(* A pulled op plus its TRUE global predecessor hash (the op_hash of
+   seq-1; genesis for seq 1).  Filtering a window by prefix makes the
+   subsequence non-contiguous, so internal recompute-linkage cannot be
+   used; carrying prev_hash per row makes each row independently
+   verifiable (recompute sha256(prev_hash ^ concat) == op_hash). *)
+type ops_window_row = { w_op : tree_op; w_prev_hash : string }
+
+(* per-row verification over a prefix-filtered (non-contiguous) window:
+   each row carries its TRUE global predecessor hash, so recompute each
+   row's op_hash independently of the others' presence.  This is the
+   check that keeps a prefix-filtered pull tamper-evident (pre-registered
+   failure 2: rejects are journaled, never absorbed). *)
+let verify_window_rows (rows : ops_window_row list) : [ `Ok | `Bad of string ] =
+  let rec go = function
+    | [] -> `Ok
+    | ({ w_op = o; w_prev_hash } : ops_window_row) :: rest ->
+        let h = Tuna.Hash.hex_of_string (w_prev_hash ^ tree_op_concat o) in
+        if h <> o.o_op_hash then
+          `Bad (Printf.sprintf "seq %Ld: op_hash mismatch" o.o_seq)
+        else go rest
+  in
+  go rows
+
+(* contiguous window [from_seq ..] with each row's global predecessor.
+   LAG is computed over the WHOLE log before the range filter so the
+   first row still gets its true predecessor (not NULL). *)
+let ops_window p ~from_seq ~limit =
+  Db.q
+    ~params:[ p_int64 from_seq; p_int limit ]
+    p
+    "SELECT seq, path, op, value_hash, prev_version, version, actor, \
+     EXTRACT(epoch FROM ts)::bigint, op_hash, prev_hash FROM ( \
+       SELECT seq, path, op, value_hash, prev_version, version, actor, ts, \
+              op_hash, COALESCE(LAG(op_hash) OVER (ORDER BY seq), \
+                                repeat('0', 64)) AS prev_hash \
+       FROM tree_ops) t \
+     WHERE seq >= $1 ORDER BY seq LIMIT $2"
+  >>= fun rows ->
+  Lwt.return
+    (List.map
+       (fun r ->
+         { w_op = tree_op_of_row r; w_prev_hash = text r 9 "window.prev_hash" })
+       rows)
+
+(* one applied effect row: value_hash + a FRESH version (1 if the
+   destination path is first seen, else existing+1).  Returns the new
+   version. *)
+let fed_apply_effect_conn c ~dst_prefix ~suffix ~value_hash ~owner =
+  let path = dst_prefix ^ suffix in
+  Db.q_conn
+    ~params:[ p_str (path_hash path); p_str path; p_str value_hash; p_str owner ]
+    c
+    "INSERT INTO tree_paths (path, path_hash, value_hash, version, owner) \
+     VALUES ($2, $1, $3, 1, $4) \
+     ON CONFLICT (path_hash) DO UPDATE SET value_hash = EXCLUDED.value_hash, \
+       version = tree_paths.version + 1, owner = EXCLUDED.owner, \
+       updated_at = now() \
+     RETURNING version"
+  >>= fun rows ->
+  (match rows with
+   | [ r ] -> Lwt.return (int64 r 0 "tree_paths.version")
+   | _ -> store_error "fed_apply: RETURNING gave %d rows" (List.length rows))
+
+(* does any of the three value homes hold [hash]?  apply refuses a
+   window whose effect rows cite values this peer has not pulled (fetch
+   values first, then ops); a dangling index entry is a broken
+   substrate.  The probe mirrors F1's address law: tree_values,
+   byte_values, or a compiled program (a program hash resolves as its
+   own ternary). *)
+let value_present p hash =
+  Lwt.catch
+    (fun () ->
+      Db.q ~params:[ p_str hash ] p
+        "SELECT 1 FROM tree_values WHERE hash = $1 \
+         UNION ALL SELECT 1 FROM byte_values WHERE hash = $1 \
+         UNION ALL SELECT 1 FROM programs WHERE hash = $1 LIMIT 1"
+      >>= (function [] -> Lwt.return false | _ -> Lwt.return true))
+    (fun _ -> Lwt.return false)
+
+(* Apply a window of (op, true-predecessor-hash) pairs into [dst_prefix].
+   Each row is first re-verified against its carried predecessor (so a
+   prefix-filtered, non-contiguous window is still tamper-evident), then
+   each source op's suffix is its path relative to [src_prefix]; every
+   applied row lands in the log (put for effects, cas proof rows for
+   reads/denials/fork markers), so the destination log grows by one row
+   per applied source op.  Effect rows write tree_paths with a FRESH
+   version (first-seen -> 1, re-apply -> version+1): versions are local,
+   the value hash is the shared fact.  Refuses a chain-broken row, a
+   window that leaves [src_prefix], has non-increasing source seqs, or
+   cites a value this peer does not hold (rejects journaled, never
+   absorbed).  Atomic: one transaction.  Returns the effect
+   (path, source_seq, applied_seq, new_version) rows in source-seq
+   order; new_version <> 1 means the source path SHADOWED an existing
+   destination path (two names, one path - visible, never merged).  The
+   source watermark ([after_seq] on the PULL) is deliberately NOT a
+   parameter here: the peer's sequence numbers name source rows, not
+   destination rows, and reads journal into the destination log like
+   any other op. *)
+let fed_apply p ~actor ~dst_prefix ~src_prefix
+    (ops : (tree_op * string) list) =
+  Db.with_tx p (fun c ->
+      if ops = [] then Lwt.return (`Applied [])
+      else
+        let rows = List.map (fun (o, h) -> { w_op = o; w_prev_hash = h }) ops in
+        (match verify_window_rows rows with
+         | `Bad msg -> Lwt.return (`Refused ("window chain broken: " ^ msg))
+         | `Ok ->
+        let rec check prev = function
+          | [] -> Lwt.return `Ok
+          | ((o : tree_op), _) :: rest ->
+              if not (prefix_match src_prefix o.o_path) then
+                Lwt.return
+                  (`Bad
+                    (Printf.sprintf "seq %Ld: path %S outside src prefix %S"
+                       o.o_seq o.o_path src_prefix))
+              else if o.o_seq <= prev then
+                Lwt.return
+                  (`Bad
+                    (Printf.sprintf
+                       "seq %Ld: window is not strictly increasing" o.o_seq))
+              else
+                match (o.o_op, o.o_value_hash) with
+                | ("put" | "cas"), Some vh ->
+                    value_present p vh
+                    >>= (function
+                          | true -> check o.o_seq rest
+                          | false ->
+                              Lwt.return
+                                (`Bad
+                                  (Printf.sprintf
+                                     "seq %Ld: value %s not held locally (pull \
+                                      values before ops)"
+                                     o.o_seq vh)))
+                | _ -> check o.o_seq rest
+        in
+        check Int64.min_int ops
+        >>= (function
+              | `Bad msg -> Lwt.return (`Refused msg)
+              | `Ok ->
+                  let rec apply acc = function
+                    | [] -> Lwt.return (`Applied (List.rev acc))
+                    | ((o : tree_op), _) :: rest ->
+                        let suffix =
+                          String.sub o.o_path (String.length src_prefix)
+                            (String.length o.o_path - String.length src_prefix)
+                        in
+                        let is_effect =
+                          match (o.o_op, o.o_value_hash) with
+                          | ("put" | "cas"), Some _ -> true
+                          | _ -> false
+                        in
+                        (if is_effect then
+                           fed_apply_effect_conn c ~dst_prefix ~suffix
+                             ~value_hash:(Option.get o.o_value_hash) ~owner:actor
+                         else Lwt.return 1L)
+                        >>= fun newv ->
+                        op_append_conn c
+                          ~op:(if is_effect then "put" else "cas")
+                          ~path:(dst_prefix ^ suffix) ~value_hash:o.o_value_hash
+                          ~prev_version:None
+                          ~version:(if is_effect then Some newv else None)
+                          ~actor
+                        >>= fun (applied_seq, _op_hash) ->
+                        let acc =
+                          if is_effect then
+                            (dst_prefix ^ suffix, o.o_seq, applied_seq, newv)
+                            :: acc
+                          else acc
+                        in
+                        apply acc rest
+                  in
+                  apply [] ops)))

@@ -16,10 +16,42 @@
     rejects are never absorbed.  Acceptance: tests/fed_tests.ml (6
     green, own scratch db) + dev-instance e2e (bytes fetch by a peer
     token, ops row carries the peer actor).|) *)
+ (* agent note (|2026-10-01, F2 implemented: GET /api/fed/ops?
+    prefix=&after_seq=&limit= returns a contiguous op window
+    {ops[], head, after_seq, last_seq, limit, more, verified}; each op
+    row carries its TRUE global predecessor hash (prev_hash, computed
+    by SQL LAG over the whole log), so a prefix-filtered window - whose
+    rows are non-contiguous - is still per-row verifiable
+    (verify_window_rows recomputes sha256(prev_hash ^ row_concat)); a
+    tampered row is a 500 with verified:false, never a silent pass.
+    POST /api/fed/ops/apply folds a window into ns/<peer>/...: it
+    re-verifies every row's chain, requires each effect's value to be
+    held locally (pull values before ops, else 400 - rejects are
+    journaled as op fed-apply, never absorbed), enforces per-peer
+    authz (peer <name> writes only ns/<name>/...; admin any), and
+    applies atomically under an optimistic head check (after_seq is the
+    DESTINATION head; a moved head is 409).  The destination index is
+    re-derived by fold: effect rows get tree_paths entries with a FRESH
+    version (first-seen 1, re-apply version+1) - versions are local,
+    the value hash is the shared fact - while EVERY applied source row
+    appends one destination log row (put for effects, cas proof rows
+    for reads/denials/fork markers), so after_seq advances contiguously.  
+    Conflict law v0 holds: append-only, no merge; a re-apply of an
+    existing path SHADOWS (fresh version reported under "shadowed"),
+    divergence surfaces as two namespaces, never silently reconciled.
+    scripts/fed-sync.sh drives a full value-pull + ops-pull + apply
+    round between two instances.  Acceptance: tests/fed_tests.ml
+    ops-chain-sync group (5 green: pull/apply roundtrip, shadow, five
+    reject classes, admin-any-ns) + dev-instance e2e.  A supplied
+    TUNA_FED_PEER_TOKEN_<NAME> is honored (the same shared bearer on
+    every instance; absent = generated-and-printed-once), and the apply
+    body carries values inline ({hash,kind,payload}), rehashed at the
+    boundary, so a peer needs no separate value-put grant and a value
+    slice is self-contained.|) *)
  (status in-progress)
  (convention ocaml-dune)
  (section federation
-  (doc "Three phases, each independently shippable, each with pre-registered failure. F1 implemented 2026-09-18; F2 and F3 still out of scope.")
+  (doc "Three phases, each independently shippable, each with pre-registered failure. F1 implemented 2026-09-18; F2 implemented 2026-10-01; F3 still out of scope.")
   (status in-progress)
   (subsection phases
    (status in-progress)
@@ -33,15 +65,18 @@
          identities via TUNA_FED_PEERS; hash-gated reads (byte-values
          law 2) mean no new authz model; fetches journal as op
          "fed-value" attributed to the calling identity.
-      F2 OPS-CHAIN SYNC. Pull: GET /api/fed/ops?prefix=&after_seq=
-         returns op windows with op_hash linkage a peer can verify
-         (mid-log windows verify internal-linkage-only, genesis anchor
-         for seq 1 - the d7e0ae7 lesson, pinned). Push: POST
-         /api/fed/ops/apply accepts a verified window into a
-         peer-scoped namespace ns/<peer>/... and re-derives the index
-         by fold. Per-peer authz = one prefix grant per peer. Conflict
-         law v0: append-only per namespace, no merge - divergence is
-         visible as two namespaces, never silently reconciled.
+      F2 OPS-CHAIN SYNC (IMPLEMENTED 2026-10-01). Pull: GET
+         /api/fed/ops?prefix=&after_seq= returns a contiguous op window;
+         each row carries its true global predecessor hash so
+         prefix-filtered (non-contiguous) windows verify per row
+         (verify_window_rows; the d7e0ae7 lesson generalized - a window
+         needs an anchor, which a carried prev_hash supplies for every
+         row). Push: POST /api/fed/ops/apply re-verifies the window,
+         rehashes inline values, checks per-peer authz (peer <name> ->
+         ns/<name>/...; admin any), and folds it into the destination
+         atomically. Append-only, no merge: a re-apply shadows under a
+         fresh version; divergence is two namespaces, never silently
+         reconciled.
       F3 PRICKLYPEAR BRIDGE. Align attribution first (PP acted_by,
          still unshipped), then bearer parity (PP delegated Bearer ==
          tuna identity token), then a PP prims library calling
@@ -50,13 +85,21 @@
          internals. PP is a client of the tree surface before it is a
          peer of the chain. |))))
   (subsection pre-registered-failures
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       1. Two peers diverge on the same path and no check notices ->
          failure; divergence must surface as distinct namespaces or a
-         verified rejection.
+         verified rejection.  F2 holds: ns/<peer>/ scoping keeps
+         namespaces distinct, and a re-apply of an existing path
+         SHADOWS under a fresh version (reported in the apply answer's
+         "shadowed" list), never a silent merge.
       2. An applied op that fails rehash or chain-linkage verification
-         -> failure; rejects are journaled, never absorbed.
+         -> failure; rejects are journaled, never absorbed.  F2 holds:
+         every pulled row carries its true prev_hash and apply
+         re-verifies each row (tampered = 400, journaled fed-apply); a
+         value-citing effect whose value is not held locally is also
+         refused (400), value-pull-before-ops is the caller's law.
       3. A bridge write attributed to any identity other than the true
-         actor (or its delegated identity) -> failure. |))))))
+         actor (or its delegated identity) -> failure.  (F3, not yet
+         exercised.) |))))))
