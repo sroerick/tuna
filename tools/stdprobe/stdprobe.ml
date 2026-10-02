@@ -66,6 +66,10 @@ let () =
   d "int-zero" "%200";
   d "int-one" "%202100";
   d "int-neg" "(lambda (n) ((lambda (c) ((tree-case (pair %0 %0) (lambda (j) (pair %0 %0)) (lambda (s) (lambda (m) ((tree-case (pair %0 %0) (lambda (j2) (pair (not s) m)) (lambda (u) (lambda (v) (pair (not s) m)))) m)))) c)) (int-canonical n)))";
+  d "mag-ripple-fn" "(lambda (self) (lambda (xs) (lambda (c) ((tree-case ((tree-case %0 (lambda (jc) (pair %10 %0)) (lambda (u1) (lambda (v1) %0))) c) (lambda (jx) ((tree-case %0 (lambda (jc) (pair %10 %0)) (lambda (u1) (lambda (v1) %0))) c)) (lambda (hd) (lambda (tl) ((tree-case (pair hd tl) (lambda (jc) ((tree-case (pair %10 tl) (lambda (jh) (pair %0 (self tl %10))) (lambda (u2) (lambda (v2) (pair %10 tl)))) hd)) (lambda (u3) (lambda (v3) (pair hd tl)))) c)))) xs))))";
+  d "mag-ripple" "(lambda (xs) (lambda (c) ((rec-fix mag-ripple-fn) xs c)))";
+  d "mag-add-fn" "(lambda (self) (lambda (a) (lambda (b) (lambda (c) ((tree-case (mag-ripple b c) (lambda (ja) (mag-ripple b c)) (lambda (ahd) (lambda (atl) ((tree-case (mag-ripple (pair ahd atl) c) (lambda (jb) (mag-ripple (pair ahd atl) c)) (lambda (bhd) (lambda (btl) (pair (bool-xor (bool-xor ahd bhd) c) (self atl btl (bool-or (bool-and ahd bhd) (bool-and c (bool-xor ahd bhd)))))))) b)))) a)))))";
+  d "mag-add" "(lambda (a) (lambda (b) (mag-canonical (((rec-fix mag-add-fn) a) b %0))))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -123,6 +127,17 @@ let () =
   eval "int-neg" ["%2100"];              (* -0 in -> +0 out *)
   eval "int-neg" ["%0"];                 (* junk -> +0 *)
   eval "int-neg" ["%20202100"];          (* +2 -> -2 *)
+  eval "mag-ripple" ["%0"; "%0"];        (* nil + no carry -> nil *)
+  eval "mag-ripple" ["%0"; "%10"];       (* nil + carry -> [t] *)
+  eval "mag-ripple" ["%2100"; "%0"];     (* [t] unchanged *)
+  eval "mag-ripple" ["%2100"; "%10"];    (* 1+1 = [f,t] *)
+  eval "mag-ripple" ["%2102100"; "%10"]; (* 3+1 = [f,f,t] = 4 *)
+  eval "mag-add" ["%0"; "%0"];           (* 0+0 *)
+  eval "mag-add" ["%2100"; "%2100"];     (* 1+1 = 2 = [f,t] *)
+  eval "mag-add" ["%2102100"; "%2100"];  (* 3+1 = 4 = [f,f,t] *)
+  eval "mag-add" ["%210202100"; "%202100"]; (* 5+2 = 7 = [t,t,t] *)
+  eval "mag-add" ["%0"; "%210202100"];   (* 0+5 = 5 *)
+  eval "mag-add" ["%200"; "%2100"];      (* junk bit [f] + 1 -> 1 *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];

@@ -175,5 +175,44 @@ d("int-neg", lam("n",
              "c")),
     L("int-canonical", "n"))))
 
+# mag-ripple: add one carry bit into an LSB-first magnitude. c junk ->
+# 0, xs junk -> nil+delta. Recursion only in dispatch arm bodies.
+RIP_LEAF = dispatch("%0", lam("jc", L("pair", "%10", "%0")),
+                    lam2("u1", "v1", "%0"), "c")
+RIP_FORK = lam2("hd", "tl",
+  dispatch(L("pair", "hd", "tl"),
+    lam("jc", dispatch(L("pair", "%10", "tl"),
+                       lam("jh", L("pair", "%0", L("self", "tl", "%10"))),
+                       lam2("u2", "v2", L("pair", "%10", "tl")),
+                       "hd")),
+    lam2("u3", "v3", L("pair", "hd", "tl")),
+    "c"))
+d("mag-ripple-fn", lam("self", lam("xs", lam("c",
+  dispatch(RIP_LEAF, lam("jx", RIP_LEAF), RIP_FORK, "xs")))))
+d("mag-ripple", lam("xs", lam("c",
+  L(L("rec-fix", "mag-ripple-fn"), "xs", "c"))))
+
+# mag-add: full adder. per position: out = xor3(ahd,bhd,c),
+# carry' = majority(ahd,bhd,c) = (a&b) | (c & (a^b)). Result through
+# mag-canonical so a zero sum is nil, not [f...].
+MA_SUMBIT = L("bool-xor", L("bool-xor", "ahd", "bhd"), "c")
+MA_CARRY = L("bool-or", L("bool-and", "ahd", "bhd"),
+             L("bool-and", "c", L("bool-xor", "ahd", "bhd")))
+MA_BFORK = lam2("bhd", "btl",
+  L("pair", MA_SUMBIT, L("self", "atl", "btl", MA_CARRY)))
+MA_AFORK = lam2("ahd", "atl",
+  dispatch(L("mag-ripple", L("pair", "ahd", "atl"), "c"),
+           lam("jb", L("mag-ripple", L("pair", "ahd", "atl"), "c")),
+           MA_BFORK,
+           "b"))
+d("mag-add-fn", lam("self", lam("a", lam("b", lam("c",
+  dispatch(L("mag-ripple", "b", "c"),
+           lam("ja", L("mag-ripple", "b", "c")),
+           MA_AFORK,
+           "a"))))))
+d("mag-add", lam("a", lam("b",
+  L("mag-canonical",
+    L(L(L("rec-fix", "mag-add-fn"), "a"), "b", "%0")))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
