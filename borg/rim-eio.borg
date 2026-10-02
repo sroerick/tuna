@@ -1,0 +1,112 @@
+(project tuna-rim-eio
+ (doc "Tuna book chapter: rim-eio - FINISH the runtime purity thesis's
+      declared stage. The purity chapter names the Lwt rim explicitly:
+      the host adapter binds Flat_drive.Make(Lwt) and the thesis
+      pre-authorized eio as a legal host loop. A declared stage left
+      permanent is institutional cruft - the operator call 2026-10-02:
+      migrate tuna1's rim to eio, in place. Operator context recorded:
+      tuna2 as a fork is OFF the roadmap (its draft's decision list
+      applies as tuna1 make-passes instead - D1 is this chapter, D3 is
+      the storage-law chapter landing alongside); PP's eio floor
+      (archive/plans/eio-floor-checklist.md, Io_eio pure pgx over
+      Eio.Net, http_kit family) turned the migration from research
+      problem into playbook; family law stands: direct-style
+      everywhere, NO Lwt_eio bridge, NO dual rims, NO flag - PP
+      Phase 5 deleted the bridge and the flag on evidence.")
+ (status planned)
+ (convention ocaml-dune)
+ (section rim-eio-v1
+  (doc "Three mechanical stages, risk-ordered, each refereed by
+        existing scripts - the migration invents no new acceptance
+        machinery. The core is untouched by construction (purity
+        chapter); only the rim re-binds.")
+  (status planned)
+  (subsection driver
+   (status planned)
+   (details
+    (doc (|
+      Replace server/lib/run.ml's Tuna_interp.Flat_drive.Make (Lwt)
+      with a direct-style eio driver over Tuna_interp.Flat: a loop
+      of step / answer where a prim suspension parks the machine as
+      a VALUE, the host resolves the grant checks and journals the
+      call through the (now eio) store, then resumes via answer.
+      Awaiting a prim answer becomes a plain fiber operation inside
+      a cancellation domain; TUNA_RUN_MAX_SECONDS stops being a
+      watchdog beside the loop and becomes the loop's own
+      cancellation discipline. SEMANTIC PINS, non-negotiable: a
+      cancelled run finalizes as status deadline_exceeded journaled
+      like any exhaustion - never an exception at the boundary
+      (AGENTS rule 5); TUNA_COMPILE_MAX_SECONDS keeps its 400
+      compile-failed behavior, never a pinner; replay and the fork
+      counterfactual carry the same cap; deadline_exceeded rows
+      stay unverifiable by the same doctrine (the clock is not a
+      calculus fact). Referee: differential 24/24 + verify-3
+      (replay identity) + verify-5 (divergence) + prim suites. |))))
+  (subsection store
+   (status planned)
+   (details
+    (doc (|
+      pgx_lwt -> pure pgx over Eio.Net, porting PP's Io_eio pattern
+      (ambient switch/net/clock ctx, direct-style SQL flows, pool
+      under eio instead of the Lwt mvar in db.ml). The socket story
+      is unchanged: /tmp dir, :5434, trust auth, scripts/dev.sh
+      orchestration identical. store.ml re-threads Lwt types to
+      direct style - mechanical lets where >>= chains stood - with
+      the PG suites as the gate. This stage changes IO plumbing
+      only; every SQL string and row shape stays byte-identical. |))))
+  (subsection http
+   (status planned)
+   (details
+    (doc (|
+      Dream -> httpun_eio. The Dream surface is bounded and
+      enumerated: pages/* (Dream.form decoding, Dream.html
+      fragments, the htmx partials), vendored static
+      (htmx.min.js), login/logout session cookies, bearer auth on
+      /api. Port utilities from PP's http_kit / http_core family
+      (same owner, ISC). routes.ml response-records are already
+      Dream-free by design (routes.borg: handlers return plain
+      records; Api.dispatch_route adapts them) - that seam was
+      built for this day; only the adaptation layer enters this
+      stage. The htmx UI must render byte-equivalently: smoke-ui
+      17/17 is the referee, not a redesigned corpus. |))))
+  (subsection acceptance
+   (status planned)
+   (details
+    (doc (|
+      1. CORE UNTOUCHED: interpreter/, compiler/, common/ diff-
+         empty across the landing commit series (the same law
+         stdlib and forensics carry).
+      2. FULL BATTERY, IDENTICAL ANSWERS: pure suites + PG suites +
+         differential 24/24 + smoke-api 14/14 + smoke-ui 17/17 +
+         verify-1..7 7/7 - and every step count in every fixture
+         unchanged (the corpus is the purity referee; step counts
+         are engine facts, not rim facts).
+      3. CLOCK PINS: deadline_exceeded rows and compile-failed 400s
+         reproduce exactly per the driver pins above; the omega and
+         crown workloads still finalize under the wall clock with
+         their journaled status values.
+      4. ONE FLIP, CLUB-SAFE: no staged dual rims; the whole series
+         lands on the dev stack first (scripts/dev.sh battery),
+         then one club promote - rollback is git revert, per PP
+         Phase 5 precedent. No PP_IO-style runtime flag exists,
+         ever.
+      5. Lwt DEPARTS THE DEPENDENCIES: store/ and server/ dune deps
+         lose Lwt; Prim_eval.Make stays untouched as the corpus
+         referee it was KEPT to be (monad-parameterized pure code
+         - the parameter goes to Id in tests, nothing to Lwt). |))))
+  (subsection pre-registered-failure
+   (status planned)
+   (details
+    (doc (|
+      F8 RIM REGRESSION. TRIGGER: the eio rim cannot reproduce the
+      run-boundary clock policies (deadline/compile/fork caps),
+      OR the battery goes red in a way that is not a straight port
+      artifact, OR stage cost balloons beyond the playbook
+      estimate without a named cause. THEN: the swap stalls; the
+      Lwt rim remains a LEGAL STAGE per the purity thesis (which
+      never made Lwt mandatory, only honest as a labeled stage);
+      record in FINDINGS.md with the measurement; never a bridge
+      rescue (Lwt_eio is the deleted-by-evidence path), never a
+      flag. A stalled series merely keeps the stage label honest -
+      cruft risk accepted knowingly, relitigated by a future
+      make-pass with a better case. |))))))

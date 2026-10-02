@@ -1,0 +1,104 @@
+(project tuna-storage-law
+ (doc "Tuna book chapter: the values law - content-addressed values
+      are the primitive; mutable tree hierarchies are FORESWORN.
+      This chapter promines PP's one-tree lesson into tuna book law
+      (what the 2026-09-15 STORAGE SUBSTRATE WATCH note and the
+      tuna2 exploratory draft carried as provenance, now chapter-
+      form as the operator asked). Provenance: PP's one-tree bet
+      landed HALFWAY and the halfway state was the expensive one -
+      reads flipped, writes never retired their relational truth,
+      and the mutable shared-hierarchy substrate collected seven
+      subsystems (path grammar, label codec, shadow-mirror SQL
+      triggers, branch override walks, sibling order, version
+      shadows, retention) that were all paid for and none
+      load-bearing; the trees survived only as a UI projection.
+      The one-line memorial, kept verbatim from the autopsy:
+      MUTABLE TREE STORAGE IS A SUBSYSTEM YOU INHERIT FOREVER;
+      IMMUTABLE CONTENT-ADDRESSED VALUES ARE A PRIMITIVE YOU PAY
+      FOR ONCE. Tuna's trees are values where PP's were state -
+      this chapter keeps them that.")
+ (status implemented)
+ (convention ocaml-dune)
+ (section values-law
+  (doc "The storage doctrine, as numbered laws over what the
+        migrations already ship - this chapter codifies shipped
+        reality, it does not request new storage.")
+  (status implemented)
+  (subsection one-tree-memorial
+   (status implemented)
+   (details
+    (doc (|
+      WHAT PP PAID, as the standing example: 009_tree.sql at 474
+      lines, tree_store.ml at 2,578 lines, ~89 tree-touching
+      commits, 9 dedicated tree test suites, 8 migrations - a
+      perpetual dual-run state where the substrate never became
+      the truth and the truth never reverted the substrate. The
+      half-migration is the worst place to land. PP's one-tree
+      chapter stays archived there with status partial forever,
+      honest about it; tuna learned from the corpse. THE TEST for
+      any future storage idea: does it introduce NAME-LEVEL MUTABLE
+      STRUCTURE, or VALUE-LEVEL IMMUTABLE CONTENT? Values pass.
+      Mutable hierarchies of named things do not. |))))
+  (subsection laws
+   (status implemented)
+   (details
+    (doc (|
+      1. VALUES ARE THE PRIMITIVE. programs (0001: hash over
+         ternary), tree_values (0006), byte_values (0008): all
+         content-addressed, all sha256 over exact stored payload,
+         lowercase hex, one address law across kinds. The hash IS
+         identity: copying is aliasing, dedup is INSERT-side and
+         free, equality is address comparison.
+      2. NAMES ARE REFS, NOT VALUES. Every name-bearing surface is
+         a pointer row: repl_dict (0004: identity, name -> ternary
+         ref), tree_paths owners, the stdlib's sabralib dictionary
+         entries, grant rows. Refs are mutable ROWS pointing at
+         immutable content; ref ownership is authz (an identity's
+         rows are its own), never courtesy. Names live at the rim
+         only - domain rule 7's deeper claim, discovered by trying
+         to violate it: nothing below the calculus ever learns
+         what a name is.
+      3. PATHS ARE DERIVED, NEVER TRUTH. tree_paths (0005) is its
+         own drafting comment: a DERIVED index, value_hash in,
+         path->hash out. The write truth is the chained effect
+         log; rewind = fold of the log; a derived index earns its
+         place exactly when it is REBUILDABLE from truth - an
+         index that cannot be rebuilt from values + ops is not an
+         index, it is a second truth, and second truths are what
+         F9 exists to reject.
+      4. MUTABLE HIERARCHIES ARE FORSWORN. No user-owned mutable
+         path contexts; no path grammars or label codecs; no
+         sibling order; no inheritance or override walks owned by
+         storage; no version shadows; no per-path retention
+         policies; no generations. If a feature seems to need one
+         of these, the need goes to FINDINGS and the design goes
+         through refs+values first - a book change amends THIS
+         chapter in the open or it does not happen.
+      5. CONTENT ROWS NEVER UPDATE IN PLACE. Content-addressed
+         rows are write-once; versioning is a fresh hash + fresh
+         row (patch CAS, op shadowing); death is a tombstone
+         (journal.borg retention-GC), never a mutation; PII
+         redaction is an explicit chain break, priced as one.
+      6. THE AUDIT RITUAL IS LAW. Every future migration that
+         introduces a table preferring a path or parent pointer
+         over a hash answers the review question: why is this not
+         a ref row over content-addressed values plus a derived
+         index? "It is convenient" is not an answer; the seven
+         subsystems of the one-tree corpse were convenient too. |))))
+  (subsection pre-registered-failure
+   (status implemented)
+   (details
+    (doc (|
+      F9 SUBSTRATE REGRESSION. TRIGGER: any future migration, PR,
+      or make-pass introduces mutable path-hierarchy storage truth
+      (user-owned mutable path contexts; in-place updates of
+      content rows; a second write-truth beside the effect log).
+      THEN: reject as a spec violation - not judgment, doctrine:
+      this chapter is the standing rejection written in advance.
+      The failure is pre-registered so that no future loop can
+      feign ambiguity between ref-rows (legal, law 2 + refs are
+      how sharing works) and hierarchy-state (illegal, law 4). If
+      a real product demand appears to require hierarchy, the
+      FINDING is recorded with the demand as evidence and the law
+      is amended in this book by an owner-dated change FIRST -
+      the cruft otherwise repeats PP's years. |))))))
