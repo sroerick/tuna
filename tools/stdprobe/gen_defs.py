@@ -274,5 +274,27 @@ d("mag-sub", lam("a", lam("b",
   L("mag-canonical",
     L(L(L("rec-fix", "mag-sub-fn"), "a"), "b", "%0")))))
 
+# int-add: canonicalize both, then signs. same sign -> mag-add, keep it;
+# opposite signs -> mag-cmp picks subtrahend direction + result sign, eq
+# lands on the single zero form. Signs are canonical bools post
+# int-canonical, so same-sign = not (bool-xor sa sb).
+IA_ADDVAL = L("pair", "sa", L("mag-add", "ma", "mb"))
+IA_GTVAL = L("pair", "sa", L("mag-sub", "ma", "mb"))
+IA_LTVAL = L("pair", "sb", L("mag-sub", "mb", "ma"))
+IA_EQGT = lam("c", dispatch(L("pair", "%0", "%0"),
+                            lam("j3", IA_GTVAL),
+                            lam2("j4", "j5", IA_GTVAL),
+                            "c"))
+IA_SUBVAL = dispatch(IA_LTVAL, IA_EQGT, lam2("j6", "j7", IA_GTVAL),
+                     L("mag-cmp", "ma", "mb"))
+IA_BFORK = lam2("sb", "mb",
+  L(L("if", IA_ADDVAL, IA_SUBVAL), L("not", L("bool-xor", "sa", "sb"))))
+IA_FORKA = lam2("sa", "ma",
+  dispatch("ca", lam("j8", "ca"), IA_BFORK, "cb"))
+IA_CAWORK = dispatch("cb", lam("j0", "cb"), IA_FORKA, "ca")
+d("int-add", lam("a", lam("b",
+  L(lam("ca", L(lam("cb", IA_CAWORK), L("int-canonical", "b"))),
+    L("int-canonical", "a")))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
