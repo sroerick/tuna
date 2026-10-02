@@ -5,7 +5,7 @@
    renders its outcomes and degrades to plain forms for no-JS
    clients. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module L = Layout
@@ -105,7 +105,7 @@ let int_of _name dflt = function
 (* The round: same engine as POST /api/repl.  htmx gets the outcome
    fragment; no-JS gets the full page with the form refilled. *)
 let eval pool user req =
-  Dream.form ~csrf:false req
+  Web.form ~csrf:false req
   >>= function
   | `Ok fields -> (
       let get k = List.assoc_opt k fields in
@@ -118,7 +118,7 @@ let eval pool user req =
           (String.split_on_char '\n' inputs)
       in
       if String.trim source = "" then
-        if L.is_htmx req then Dream.html empty_html
+        if L.is_htmx req then Web.html empty_html
         else
           L.page ~user ~title:"tuna — repl"
             (form_html () ^ Printf.sprintf {|<div id="repl-result">%s</div>|}
@@ -128,9 +128,9 @@ let eval pool user req =
           ~caller:user.S.i_id ~command:source ~inputs:input_list ~grant_ids:[]
           ~fuel ~size_cap ~compile_deadline:(Run.compile_deadline_now ()) ()
         >>= (function
-              | Error (_, msg) -> Dream.html (error_html msg)
+              | Error (_, msg) -> Web.html (error_html msg)
               | Ok o ->
-                  if L.is_htmx req then Dream.html (outcome_html o)
+                  if L.is_htmx req then Web.html (outcome_html o)
                   else
                     L.page ~user ~title:"tuna — repl"
                       (form_html ~source ~inputs

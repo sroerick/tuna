@@ -24,9 +24,9 @@
    Verification never re-checks grants and never touches the live
    world: the journal answers, not the grant table (grants.invocation). *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
-module Eng = Tuna_interp.Flat_drive.Make (Lwt)
+module Eng = Tuna_interp.Flat_drive.Make (Tuna_store.Direct)
 module S = Tuna_store.Store
 
 type outcome = Eng.result =
@@ -113,7 +113,7 @@ let first_diff_path (a : Tuna.Tree.t) (b : Tuna.Tree.t) : string =
    results consumed in order); no grant check, no live host.  Returns
    (outcome, rows consumed). *)
 let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ~program
-    ~inputs ~fuel ~size_cap (rows : S.journal list) : (outcome * int) Lwt.t =
+    ~inputs ~fuel ~size_cap (rows : S.journal list) : (outcome * int) =
   let arr = Array.of_list rows in
   let next = ref 0 in
   let host ~site:_ ~name ~args =
@@ -189,10 +189,10 @@ let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ~program
                    row.S.j_seq)
         in
         incr next;
-        Lwt.return answer)
+        return answer)
   in
   Eng.eval ~host ~mode ~fuel ~size_cap ~deadline ~program inputs
-  >>= fun outcome -> Lwt.return (outcome, !next)
+  >>= fun outcome -> return (outcome, !next)
 
 (* -- prim contract versioning (replay.prim-versioning) --------------- *)
 
@@ -337,25 +337,25 @@ let diff_journals (recorded : S.journal list) (live : S.journal list) :
    resolve through the programs table (the boundary stores input trees
    content-addressed at run time). *)
 let load_run_parts pool ~(run : S.run) :
-    (Tuna.Tree.t * Tuna.Tree.t list * S.journal list, string) result Lwt.t =
+    (Tuna.Tree.t * Tuna.Tree.t list * S.journal list, string) result =
   S.fetch_program pool run.S.r_program_hash
   >>= (function
-        | None -> Lwt.return (Error "program row missing from the store")
+        | None -> return (Error "program row missing from the store")
         | Some prog -> (
             match Tuna.Canon.of_string prog.S.p_ternary with
             | Error (off, msg) ->
-                Lwt.return
+                return
                   (Error
                      (Printf.sprintf "stored program unparseable at offset %d: %s"
                         off msg))
             | Ok program -> (
                 let rec load_inputs = function
-                  | [] -> Lwt.return (Ok [])
+                  | [] -> return (Ok [])
                   | h :: rest -> (
                       S.fetch_program pool h
                       >>= (function
                             | None ->
-                                Lwt.return
+                                return
                                   (Error
                                      (Printf.sprintf
                                         "input tree %s missing from the store" h))
@@ -364,10 +364,10 @@ let load_run_parts pool ~(run : S.run) :
                                 | Ok t -> (
                                     load_inputs rest
                                     >>= (function
-                                          | Ok is -> Lwt.return (Ok (t :: is))
-                                          | Error e -> Lwt.return (Error e)))
+                                          | Ok is -> return (Ok (t :: is))
+                                          | Error e -> return (Error e)))
                                 | Error (off, msg) ->
-                                    Lwt.return
+                                    return
                                       (Error
                                          (Printf.sprintf
                                             "stored input %s unparseable at \
@@ -376,10 +376,10 @@ let load_run_parts pool ~(run : S.run) :
                 in
                 load_inputs run.S.r_input_hashes
                 >>= (function
-                      | Error _ as e -> Lwt.return e
+                      | Error _ as e -> return e
                       | Ok inputs ->
                           S.fetch_journals pool run.S.r_id
-                          >>= fun js -> Lwt.return (Ok (program, inputs, js))))))
+                          >>= fun js -> return (Ok (program, inputs, js))))))
 
 (* Live replay (replay.live): re-execute the parent's program + inputs
    against the CURRENT world under FRESH grants.  It mints its own run
@@ -392,17 +392,17 @@ let live_replay pool ~caller ~grant_ids ~(parent : S.run) ~fuel ~size_cap () :
     ((S.run * S.journal list * world_diff option * contract_mismatch list),
      string)
     result
-    Lwt.t =
+    =
   if parent.S.r_status = S.Run_status.Running then
-    Lwt.return (Error "run is still running")
+    return (Error "run is still running")
   else
     load_run_parts pool ~run:parent
     >>= (function
-          | Error msg -> Lwt.return (Error msg)
+          | Error msg -> return (Error msg)
           | Ok (program, inputs, recorded) ->
               S.fetch_program pool parent.S.r_program_hash
               >>= (function
-                    | None -> Lwt.return (Error "program row missing")
+                    | None -> return (Error "program row missing")
                     | Some prog ->
                         Run.execute pool ~caller ~grant_ids
                           ~program_hash:parent.S.r_program_hash ~program
@@ -412,16 +412,16 @@ let live_replay pool ~caller ~grant_ids ~(parent : S.run) ~fuel ~size_cap () :
                         >>= fun (row, live) ->
                         let diff = diff_journals recorded live in
                         let mismatches = contract_mismatches recorded in
-                        Lwt.return (Ok (row, live, diff, mismatches))) )
+                        return (Ok (row, live, diff, mismatches))) )
 
 (* Verify one run row against its journal (no state written). *)
-let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
+let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict =
   if run.S.r_status = S.Run_status.Running then
-    Lwt.return (Unverifiable "run is still running")
+    return (Unverifiable "run is still running")
   else if run.S.r_status = S.Run_status.Deadline_exceeded then
     (* replay re-runs the calculus, not the clock: a wall-clock abort
        records operator timing, not a computational fact *)
-    Lwt.return
+    return
       (Unverifiable
          "deadline_exceeded run: wall-clock abort, not a calculus fact")
   else
@@ -431,7 +431,7 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
     S.fetch_gc_tombstone pool run.S.r_id
     >>= (function
           | Some policy ->
-              Lwt.return
+              return
                 (Gone
                    (Printf.sprintf
                       "journal gced; replay answers are unknown (retention \
@@ -441,11 +441,11 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
     S.fetch_journals pool run.S.r_id
     >>= fun js ->
     match S.verify_chain js with
-    | `Bad reason -> Lwt.return (Bad_chain reason)
+    | `Bad reason -> return (Bad_chain reason)
     | `Ok -> (
         load_run_parts pool ~run
         >>= (function
-              | Error msg -> Lwt.return (Unverifiable msg)
+              | Error msg -> return (Unverifiable msg)
                 | Ok (program, inputs, js') -> (
                       (* per-version replay (borg/sharing.borg): the row
                          names the accounting law that produced its
@@ -460,13 +460,13 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                       let nrows = List.length js' in
                       (match mode with
                        | Error s ->
-                           Lwt.return
+                           return
                              (Unverifiable
                                 (Printf.sprintf
                                    "unknown semantics version %S for this build"
                                    s))
                        | Ok mode ->
-                      Lwt.catch
+                      catch
                         (fun () ->
                             execute_fed ~mode ~program ~inputs ~fuel:run.S.r_fuel
                               ~size_cap:run.S.r_size_cap ~deadline js'
@@ -474,7 +474,7 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                           if is_deadline outcome then
                             (* a replay-side clock abort is an operator
                                budget, not evidence of divergence *)
-                            Lwt.return
+                            return
                               (Unverifiable
                                  "replay exceeded the wall-clock budget \
                                   (TUNA_RUN_MAX_SECONDS): raise it or disable \
@@ -482,7 +482,7 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                           else if consumed < nrows then
                           let rows = Array.of_list js' in
                           let row = rows.(consumed) in
-                          Lwt.return
+                          return
                             (Diverged
                                { div_seq = Some row.S.j_seq
                                ; callsite_path = row.S.j_callsite_path
@@ -513,7 +513,7 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                                   | _ -> "")
                               | _ -> ""
                             in
-                            Lwt.return
+                            return
                               (Diverged
                                  { div_seq = None
                                  ; callsite_path = ""
@@ -531,7 +531,7 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                             outcome_status outcome
                             <> S.Run_status.to_string run.S.r_status
                           then
-                            Lwt.return
+                            return
                               (Diverged
                                  { div_seq = None
                                  ; callsite_path = ""
@@ -549,7 +549,7 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                             (not run.S.r_demand_sharing)
                             && Some (outcome_steps outcome) <> run.S.r_step_count
                           then
-                            Lwt.return
+                            return
                               (Diverged
                                  { div_seq = None
                                  ; callsite_path = ""
@@ -563,21 +563,21 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict Lwt.t =
                                  ; recorded_contract = None
                                  ; current_contract = Some Prims.contract
                                  ; contract_mismatch = false })
-                          else Lwt.return (Verified outcome))
+                          else return (Verified outcome))
                       (function
-                        | Diverged d -> Lwt.return (Diverged d)
-                          | e -> Lwt.fail e))))))
+                        | Diverged d -> return (Diverged d)
+                          | e -> fail e))))))
 
 (* Re-execute a (derived) run against its own journal and WRITE the
    outcome into the run row: the counterfactual execution behind fork.
    A divergent edit leaves the run in status Error with the divergence
    recorded in the returned verdict (never raised). *)
-let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
+let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict =
   S.fetch_run pool run_id
   >>= (function
-        | None -> Lwt.fail (Failure "unknown run")
+        | None -> fail (Failure "unknown run")
         | Some run when run.S.r_status = S.Run_status.Deadline_exceeded ->
-            Lwt.return
+            return
               (Unverifiable
                  "deadline_exceeded run: wall-clock abort, not a calculus \
                   fact; the fork counterfactual re-runs the clock too")
@@ -585,11 +585,11 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
             S.fetch_journals pool run_id
             >>= fun js ->
             (match S.verify_chain js with
-             | `Bad reason -> Lwt.return (Bad_chain reason)
+             | `Bad reason -> return (Bad_chain reason)
              | `Ok -> (
                  load_run_parts pool ~run
                  >>= (function
-                       | Error msg -> Lwt.return (Unverifiable msg)
+                       | Error msg -> return (Unverifiable msg)
                          | Ok (program, inputs, js') ->
                              (* the counterfactual re-executes under the
                                 row's own law, same as verify *)
@@ -601,14 +601,14 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
                              in
                              (match mode with
                               | Error s ->
-                                  Lwt.return
+                                  return
                                     (Unverifiable
                                        (Printf.sprintf
                                           "unknown semantics version %S for this build"
                                           s))
                               | Ok mode ->
                              let nrows = List.length js' in
-                             Lwt.catch
+                             catch
                                (fun () ->
                                   execute_fed ~mode ~program ~inputs ~fuel:run.S.r_fuel
                                     ~size_cap:run.S.r_size_cap ~deadline js'
@@ -633,7 +633,7 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
                                  in
                                  S.update_run_result pool ~id:run_id
                                    ~status:S.Run_status.Error ()
-                                 >>= fun () -> Lwt.return (Diverged d)
+                                 >>= fun () -> return (Diverged d)
                                else
                                  let status =
                                    match outcome with
@@ -655,26 +655,26 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict Lwt.t =
                                      (* the counterfactual re-ran the clock
                                         too; finalize the fork row the same
                                         way the run boundary would *)
-                                     Lwt.return
+                                     return
                                        (Unverifiable
                                           "counterfactual exceeded the \
                                            wall-clock budget \
                                            (TUNA_RUN_MAX_SECONDS); the fork \
                                            row is finalized as \
                                            deadline_exceeded")
-                                   else Lwt.return (Verified outcome))
+                                   else return (Verified outcome))
                              (function
                                | Diverged d ->
                                    S.update_run_result pool ~id:run_id
                                      ~status:S.Run_status.Error ()
-                                   >>= fun () -> Lwt.return (Diverged d)
-                                 | e -> Lwt.fail e))))))
+                                   >>= fun () -> return (Diverged d)
+                                 | e -> fail e))))))
 
 (* Verify and WRITE verify_status ("verified" / "failed" / "gced"). *)
 let verify_and_record pool ?(deadline = Float.infinity) ~run_id () =
   S.fetch_run pool run_id
   >>= (function
-        | None -> Lwt.fail (Failure "unknown run")
+        | None -> fail (Failure "unknown run")
         | Some run ->
               verify pool ~run ~deadline ()
             >>= fun v ->
@@ -685,4 +685,4 @@ let verify_and_record pool ?(deadline = Float.infinity) ~run_id () =
               | Bad_chain _ | Diverged _ | Unverifiable _ -> "failed"
             in
             S.update_verify_status pool ~id:run_id ~verify_status:status ()
-            >>= fun () -> Lwt.return v)
+            >>= fun () -> return v)

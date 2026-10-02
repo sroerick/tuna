@@ -10,7 +10,7 @@
    The rehash criterion is independent: sha256 recomputed here with
    digestif must equal the hash the peer asked for, whatever the kind. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
@@ -21,7 +21,7 @@ let setup () =
   Db.init (Db.config_from_env ()) >>= fun p ->
   Db.apply_migrations p
     ~dir:(try Sys.getenv "TUNA_TEST_MIGRATIONS" with Not_found -> "../migrations")
-  >>= fun _ -> Lwt.return p
+  >>= fun _ -> return p
 
 let admin p = S.bootstrap_identity p ~name:"fed-root" ~token:"fed-root-token" ()
 
@@ -42,7 +42,7 @@ let json_string j k = match J.Util.member k j with `String s -> Some s | _ -> No
 let ops_with p ~op ~path =
   S.ops_fold p ~prefix:"" ~from_seq:0L ()
   >>= fun ops ->
-  Lwt.return
+  return
     (List.filter
        (fun (o : S.tree_op) -> o.S.o_op = op && o.S.o_path = path)
        ops)
@@ -69,7 +69,7 @@ let test_fed_tree_roundtrip () =
   let payload = Option.value (json_string j "payload") ~default:"?" in
   Alcotest.(check string) "tree: rehash matches" hash
     (independent_sha256 payload);
-  Lwt.return ()
+  return ()
 
 let test_fed_bytes_roundtrip () =
   setup () >>= fun p ->
@@ -89,7 +89,7 @@ let test_fed_bytes_roundtrip () =
     (Base64.decode_exn payload);
   Alcotest.(check string) "bytes: rehash matches" hash
     (independent_sha256 (Base64.decode_exn payload));
-  Lwt.return ()
+  return ()
 
 (* a program hash resolves as kind tree with the program's own ternary:
    one address law, so a peer can pull a program and rehash it like any
@@ -109,7 +109,7 @@ let test_fed_program_hash () =
     (Some ternary) (json_string j "payload");
   Alcotest.(check string) "program: rehash matches" hash
     (independent_sha256 ternary);
-  Lwt.return ()
+  return ()
 
 (* absent hashes answer 404 with an error field, and even denials land
    in the ops chain (op fed-value), attributed to the calling identity *)
@@ -130,7 +130,7 @@ let test_fed_absent_and_journal () =
         Alcotest.(check string) "absent: attributed to the caller" me.S.i_id
           o.S.o_actor
     | _ -> Alcotest.fail "impossible: ops_with length checked above");
-  Lwt.return ()
+  return ()
 
 (* per-peer identities: a non-admin peer's fetch is attributed to the
    peer, never to root; the peer needs no grant (hash-gated reads) *)
@@ -149,7 +149,7 @@ let test_fed_peer_attribution () =
         Alcotest.(check string) "peer: attributed to the peer identity"
           pe.S.i_id o.S.o_actor
     | _ -> Alcotest.fail "peer: expected exactly one fed-value op");
-  Lwt.return ()
+  return ()
 
 (* boot-time peer name validation: pure unit checks over the env parser
    helpers (lowercase alnum + dashes; dash maps to underscore in the
@@ -166,7 +166,7 @@ let test_fed_peer_names () =
     (Api.fed_peer_name_ok (String.make 65 'a'));
   Alcotest.(check string) "token env maps dash to underscore"
     "TUNA_FED_PEER_TOKEN_TOWN_2" (Api.fed_peer_token_env "town-2");
-  Lwt.return ()
+  return ()
 
 (* -- F2: ops-chain sync (borg/federation.borg) --------------------------
 
@@ -184,7 +184,7 @@ let seed_path p ~actor ~path ~ternary =
   S.path_put p ~path ~value_hash:hash ~owner:actor >>= fun v ->
   S.op_append p ~op:"put" ~path ~value_hash:(Some hash) ~prev_version:None
     ~version:(Some v) ~actor
-  >>= fun _ -> Lwt.return hash
+  >>= fun _ -> return hash
 
 (* pull the window for [prefix] as [auth], returning the ops JSON list.
    Each op row carries its prev_hash, so apply re-verifies per row. *)
@@ -196,7 +196,7 @@ let pull_ops p ~auth ~prefix ~after_seq =
    | `Bool true -> ()
    | _ -> Alcotest.fail "pull window did not verify");
   match J.Util.member "ops" j with
-  | `List ops -> Lwt.return ops
+  | `List ops -> return ops
   | _ -> Alcotest.fail "pull response has no ops array"
 
 let apply_body ~src ~dst ops =
@@ -229,7 +229,7 @@ let test_f2_pull_window () =
   Alcotest.(check bool) "cited value held" true present;
   ops_with p ~op:"fed-ops" ~path:src >>= fun fs ->
   Alcotest.(check bool) "pull journaled as fed-ops" true (fs <> []);
-  Lwt.return ()
+  return ()
 
 let test_f2_apply_roundtrip () =
   setup () >>= fun p ->
@@ -269,7 +269,7 @@ let test_f2_apply_roundtrip () =
        Alcotest.(check string) "apply attributed to the peer" pe.S.i_id
          o.S.o_actor
    | _ -> Alcotest.fail "expected exactly one fed-apply op");
-  Lwt.return ()
+  return ()
 
 let test_f2_apply_shadow () =
   setup () >>= fun p ->
@@ -297,7 +297,7 @@ let test_f2_apply_shadow () =
   (match e with
    | Some e -> Alcotest.(check int64) "shadowed version 2" 2L e.S.tp_version
    | None -> Alcotest.fail "shadow destination path missing");
-  Lwt.return ()
+  return ()
 
 let test_f2_apply_rejects () =
   setup () >>= fun p ->
@@ -417,7 +417,7 @@ let test_f2_apply_rejects () =
   Alcotest.(check int) "foreign ns refused (403)" 403 code;
   ops_with p ~op:"fed-apply" ~path:"ns/someone-else/x" >>= fun d ->
   Alcotest.(check int) "denial journaled" 1 (List.length d);
-  Lwt.return ()
+  return ()
 
 let test_f2_apply_admin_any_ns () =
   setup () >>= fun p ->
@@ -431,12 +431,11 @@ let test_f2_apply_admin_any_ns () =
   Api.fed_apply_core p ~auth:a (apply_body ~src ~dst ops)
   >>= fun (code, _) ->
   Alcotest.(check int) "admin may write any ns (200)" 200 code;
-  Lwt.return ()
+  return ()
 
 let () =
-  let lwt name f = Alcotest_lwt.test_case name `Quick (fun _sw () -> f ()) in
-  Lwt_main.run
-    (Alcotest_lwt.run "fed"
+  let lwt name f = Alcotest.test_case name `Quick f in
+  Tuna_test_eio.run "fed"
        [ ( "value-exchange"
          , [ lwt "tree roundtrip rehash" test_fed_tree_roundtrip
            ; lwt "bytes roundtrip rehash" test_fed_bytes_roundtrip
@@ -450,4 +449,4 @@ let () =
            ; lwt "re-apply shadows, never merges" test_f2_apply_shadow
            ; lwt "rejects: chain/prefix/value/rehash/authz" test_f2_apply_rejects
            ; lwt "admin may write any namespace" test_f2_apply_admin_any_ns ] )
-       ])
+       ]

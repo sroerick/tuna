@@ -34,8 +34,8 @@ let routes pool =
   List.map
     (fun (method_, path, handler) ->
       (match method_ with
-       | `Get -> Dream.get path (A.require_auth pool handler)
-       | `Post -> Dream.post path (A.require_auth pool handler)))
+       | `Get -> Web.get path (A.require_auth pool handler)
+       | `Post -> Web.post path (A.require_auth pool handler)))
     [ (`Get, "/", Dashboard.view pool)
     ; (`Get, "/frag/runs", Dashboard.frag_runs pool)
     ; (`Get, "/programs/:hash", Program.view pool)
@@ -59,20 +59,20 @@ let routes pool =
     ; (`Post, "/todo/:id/del", Todo.del pool) ]
 
 let open_routes pool =
-  [ Dream.get "/login" A.login_get
-  ; Dream.post "/login" (A.login_post pool)
-  ; Dream.get "/logout" (A.logout_get pool)
+  [ Web.get "/login" A.login_get
+  ; Web.post "/login" (A.login_post pool)
+  ; Web.get "/logout" (A.logout_get pool)
   (* pp-slice T3: the hard-public face (no session).  Reserved
      surfaces match before the route dispatcher (routes.borg law 2). *)
-  ; Dream.get "/welcome" (Public.welcome pool None)
-  ; Dream.get "/code" (Public.code pool None)
-  ; Dream.get "/agent.txt" (Public.agent_txt pool)
-  ; Dream.get "/.well-known/agent.json" (Public.agent_json pool)
-  ; Dream.get "/programs/lookup"
+  ; Web.get "/welcome" (Public.welcome pool None)
+  ; Web.get "/code" (Public.code pool None)
+  ; Web.get "/agent.txt" (Public.agent_txt pool)
+  ; Web.get "/.well-known/agent.json" (Public.agent_json pool)
+  ; Web.get "/programs/lookup"
       (A.require_auth pool (fun _user req ->
            let hash =
-             match Dream.query req "hash" with
+             match Web.query req "hash" with
              | Some h -> String.trim h
              | None -> ""
            in
-           Dream.redirect req ("/programs/" ^ hash))) ]
+           Web.redirect req ("/programs/" ^ hash))) ]

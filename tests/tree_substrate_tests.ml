@@ -3,7 +3,7 @@
    rewind-as-fold.  Integration tests require Postgres (scripts/dev.sh
    start-pg); skipped silently otherwise via scripts/test-store.sh
    gating TUNA_TEST_PG=1. *)
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
@@ -20,7 +20,7 @@ let setup () =
   Db.init (Db.config_from_env ()) >>= fun p ->
   Db.apply_migrations p
     ~dir:(try Sys.getenv "TUNA_TEST_MIGRATIONS" with Not_found -> "../migrations")
-  >>= fun _ -> Lwt.return p
+  >>= fun _ -> return p
 
 
 let expect_cas_ok what = function
@@ -45,7 +45,7 @@ let seed_program p ~caller src =
   let hash = art.C.hash_hex in
   let ir_json = Yojson.Basic.to_string (Api.ir_json_of_artifact art) in
   S.upsert_program p ~hash ~ternary ~ir:(Some ir_json) ~created_by:caller
-  >>= fun _ -> Lwt.return (hash, art)
+  >>= fun _ -> return (hash, art)
 
 (* -- index basics ------------------------------------------------------ *)
 
@@ -63,7 +63,7 @@ let test_path_roundtrip () =
             Alcotest.(check string) "value hash" v1 e.S.tp_value_hash;
             Alcotest.(check int64) "version" 1L e.S.tp_version;
             Alcotest.(check string) "owner" "owner-1" e.S.tp_owner;
-            Lwt.return ())
+            return ())
   >>= fun () ->
   let v2 = Tuna.Hash.hex_of_string "0" in
   S.value_put p ~hash:v2 ~ternary:"0" >>= fun () ->
@@ -74,7 +74,7 @@ let test_path_roundtrip () =
   >>= (function
         | Some t ->
             Alcotest.(check string) "value roundtrip" "10" t;
-            Lwt.return ()
+            return ()
         | None -> Alcotest.fail "value vanished")
 
 let test_cas () =
@@ -108,13 +108,13 @@ let test_cas () =
   S.path_put_cas p ~path:"t2/b/y" ~value_hash:vh ~owner:"o"
     ~expected_version:(Some 2L) ~expected_hash:(Some (Tuna.Hash.hex_of_string "0"))
   >>= fun v -> expect_cas_conflict "stale value hash" v;
-  Lwt.return ()
+  return ()
 
 let test_prefix_list () =
   setup () >>= fun p ->
   let vh = Tuna.Hash.hex_of_string "0" in
   S.value_put p ~hash:vh ~ternary:"0" >>= fun () ->
-  let put path = S.path_put p ~path ~value_hash:vh ~owner:"o" >>= fun _ -> Lwt.return () in
+  let put path = S.path_put p ~path ~value_hash:vh ~owner:"o" >>= fun _ -> return () in
   put "t3/c/3" >>= fun () ->
   put "t3/c/1" >>= fun () ->
   put "t3/c/2" >>= fun () ->
@@ -124,7 +124,7 @@ let test_prefix_list () =
   Alcotest.(check (list string)) "prefix range, byte-wise ordered"
     [ "t3/c/1"; "t3/c/2"; "t3/c/3" ]
     (List.map (fun e -> e.S.tp_path) entries);
-  Lwt.return ()
+  return ()
 
 (* -- grant prefix at the prim boundary --------------------------------- *)
 
@@ -212,7 +212,7 @@ let test_grant_prefix_boundary () =
        Alcotest.(check (option string)) "denial row has no value" None o.S.o_value_hash;
        Alcotest.(check (option int64)) "denial row has no version" None o.S.o_version
    | n -> Alcotest.failf "expected one denial row, got %d" (List.length n));
-   Lwt.return ()
+   return ()
 
 (* -- op log: fork + chain ---------------------------------------------- *)
 
@@ -236,7 +236,7 @@ let test_ns_fork () =
             Alcotest.(check int64) "fork resets version to 1" 1L e.S.tp_version;
             Alcotest.(check string) "fork sets owner" "forker" e.S.tp_owner;
             Alcotest.(check string) "fork keeps value hash" vh e.S.tp_value_hash;
-            Lwt.return ())
+            return ())
   >>= fun () ->
   (* the source row is untouched *)
   S.path_get p ~path:"t5/src/1"
@@ -245,7 +245,7 @@ let test_ns_fork () =
         | Some e ->
             Alcotest.(check int64) "source version unchanged" 1L e.S.tp_version;
             Alcotest.(check string) "source owner unchanged" "src-owner" e.S.tp_owner;
-            Lwt.return ())
+            return ())
   >>= fun () ->
   S.path_get p ~path:"t5/dst/outside" >>= fun outside ->
   Alcotest.(check bool) "outside the prefix not copied" true (Option.is_none outside);
@@ -264,7 +264,7 @@ let test_ns_fork () =
   in
   Alcotest.(check int) "one fork marker row" 1 (List.length forks);
   Alcotest.(check int) "one put row per copy" 2 (List.length copies);
-  Lwt.return ()
+  return ()
 
 let test_ops_chain () =
   setup () >>= fun p ->
@@ -274,7 +274,7 @@ let test_ops_chain () =
     Tp.dispatch ~pool:p ~actor:"o" ~name:"tree/put"
       ~args:(Tuna_server.Prims.tree_of_list
                [ Tuna.Cstr.encode path; Tuna.Canon.parse "0" ])
-    >>= fun _ -> Lwt.return ()
+    >>= fun _ -> return ()
   in
   put "t6/ops/a" >>= fun () ->
   put "t6/ops/b" >>= fun () ->
@@ -290,7 +290,7 @@ let test_ops_chain () =
   S.ops_fold p ~from_seq:0L ()
   >>= fun ops' ->
   (match S.verify_ops_chain ops' with
-   | `Bad _ -> Lwt.return ()
+   | `Bad _ -> return ()
    | `Ok -> Alcotest.fail "tampered op log verified")
 
 (* -- rewind ------------------------------------------------------------- *)
@@ -305,7 +305,7 @@ let test_rewind () =
     Tp.dispatch ~pool:p ~actor:"o" ~name:"tree/put"
       ~args:(Tuna_server.Prims.tree_of_list
                [ Tuna.Cstr.encode path; Tuna.Canon.parse value_ternary ])
-    >>= fun _ -> Lwt.return ()
+    >>= fun _ -> return ()
   in
   put "t7/r/x" "10" >>= fun () ->
   put "t7/r/x" "0" >>= fun () ->
@@ -354,15 +354,14 @@ let test_rewind () =
        Alcotest.(check string) "x at v2 hash" v2 e.Rw.value_hash;
        Alcotest.(check int64) "x at version 2" 2L e.Rw.version
    | n -> Alcotest.failf "expected exactly x, got %d entries" (List.length n));
-  Lwt.return ()
+  return ()
 
 let () =
   match Sys.getenv_opt "TUNA_TEST_PG" with
   | None -> print_endline "tree substrate tests skipped (TUNA_TEST_PG not set)"
   | Some _ ->
-    let lwt _name f = Alcotest_lwt.test_case _name `Quick (fun _sw () -> f ()) in
-    Lwt_main.run
-      (Alcotest_lwt.run "tree_substrate"
+    let lwt _name f = Alcotest.test_case _name `Quick f in
+    Tuna_test_eio.run "tree_substrate"
          [ ( "index"
            , [ lwt "put/get roundtrip + version bump" test_path_roundtrip
              ; lwt "cas create/conflict/absent" test_cas
@@ -371,4 +370,4 @@ let () =
          ; ( "log"
            , [ lwt "ns_fork copies + fork op row" test_ns_fork
              ; lwt "chain verify + tamper detection" test_ops_chain ] )
-         ; ("rewind", [ lwt "fold equals live index + point-in-time" test_rewind ]) ])
+         ; ("rewind", [ lwt "fold equals live index + point-in-time" test_rewind ]) ]

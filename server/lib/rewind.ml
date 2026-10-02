@@ -15,7 +15,7 @@
 
 module S = Tuna_store.Store
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 type entry = { path : string; value_hash : string; version : int64 }
 
@@ -38,4 +38,4 @@ let state pool ~prefix ~at_seq =
       ops;
   let entries = Hashtbl.fold (fun _ e acc -> e :: acc) tbl [] in
   let entries = List.sort (fun a b -> compare a.path b.path) entries in
-  Lwt.return entries
+  return entries

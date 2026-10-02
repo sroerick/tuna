@@ -22,7 +22,7 @@
       minting is a host API operation only.
 *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
@@ -32,19 +32,19 @@ let setup () =
   Db.init (Db.config_from_env ()) >>= fun p ->
   Db.apply_migrations p
     ~dir:(try Sys.getenv "TUNA_TEST_MIGRATIONS" with Not_found -> "../migrations")
-  >>= fun _ -> Lwt.return p
+  >>= fun _ -> return p
 
 let who p name = S.bootstrap_identity p ~name ~token:(name ^ "-token") ()
 
 let expect_ok_grant what = function
-  | `Ok g -> Lwt.return g
+  | `Ok g -> return g
   | `Unknown -> Alcotest.fail (what ^ ": unknown grant")
   | `Revoked -> Alcotest.fail (what ^ ": revoked")
   | `Wrong_caller -> Alcotest.fail (what ^ ": wrong caller")
   | `Not_narrower r -> Alcotest.fail (what ^ ": not narrower: " ^ r)
 
 let expect_rejected what = function
-  | `Not_narrower _ -> Lwt.return ()
+  | `Not_narrower _ -> return ()
   | `Ok _ -> Alcotest.fail (what ^ ": expected rejection, minted")
   | `Unknown -> Alcotest.fail (what ^ ": unknown grant")
   | `Revoked -> Alcotest.fail (what ^ ": revoked")
@@ -56,7 +56,7 @@ let echo_program p =
   let ternary = Tuna.Canon.encode call in
   let hash = Tuna.Hash.hex_of_string ternary in
   S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None
-  >>= fun _ -> Lwt.return hash
+  >>= fun _ -> return hash
 
 let run_echo p ~caller ~grants ~input =
   echo_program p >>= fun ph ->
@@ -98,7 +98,7 @@ let test_attenuate_mints_and_bites () =
               (S.Run_status.to_string row.S.r_status);
             Alcotest.(check (option string)) "small args: echoed" (Some small)
               row.S.r_result_ternary;
-            Lwt.return ()
+            return ()
         | Error (_, msg) -> Alcotest.fail ("small args run failed: " ^ msg))
   >>= fun () ->
   run_echo p ~caller:a.S.i_id ~grants:[ child.S.g_id ]
@@ -117,7 +117,7 @@ let test_attenuate_mints_and_bites () =
                 js
             in
             Alcotest.(check bool) "big args: denial journaled" true denied;
-            Lwt.return ()
+            return ()
         | Error (_, msg) -> Alcotest.fail ("big args run failed: " ^ msg))
 
 let test_narrowing_relation () =
@@ -146,18 +146,18 @@ let test_narrowing_relation () =
   S.attenuate_grant p ~parent_id:c4.S.g_id ~prim:"echo"
     ~args_attenuation:"{\"max_ternary\": 4}" ~path_prefix:None ~caller:a.S.i_id
     ()
-  >>= expect_ok_grant "cap 4 -> 4" >>= fun _ -> Lwt.return ()
+  >>= expect_ok_grant "cap 4 -> 4" >>= fun _ -> return ()
   >>= fun () ->
   (* prim change rejected; "*" narrows to a named prim *)
   att "echo" "now" "{}" () >>= expect_rejected "echo -> now"
   >>= fun () ->
   att "*" "echo" "{}" () >>= expect_ok_grant "star -> echo" >>= fun _ ->
-  Lwt.return ()
+  return ()
   >>= fun () ->
   (* path narrowing: child under the parent prefix ok; escape rejected;
      dropping the prefix rejected; NULL parent admits any prefix *)
   att "tree/get" "tree/get" "{}" ~ppath:(Some "ns/") ~path:(Some "ns/sub/") ()
-  >>= expect_ok_grant "ns/ -> ns/sub/" >>= fun _ -> Lwt.return ()
+  >>= expect_ok_grant "ns/ -> ns/sub/" >>= fun _ -> return ()
   >>= fun () ->
   att "tree/get" "tree/get" "{}" ~ppath:(Some "ns/") ~path:(Some "other/") ()
   >>= expect_rejected "ns/ -> other/"
@@ -166,7 +166,7 @@ let test_narrowing_relation () =
   >>= expect_rejected "ns/ -> NULL"
   >>= fun () ->
   att "tree/get" "tree/get" "{}" ~ppath:None ~path:(Some "any/") ()
-  >>= expect_ok_grant "NULL -> any/" >>= fun _ -> Lwt.return ()
+  >>= expect_ok_grant "NULL -> any/" >>= fun _ -> return ()
   >>= fun () ->
   (* malformed child JSON and unknown predicate shapes refused *)
   att "echo" "echo" "not json" () >>= expect_rejected "malformed child"
@@ -184,7 +184,7 @@ let test_narrowing_relation () =
   >>= fun () ->
   Alcotest.(check bool) "weird root is un-attenuable" true
     (weird.S.g_id <> wroot.S.g_id);
-  Lwt.return ()
+  return ()
 
 let test_only_holder_attenuates () =
   setup () >>= fun p ->
@@ -196,7 +196,7 @@ let test_only_holder_attenuates () =
   S.attenuate_grant p ~parent_id:root.S.g_id ~prim:"echo" ~args_attenuation:"{}"
     ~path_prefix:None ~caller:b.S.i_id ()
   >>= (function
-        | `Wrong_caller -> Lwt.return ()
+        | `Wrong_caller -> return ()
         | _ -> Alcotest.fail "non-holder must not attenuate")
   >>= fun () ->
   (* b mints their own root and attenuates that: fine *)
@@ -205,7 +205,7 @@ let test_only_holder_attenuates () =
   >>= fun broot ->
   S.attenuate_grant p ~parent_id:broot.S.g_id ~prim:"echo" ~args_attenuation:"{}"
     ~path_prefix:None ~caller:b.S.i_id ()
-  >>= expect_ok_grant "b attenuates own root" >>= fun _ -> Lwt.return ()
+  >>= expect_ok_grant "b attenuates own root" >>= fun _ -> return ()
 
 let test_revocation_walks_lineage () =
   setup () >>= fun p ->
@@ -224,20 +224,20 @@ let test_revocation_walks_lineage () =
   S.revoke_grant p root.S.g_id >>= fun () ->
   S.check_grant p ~id:gc.S.g_id ~caller:a.S.i_id ()
   >>= (function
-        | `Revoked -> Lwt.return ()
+        | `Revoked -> return ()
         | `Ok -> Alcotest.fail "grandchild survived root revocation"
         | _ -> Alcotest.fail "expected Revoked through lineage")
   >>= fun () ->
   S.check_grant p ~id:child.S.g_id ~caller:a.S.i_id ()
   >>= (function
-        | `Revoked -> Lwt.return ()
+        | `Revoked -> return ()
         | _ -> Alcotest.fail "child survived root revocation")
   >>= fun () ->
   (* attenuation from a dead branch refused *)
   S.attenuate_grant p ~parent_id:child.S.g_id ~prim:"echo" ~args_attenuation:"{}"
     ~path_prefix:None ~caller:a.S.i_id ()
   >>= (function
-        | `Revoked -> Lwt.return ()
+        | `Revoked -> return ()
         | _ -> Alcotest.fail "attenuation from dead lineage must refuse")
   >>= fun () ->
   (* submission with a lineage-dead grant is denied up front *)
@@ -247,7 +247,7 @@ let test_revocation_walks_lineage () =
         | Error (_, msg) ->
             Alcotest.(check bool) "submission names the revoked grant" true
               (String.length msg > 0);
-            Lwt.return ()
+            return ()
         | Ok _ -> Alcotest.fail "lineage-dead grant must not run")
   >>= fun () ->
   (* revoking the CHILD only kills ITS subtree *)
@@ -266,12 +266,12 @@ let test_revocation_walks_lineage () =
   S.revoke_grant p child2.S.g_id >>= fun () ->
   S.check_grant p ~id:gc2.S.g_id ~caller:a2.S.i_id ()
   >>= (function
-        | `Revoked -> Lwt.return ()
+        | `Revoked -> return ()
         | _ -> Alcotest.fail "gc2 survived child2 revocation")
   >>= fun () ->
   S.check_grant p ~id:root2.S.g_id ~caller:a2.S.i_id ()
   >>= (function
-        | `Ok -> Lwt.return () (* the parent itself stays live *)
+        | `Ok -> return () (* the parent itself stays live *)
         | _ -> Alcotest.fail "revoking a child must not kill the parent")
 
 let test_lineage_queryable () =
@@ -306,7 +306,7 @@ let test_lineage_queryable () =
     (List.exists (fun (g : S.grant) -> g.S.g_id = gc.S.g_id) desc);
   S.grant_descendants p gc.S.g_id >>= fun none ->
   Alcotest.(check int) "gc has no descendants" 0 (List.length none);
-  Lwt.return ()
+  return ()
 
 let test_no_mint_prim () =
   (* the layering claim (grants.borg §delegation-attenuation): granting
@@ -321,12 +321,11 @@ let test_no_mint_prim () =
     forbidden;
   Alcotest.(check bool) "echo still exists (sanity)" true
     (Tuna_server.Prims.exists "echo");
-  Lwt.return ()
+  return ()
 
 let () =
-  let lwt name f = Alcotest_lwt.test_case name `Quick (fun _sw () -> f ()) in
-  Lwt_main.run
-    (Alcotest_lwt.run "delegation"
+  let lwt name f = Alcotest.test_case name `Quick f in
+  Tuna_test_eio.run "delegation"
        [ ( "delegation-attenuation"
          , [ lwt "attenuate mints a narrower grant that bites"
                test_attenuate_mints_and_bites
@@ -335,4 +334,4 @@ let () =
            ; lwt "revocation walks the lineage" test_revocation_walks_lineage
            ; lwt "lineage queryable both directions" test_lineage_queryable
            ; lwt "no prim mints (layering)" test_no_mint_prim
-           ] ) ])
+           ] ) ]

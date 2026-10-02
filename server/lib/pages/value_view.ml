@@ -8,7 +8,7 @@
    exchange, a route record) can see WHAT the hash names without the
    JSON API. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module L = Layout
@@ -34,7 +34,7 @@ let api_note hash =
     (L.esc hash) (L.esc hash)
 
 let view pool user req =
-  let hash = String.lowercase_ascii (Dream.param req "hash") in
+  let hash = String.lowercase_ascii (Web.param req "hash") in
   let title = "value " ^ L.short_hash hash in
   S.value_fetch pool hash
   >>= function

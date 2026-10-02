@@ -3,7 +3,7 @@
    the same URL renders inside a plain page, plus a manual refresh
    link. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module L = Layout
@@ -22,7 +22,7 @@ let runs_table pool =
       (L.esc (Option.value r.S.r_created_at ~default:""))
   in
   let rows = String.concat "" (List.map row rs) in
-  Lwt.return
+  return
     (Printf.sprintf
        {|<div id="runs-box" hx-get="/frag/runs" hx-trigger="every 5s" hx-swap="outerHTML">
 <table>
@@ -53,7 +53,7 @@ let view pool user _req =
 let frag_runs pool user req =
   runs_table pool
   >>= fun table ->
-  if L.is_htmx req then Dream.html table
+  if L.is_htmx req then Web.html table
   else
     L.page ~user ~title:"tuna — runs (fresh)"
       (Printf.sprintf

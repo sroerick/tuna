@@ -41,7 +41,7 @@
    (code, json) tuples so tests exercise the routing table directly;
    Api.dispatch_route adapts them to HTTP. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module J = Yojson.Basic
@@ -177,26 +177,26 @@ let record_text_of_probe = function
    path; byte-values law 2's blanket any-grant rule does not extend
    here *)
 let allowed pool ~caller_id ~caller_admin ~path =
-  if caller_admin then Lwt.return true
+  if caller_admin then return true
   else S.has_covering_grant pool caller_id path
 
 let journal_route_op pool ~actor ~op ~path ?value_hash ?prev_version ?version () =
     S.op_append pool ~op ~path ~value_hash ~prev_version ~version ~actor
-    >>= fun _ -> Lwt.return ()
+    >>= fun _ -> return ()
 
 (* -- publish / delete: store writes, law 1 ------------------------------ *)
 
 let publish pool ~caller_id ~caller_admin ~site_path ~(record : J.t)
-    ~expected_version : (int * J.t) Lwt.t =
+    ~expected_version : (int * J.t) =
   let deny op_path code msg =
     journal_route_op pool ~actor:caller_id ~op:"put" ~path:op_path ()
-    >>= fun () -> Lwt.return (code, `Assoc [ ("error", `String msg) ])
+    >>= fun () -> return (code, `Assoc [ ("error", `String msg) ])
   in
   match Tree_prims.check_path "path" site_path with
-  | Error e -> Lwt.return (400, `Assoc [ ("error", `String e) ])
+  | Error e -> return (400, `Assoc [ ("error", `String e) ])
   | Ok site_path -> (
       match parse_record record with
-      | Error e -> Lwt.return (400, `Assoc [ ("error", `String e) ])
+      | Error e -> return (400, `Assoc [ ("error", `String e) ])
       | Ok _parsed -> (
           let key = route_key site_path in
           if reserved_site_path site_path then
@@ -228,7 +228,7 @@ let publish pool ~caller_id ~caller_admin ~site_path ~(record : J.t)
                       ~value_hash:hash
                       ?prev_version:(if newv = 1L then None else Some (Int64.pred newv))
                       ~version:newv ()
-                    >>= fun () -> Lwt.return (201, ok_json newv)
+                    >>= fun () -> return (201, ok_json newv)
                 | Some n -> (
                     S.path_put_cas pool ~path:key ~value_hash:hash
                       ~owner:caller_id
@@ -239,11 +239,11 @@ let publish pool ~caller_id ~caller_admin ~site_path ~(record : J.t)
                         journal_route_op pool ~actor:caller_id ~op:"cas" ~path:key
                           ~value_hash:hash ~prev_version:(Int64.of_int n)
                           ~version:newv ()
-                        >>= fun () -> Lwt.return (201, ok_json newv)
+                        >>= fun () -> return (201, ok_json newv)
                     | `Conflict ->
                         journal_route_op pool ~actor:caller_id ~op:"cas" ~path:key ()
                         >>= fun () ->
-                        Lwt.return
+                        return
                           ( 409
                           , `Assoc
                               [ ("error", `String "route put conflict: version mismatch")
@@ -251,7 +251,7 @@ let publish pool ~caller_id ~caller_admin ~site_path ~(record : J.t)
                     | `Absent ->
                         journal_route_op pool ~actor:caller_id ~op:"cas" ~path:key ()
                         >>= fun () ->
-                        Lwt.return
+                        return
                           ( 404
                           , `Assoc
                               [ ( "error"
@@ -259,9 +259,9 @@ let publish pool ~caller_id ~caller_admin ~site_path ~(record : J.t)
                                 ) ])))))
 
 let delete pool ~caller_id ~caller_admin ~site_path ~expected_version :
-    (int * J.t) Lwt.t =
+    (int * J.t) =
   match Tree_prims.check_path "path" site_path with
-  | Error e -> Lwt.return (400, `Assoc [ ("error", `String e) ])
+  | Error e -> return (400, `Assoc [ ("error", `String e) ])
   | Ok site_path -> (
       let key = route_key site_path in
       allowed pool ~caller_id ~caller_admin ~path:key
@@ -269,7 +269,7 @@ let delete pool ~caller_id ~caller_admin ~site_path ~expected_version :
       | false ->
           journal_route_op pool ~actor:caller_id ~op:"delete" ~path:key ()
           >>= fun () ->
-          Lwt.return
+          return
             ( 403
             , `Assoc
                 [ ( "error"
@@ -284,7 +284,7 @@ let delete pool ~caller_id ~caller_admin ~site_path ~expected_version :
               journal_route_op pool ~actor:caller_id ~op:"delete" ~path:key
                 ~prev_version:v ()
               >>= fun () ->
-              Lwt.return
+              return
                 ( 200
                 , `Assoc
                     [ ("ok", `Bool true)
@@ -293,7 +293,7 @@ let delete pool ~caller_id ~caller_admin ~site_path ~expected_version :
           | `Absent ->
               journal_route_op pool ~actor:caller_id ~op:"delete" ~path:key ()
               >>= fun () ->
-              Lwt.return
+              return
                 ( 404
                 , `Assoc
                     [ ( "error"
@@ -302,7 +302,7 @@ let delete pool ~caller_id ~caller_admin ~site_path ~expected_version :
           | `Conflict ->
               journal_route_op pool ~actor:caller_id ~op:"delete" ~path:key ()
               >>= fun () ->
-              Lwt.return
+              return
                 ( 409
                 , `Assoc
                     [ ( "error"
@@ -310,9 +310,9 @@ let delete pool ~caller_id ~caller_admin ~site_path ~expected_version :
 
 (* -- get / list: the routing table is data ------------------------------ *)
 
-let get pool ~actor ~site_path : (int * J.t) Lwt.t =
+let get pool ~actor ~site_path : (int * J.t) =
   match Tree_prims.check_path "path" site_path with
-  | Error e -> Lwt.return (400, `Assoc [ ("error", `String e) ])
+  | Error e -> return (400, `Assoc [ ("error", `String e) ])
   | Ok site_path -> (
       let key = route_key site_path in
       S.path_get pool ~path:key
@@ -320,7 +320,7 @@ let get pool ~actor ~site_path : (int * J.t) Lwt.t =
       | None ->
           journal_route_op pool ~actor ~op:"get" ~path:key ()
           >>= fun () ->
-          Lwt.return
+          return
             ( 404
             , `Assoc
                 [ ( "error"
@@ -329,7 +329,7 @@ let get pool ~actor ~site_path : (int * J.t) Lwt.t =
           S.probe_value pool entry.S.tp_value_hash
           >>= function
           | None ->
-              Lwt.return
+              return
                 ( 500
                 , `Assoc
                     [ ( "error"
@@ -338,11 +338,11 @@ let get pool ~actor ~site_path : (int * J.t) Lwt.t =
                          ^ entry.S.tp_value_hash) ) ] )
           | Some probe -> (
               match record_text_of_probe probe with
-              | Error m -> Lwt.return (500, `Assoc [ ("error", `String m) ])
+              | Error m -> return (500, `Assoc [ ("error", `String m) ])
               | Ok txt -> (
                   match J.from_string txt with
                   | exception _ ->
-                      Lwt.return
+                      return
                         ( 500
                         , `Assoc
                             [ ( "error"
@@ -351,7 +351,7 @@ let get pool ~actor ~site_path : (int * J.t) Lwt.t =
                   | record ->
                       journal_route_op pool ~actor ~op:"get" ~path:key ()
                       >>= fun () ->
-                      Lwt.return
+                      return
                         ( 200
                         , `Assoc
                             [ ("path", `String site_path)
@@ -360,9 +360,9 @@ let get pool ~actor ~site_path : (int * J.t) Lwt.t =
                               , `Int (Int64.to_int entry.S.tp_version) )
                             ; ("value_hash", `String entry.S.tp_value_hash) ] )))))
 
-let list pool ~actor ~prefix : (int * J.t) Lwt.t =
+let list pool ~actor ~prefix : (int * J.t) =
   match Tree_prims.validate_prefix "prefix" prefix with
-  | Some e -> Lwt.return (400, `Assoc [ ("error", `String e) ])
+  | Some e -> return (400, `Assoc [ ("error", `String e) ])
   | None -> (
       let full = route_key prefix in
       S.path_list pool ~prefix:full ()
@@ -371,21 +371,21 @@ let list pool ~actor ~prefix : (int * J.t) Lwt.t =
       >>= fun () ->
       let site_path_of p = String.sub p 6 (String.length p - 6) in
       let rec build acc = function
-        | [] -> Lwt.return (Ok (List.rev acc))
+        | [] -> return (Ok (List.rev acc))
         | (e : S.path_entry) :: rest -> (
             S.probe_value pool e.S.tp_value_hash
             >>= function
             | None ->
-                Lwt.return
+                return
                   (Error
                      (Printf.sprintf "stored route record missing for %s" e.S.tp_path))
             | Some probe -> (
                 match record_text_of_probe probe with
-                | Error m -> Lwt.return (Error m)
+                | Error m -> return (Error m)
                 | Ok txt -> (
                     match J.from_string txt with
                     | exception _ ->
-                        Lwt.return
+                        return
                           (Error
                              (Printf.sprintf "route record is not valid JSON: %s"
                                 e.S.tp_path))
@@ -401,9 +401,9 @@ let list pool ~actor ~prefix : (int * J.t) Lwt.t =
       in
       build [] entries
       >>= (function
-            | Error m -> Lwt.return (500, `Assoc [ ("error", `String m) ])
+            | Error m -> return (500, `Assoc [ ("error", `String m) ])
             | Ok entries ->
-                Lwt.return
+                return
                   (200, `Assoc [ ("entries", `List entries) ])))
 
 (* -- dispatch (law 2: after every reserved matcher) --------------------- *)
@@ -421,12 +421,12 @@ let context_json ~meth ~site_path ~query ~body ~actor =
 
 let serve_template pool ~record ~site_path =
   match record.r_template with
-  | None -> Lwt.return plain_404
+  | None -> return plain_404
   | Some hash -> (
       S.probe_value pool hash
       >>= function
       | None ->
-          Lwt.return
+          return
             (err_json 500
                (Printf.sprintf "route %s: template missing for hash %s" site_path
                   hash))
@@ -434,7 +434,7 @@ let serve_template pool ~record ~site_path =
           let body =
             match probe with S.Bytes b -> b | S.Tree ternary -> ternary
           in
-          Lwt.return
+          return
             (respond ~code:200 ~content_type:record.r_content_type body
                ~headers:[ ("X-Tuna-Route", site_path) ]))
 
@@ -443,11 +443,11 @@ let serve_program pool ~service ~record ~site_path ~meth ~query ~body ~actor =
   let run_caller = match actor with Some a -> a | None -> service in
   let grants =
     match record.r_grant_prefix with
-    | None -> Lwt.return []
+    | None -> return []
     | Some pfx ->
         S.mint_grant pool ~prim:"*" ~args_attenuation:"null"
           ~path_prefix:(Some pfx) ~caller:run_caller ~minted_by:(Some service) ()
-        >>= fun g -> Lwt.return [ g.S.g_id ]
+        >>= fun g -> return [ g.S.g_id ]
   in
   let ctx =
     Tuna.Cstr.encode
@@ -460,7 +460,7 @@ let serve_program pool ~service ~record ~site_path ~meth ~query ~body ~actor =
     | S.Run_status.Normal, Some ternary -> (
         match Tuna.Canon.of_string ternary with
         | Error (off, msg) ->
-            Lwt.return
+            return
               (err_json ~run_id:row.S.r_id 500
                  (Printf.sprintf "run %s result unparseable at %d: %s"
                     row.S.r_id off msg))
@@ -471,7 +471,7 @@ let serve_program pool ~service ~record ~site_path ~meth ~query ~body ~actor =
                 S.probe_value pool h
                   >>= (function
                 | None ->
-                    Lwt.return
+                    return
                       (err_json ~run_id:row.S.r_id 500
                          (Printf.sprintf "run %s ended in unknown value %s"
                             row.S.r_id h))
@@ -479,20 +479,20 @@ let serve_program pool ~service ~record ~site_path ~meth ~query ~body ~actor =
                     let body =
                       match probe with S.Bytes b -> b | S.Tree t2 -> t2
                     in
-                    Lwt.return
+                    return
                       (respond ~code:200 ~content_type:record.r_content_type
                          body
                          ~headers:
                            [ ("X-Tuna-Route", site_path)
                            ; ("X-Tuna-Run", row.S.r_id) ]))
             | _ ->
-                Lwt.return
+                return
                   (err_json ~run_id:row.S.r_id 500
                      (Printf.sprintf
                         "run %s did not end in a value hash (law 4)"
                         row.S.r_id))))
     | _ ->
-        Lwt.return
+        return
           (err_json ~run_id:row.S.r_id 500
              (Printf.sprintf "run %s did not end in a value hash (law 4)"
                 row.S.r_id))
@@ -505,36 +505,36 @@ let serve_program pool ~service ~record ~site_path ~meth ~query ~body ~actor =
         | Error (_, msg) ->
             (* no run row exists yet (unknown program hash, grant
                validation); debuggability beats silence *)
-            Lwt.return
+            return
               (err_json 500
                  (Printf.sprintf "route %s: program %s did not run: %s"
                     site_path program_hash msg))
         | Ok (row, _js) -> finish row)
 
-let dispatch pool ~service ~meth ~site_path ~query ~body ~actor : response Lwt.t
+let dispatch pool ~service ~meth ~site_path ~query ~body ~actor : response
     =
   let meth = String.uppercase_ascii meth in
-  if reserved_site_path site_path then Lwt.return plain_404
+  if reserved_site_path site_path then return plain_404
   else
     S.path_get pool ~path:(route_key site_path)
     >>= function
-    | None -> Lwt.return plain_404
+    | None -> return plain_404
     | Some entry -> (
         S.probe_value pool entry.S.tp_value_hash
         >>= function
-        | None -> Lwt.return plain_404
+        | None -> return plain_404
         | Some probe -> (
             match record_text_of_probe probe with
-            | Error _ -> Lwt.return plain_404
+            | Error _ -> return plain_404
             | Ok txt -> (
                 match J.from_string txt with
-                | exception _ -> Lwt.return plain_404
+                | exception _ -> return plain_404
                 | j -> (
                     match parse_record j with
-                    | Error _ -> Lwt.return plain_404
+                    | Error _ -> return plain_404
                     | Ok record ->
                         if record.r_method <> "ANY" && record.r_method <> meth
-                        then Lwt.return plain_404
+                        then return plain_404
                         else
                           match record.r_program with
                           | Some _ ->

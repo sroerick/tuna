@@ -17,7 +17,7 @@
    Handlers here only compute; the boundary (Run.execute) does grant
    checks, timing, journaling, and payload caps around them. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 type answer = [ `Ok of Tuna.Tree.t | `Error of string ]
 
@@ -139,130 +139,122 @@ let parse_url (u : string) : (string * int * string) option =
           | None -> None)
       | None -> Some (hostport, 80, path)
 
-(* Minimal HTTP/1.0 GET over Lwt_unix.  http only (v0); DNS resolution
-   is a synchronous stdlib call — v0 accepts the cooperative-scheduler
-   stall for allowlisted dev hosts. *)
-let http_get ~allowlist url : answer Lwt.t =
+(* Minimal HTTP/1.0 GET over Eio.Net.  http only (v0); DNS resolution
+   is a synchronous stdlib call — v0 accepts the fiber stall for
+   allowlisted dev hosts.  The ambient eio ctx (installed by the server
+   mainloop) supplies the switch + net. *)
+let http_get ~allowlist url : answer =
   match parse_url url with
-  | None -> Lwt.return (`Error "http/get: only http:// URLs are supported in v0")
+  | None -> `Error "http/get: only http:// URLs are supported in v0"
   | Some (host, port, path) -> (
       if not (List.exists (fun h -> String.equal h host) allowlist) then
-        Lwt.return (`Error "http/get: host not in allowlist")
+        `Error "http/get: host not in allowlist"
       else
         let addr =
           (try Some (Unix.gethostbyname host).Unix.h_addr_list.(0)
            with Not_found -> None)
         in
         match addr with
-        | None -> Lwt.return (`Error ("http/get: cannot resolve host " ^ host))
+        | None -> `Error ("http/get: cannot resolve host " ^ host)
         | Some inet ->
-            let fd = Lwt_unix.socket Lwt_unix.PF_INET Lwt_unix.SOCK_STREAM 0 in
-            Lwt.finalize
+            let ctx = Tuna_store.Pgx_eio.Ctx.get () in
+            let sockaddr = `Tcp (Eio_unix.Net.Ipaddr.of_unix inet, port) in
+            let flow =
+              (Eio.Net.connect ~sw:ctx.Tuna_store.Pgx_eio.Ctx.sw
+                 ctx.Tuna_store.Pgx_eio.Ctx.net sockaddr
+                :> [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Resource.t)
+            in
+            Fun.protect
+              ~finally:(fun () -> Eio.Flow.close flow)
               (fun () ->
-                Lwt.catch
-                  (fun () ->
-                    Lwt_unix.connect fd (Unix.ADDR_INET (inet, port))
-                    >>= fun () ->
-                    let req =
-                      Printf.sprintf
-                        "GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\nUser-Agent: tuna-prim/1\r\n\r\n"
-                        path host
-                    in
-                    Lwt_unix.write fd (Bytes.of_string req) 0 (String.length req)
-                    >>= fun _ ->
-                    let buf = Buffer.create 4096 in
-                    let tmp = Bytes.create 4096 in
-                    let rec drain () =
-                      Lwt_unix.read fd tmp 0 4096 >>= fun n ->
-                      if n = 0 then Lwt.return ()
-                      else (
-                        Buffer.add_subbytes buf tmp 0 n;
-                        drain ())
-                    in
-                    drain ()
-                    >>= fun () ->
-                    let raw = Buffer.contents buf in
-                    let body =
-                      let sep = "\r\n\r\n" in
-                      let slen = String.length sep in
-                      let rec find i =
-                        if i + slen > String.length raw then None
-                        else if String.sub raw i slen = sep then Some i
-                        else find (i + 1)
-                      in
-                      match find 0 with
-                      | Some i ->
-                          String.sub raw (i + slen) (String.length raw - i - slen)
-                      | None -> raw
-                    in
-                    if String.length body > payload_cap then
-                      Lwt.return
-                        (`Error "http/get: body exceeds the journal payload cap")
-                    else Lwt.return (`Ok (str body)))
-                  (fun e -> Lwt.return (`Error ("http/get: " ^ Printexc.to_string e))))
-              (fun () -> Lwt_unix.close fd))
+                let req =
+                  Printf.sprintf
+                    "GET %s HTTP/1.0\r\nHost: %s\r\nConnection: close\r\nUser-Agent: tuna-prim/1\r\n\r\n"
+                    path host
+                in
+                Eio.Flow.copy_string req flow;
+                let raw =
+                  Eio.Buf_read.parse_exn ~max_size:(payload_cap + 65536)
+                    Eio.Buf_read.take_all flow
+                in
+                let body =
+                  let sep = "\r\n\r\n" in
+                  let slen = String.length sep in
+                  let rec find i =
+                    if i + slen > String.length raw then None
+                    else if String.sub raw i slen = sep then Some i
+                    else find (i + 1)
+                  in
+                  match find 0 with
+                  | Some i ->
+                      String.sub raw (i + slen) (String.length raw - i - slen)
+                  | None -> raw
+                in
+                if String.length body > payload_cap then
+                  `Error "http/get: body exceeds the journal payload cap"
+                else `Ok (str body)))
 
 (* -- kv accessors (wired to the store by the boundary) ---------------- *)
 
 type kv = {
-  kv_get : Tuna.Tree.t -> Tuna.Tree.t option Lwt.t
+  kv_get : Tuna.Tree.t -> Tuna.Tree.t option
     (* None = no value for key *)
-; kv_put : key:Tuna.Tree.t -> value:Tuna.Tree.t -> unit Lwt.t
+; kv_put : key:Tuna.Tree.t -> value:Tuna.Tree.t -> unit
 }
 
 (* Dispatch one prim call.  [name] must come from the gate shape
    (Cprim.shape); an unregistered name is an error ANSWER, journaled
    like any denial — never an exception. *)
-let dispatch ~name ~args ~kv ~allowlist : answer Lwt.t =
+let dispatch ~name ~args ~kv ~allowlist : answer =
   match name with
-  | "echo" -> Lwt.return (`Ok args)
-  | "now" -> Lwt.return (`Ok (str (Printf.sprintf "%.6f" (Unix.gettimeofday ()))))
-  | "uuid" -> Lwt.return (`Ok (str (uuid ())))
+  | "echo" -> return (`Ok args)
+  | "now" -> return (`Ok (str (Printf.sprintf "%.6f" (Unix.gettimeofday ()))))
+  | "uuid" -> return (`Ok (str (uuid ())))
   | "store/get" -> (
       match list_of_tree args with
       | key :: _ -> (
           kv.kv_get key
           >>= function
-          | Some value -> Lwt.return (`Ok value)
+          | Some value -> return (`Ok value)
           | None ->
-              Lwt.return
+              return
                 (`Error
                    ("store/get: no value for key "
                     ^ Tuna.Hash.hex_of_tree key)))
-      | [] -> Lwt.return (`Error "store/get: missing key argument"))
+      | [] -> return (`Error "store/get: missing key argument"))
   | "store/put" -> (
       match list_of_tree args with
       | [ key; value ] -> (
           if String.length (Tuna.Canon.encode value) > payload_cap then
-            Lwt.return (`Error "store/put: value exceeds the journal payload cap")
+            return (`Error "store/put: value exceeds the journal payload cap")
           else
-            kv.kv_put ~key ~value >>= fun () -> Lwt.return (`Ok Tuna.Tree.Leaf))
-      | _ -> Lwt.return (`Error "store/put: args must be [key value]"))
+            kv.kv_put ~key ~value >>= fun () -> return (`Ok Tuna.Tree.Leaf))
+      | _ -> return (`Error "store/put: args must be [key value]"))
   | "http/get" -> (
       match list_of_tree args with
       | url :: _ -> (
           match unstr url with
           | Some u -> http_get ~allowlist u
-          | None -> Lwt.return (`Error "http/get: url must be a string tree"))
-      | [] -> Lwt.return (`Error "http/get: missing url argument"))
+          | None -> return (`Error "http/get: url must be a string tree"))
+      | [] -> return (`Error "http/get: missing url argument"))
   | "math/add" -> (
       match list_of_tree args with
-      | [ a; b ] -> Lwt.return (`Ok (Math_prims.add a b))
-      | _ -> Lwt.return (`Error "math/add: args must be [a b]"))
+      | [ a; b ] -> return (`Ok (Math_prims.add a b))
+      | _ -> return (`Error "math/add: args must be [a b]"))
   | "math/sub" -> (
       match list_of_tree args with
-      | [ a; b ] -> Lwt.return (`Ok (Math_prims.sub a b))
-      | _ -> Lwt.return (`Error "math/sub: args must be [a b]"))
+      | [ a; b ] -> return (`Ok (Math_prims.sub a b))
+      | _ -> return (`Error "math/sub: args must be [a b]"))
   | "math/mul" -> (
       match list_of_tree args with
-      | [ a; b ] -> Lwt.return (`Ok (Math_prims.mul a b))
-      | _ -> Lwt.return (`Error "math/mul: args must be [a b]"))
+      | [ a; b ] -> return (`Ok (Math_prims.mul a b))
+      | _ -> return (`Error "math/mul: args must be [a b]"))
   | "math/cmp" -> (
       match list_of_tree args with
-      | [ a; b ] -> Lwt.return (`Ok (Math_prims.cmp a b))
-      | _ -> Lwt.return (`Error "math/cmp: args must be [a b]"))
+      | [ a; b ] -> return (`Ok (Math_prims.cmp a b))
+      | _ -> return (`Error "math/cmp: args must be [a b]"))
   | "math/neg" -> (
       match list_of_tree args with
-      | [ a ] -> Lwt.return (`Ok (Math_prims.neg a))
-      | _ -> Lwt.return (`Error "math/neg: args must be [a]"))
-  | other -> Lwt.return (`Error ("unknown prim: " ^ other))
+      | [ a ] -> return (`Ok (Math_prims.neg a))
+      | _ -> return (`Error "math/neg: args must be [a]"))
+  | other -> return (`Error ("unknown prim: " ^ other))

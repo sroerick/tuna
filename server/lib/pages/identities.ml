@@ -7,7 +7,7 @@
    lands in the DB); the operator copies it to the agent or, when an
    initial password is given, the human signs in at /login. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 module L = Layout
@@ -62,7 +62,7 @@ let mint pool user req =
   if not user.S.i_is_admin then
     L.err_page ~code:403 ~user "only an admin identity may mint identities"
   else
-    Dream.form ~csrf:false req
+    Web.form ~csrf:false req
     >>= function
     | `Ok fields -> (
         match List.assoc_opt "name" fields with
@@ -90,11 +90,11 @@ let mint pool user req =
                             ~default:""
                           |> String.trim
                         in
-                        (if pw = "" then Lwt.return ()
+                        (if pw = "" then return ()
                          else S.set_password pool ~identity_id:i.S.i_id ~password:pw)
                         >>= fun () ->
                         if L.is_htmx req then
-                          Dream.html
+                          Web.html
                             (Printf.sprintf
                                {|<span class="okmsg">minted <code>%s</code>. bearer token (shown once): <code>%s</code></span>|}
                                (L.esc i.S.i_name) (L.esc token))

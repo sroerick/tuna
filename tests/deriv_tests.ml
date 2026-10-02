@@ -5,7 +5,7 @@
    other store suites (own scratch db tuna_test_deriv): drive a real
    run through the boundary, build the record server-side, verify it
    OFFLINE through Tuna_deriv alone, then attack it. *)
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
@@ -225,14 +225,14 @@ let setup () =
   Db.init (Db.config_from_env ()) >>= fun p ->
   Db.apply_migrations p
     ~dir:(try Sys.getenv "TUNA_TEST_MIGRATIONS" with Not_found -> "../migrations")
-  >>= fun _ -> Lwt.return p
+  >>= fun _ -> return p
 
 let seed_program p ~caller src =
   let art = C.compile_source src in
   let ir_json = Yojson.Basic.to_string (Api.ir_json_of_artifact art) in
   S.upsert_program p ~hash:art.C.hash_hex ~ternary:art.C.ternary
     ~ir:(Some ir_json) ~created_by:caller
-  >>= fun _ -> Lwt.return art
+  >>= fun _ -> return art
 
 let test_e2e_record_verifies_offline () =
   setup () >>= fun p ->
@@ -272,7 +272,7 @@ let test_e2e_record_verifies_offline () =
    | Ok d2 ->
        Alcotest.(check bool) "edited store record fails offline" true
          (match D.verify d2 with D.Failed _ -> true | D.Verified -> false));
-  Lwt.return_unit
+  return_unit
 
 let test_refusals () =
   setup () >>= fun p ->
@@ -289,10 +289,10 @@ let test_refusals () =
   >>= fun run_id ->
   Drv.of_run p ~run_id >>= fun (code2, _body2) ->
   Alcotest.(check int) "running run 409" 409 code2;
-  Lwt.return ()
+  return ()
 
 let () =
-  let lwt name f = Alcotest_lwt.test_case name `Quick (fun _sw () -> f ()) in
+  let lwt name f = Alcotest.test_case name `Quick f in
   let pg_gated =
     match Sys.getenv_opt "TUNA_TEST_PG" with
     | None -> []
@@ -300,13 +300,12 @@ let () =
         [ lwt "e2e record verifies offline" test_e2e_record_verifies_offline
         ; lwt "refusals" test_refusals ]
   in
-  Lwt_main.run
-    (Alcotest_lwt.run "deriv"
+  Tuna_test_eio.run "deriv"
        [ ( "pure"
          , [ lwt "golden canon + roundtrip" (fun () ->
-                 test_golden_canon (); Lwt.return ())
+                 test_golden_canon (); return ())
            ; lwt "tampering rejected" (fun () ->
-                 test_rejects_tampering (); Lwt.return ())
+                 test_rejects_tampering (); return ())
            ; lwt "reseal is its own record" (fun () ->
-                 test_reseal_is_own_record (); Lwt.return ()) ] )
-       ; ("pg", pg_gated) ])
+                 test_reseal_is_own_record (); return ()) ] )
+       ; ("pg", pg_gated) ]

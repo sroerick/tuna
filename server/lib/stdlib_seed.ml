@@ -24,7 +24,7 @@
    pins its own `not` shadows std locally; undef restores it.  The
    compiler is untouched. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 module S = Tuna_store.Store
 
 let identity_name = Stdlib_embed.identity_name
@@ -33,15 +33,15 @@ let token_env = "TUNA_STDLIB_TOKEN"
 (* The std rows that sit UNDER a caller's own dictionary.  Empty when
    the caller IS sabralib (its own rows are the std rows) or sabralib
    has not been booted yet (pre-seed boot ordering). *)
-let dict_rows_under pool ~caller : S.dict_entry list Lwt.t =
+let dict_rows_under pool ~caller : S.dict_entry list =
   S.fetch_identity_by_name pool identity_name >>= function
-  | None -> Lwt.return []
-  | Some i when i.S.i_id = caller -> Lwt.return []
+  | None -> return []
+  | Some i when i.S.i_id = caller -> return []
   | Some i -> S.dict_list pool ~identity_id:i.S.i_id
 
 let ensure_identity pool =
   S.fetch_identity_by_name pool identity_name >>= function
-  | Some i -> Lwt.return i
+  | Some i -> return i
   | None ->
       let token, generated =
         match Sys.getenv_opt token_env with
@@ -54,27 +54,27 @@ let ensure_identity pool =
       if generated then (
         print_string (token_env ^ "=" ^ token ^ "\n");
         flush stdout);
-      Dream.log "boot: created sabralib identity %s" i.S.i_id;
-      Lwt.return i
+      Web.log "boot: created sabralib identity %s" i.S.i_id;
+      return i
 
 let seed pool ~execute () =
   ensure_identity pool >>= fun i ->
   S.dict_list pool ~identity_id:i.S.i_id >>= fun existing ->
   let have = List.map (fun d -> d.S.d_name) existing in
-  Lwt_list.iter_s
+  List.iter
     (fun (name, src) ->
-      if List.mem name have then Lwt.return ()
+      if List.mem name have then return ()
       else
         execute ~caller:i.S.i_id ~command:("def " ^ name ^ " " ^ src)
         >>= function
-        | Ok () -> Lwt.return ()
+        | Ok () -> return ()
         | Error msg ->
-            Lwt.fail (Failure (Printf.sprintf "stdlib seed: def %s: %s" name msg)))
+            fail (Failure (Printf.sprintf "stdlib seed: def %s: %s" name msg)))
     Stdlib_embed.defs
   >>= fun () ->
-  Dream.log "boot: sabralib seeded (%d defs, %d pre-existing)"
+  Web.log "boot: sabralib seeded (%d defs, %d pre-existing)"
     (List.length Stdlib_embed.defs) (List.length have);
-  Lwt.return ()
+  return ()
 
 (* Explicit reseed (admin escape hatch; PP's reseed-package carried
    over): touches ONLY the sabralib dictionary.  Undefs names that
@@ -85,19 +85,19 @@ let reseed pool ~execute () =
   ensure_identity pool >>= fun i ->
   S.dict_list pool ~identity_id:i.S.i_id >>= fun existing ->
   let current = List.map fst Stdlib_embed.defs in
-  Lwt_list.iter_s
+  List.iter
     (fun d ->
-      if List.mem d.S.d_name current then Lwt.return ()
+      if List.mem d.S.d_name current then return ()
       else S.dict_del pool ~identity_id:i.S.i_id ~name:d.S.d_name)
     existing
   >>= fun () ->
-  Lwt_list.iter_s
+  List.iter
     (fun (name, src) ->
       execute ~caller:i.S.i_id ~command:("def " ^ name ^ " " ^ src)
       >>= function
-      | Ok () -> Lwt.return ()
+      | Ok () -> return ()
       | Error msg ->
-          Lwt.fail
+          fail
             (Failure (Printf.sprintf "stdlib reseed: def %s: %s" name msg)))
     Stdlib_embed.defs
 

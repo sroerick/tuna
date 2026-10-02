@@ -11,7 +11,7 @@
    acceptance chapters are about store behavior, not HTTP plumbing;
    Api.dispatch_route adapts the same records to Dream. *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
@@ -31,7 +31,7 @@ let setup () =
   Db.init (Db.config_from_env ()) >>= fun p ->
   Db.apply_migrations p
     ~dir:(try Sys.getenv "TUNA_TEST_MIGRATIONS" with Not_found -> "../migrations")
-  >>= fun _ -> Lwt.return p
+  >>= fun _ -> return p
 
 (* identities: the bootstrap admin (default is_admin=true) and non-admin
    peers for grant-holder / capability-denial paths *)
@@ -60,7 +60,7 @@ let seed_program p ~caller src =
   let ir_json = Yojson.Basic.to_string (Api.ir_json_of_artifact art) in
   S.upsert_program p ~hash:art.C.hash_hex ~ternary:art.C.ternary
     ~ir:(Some ir_json) ~created_by:caller
-  >>= fun _ -> Lwt.return art
+  >>= fun _ -> return art
 
 (* independent sha256: the ADDRESS LAW criterion compares the store's
    hash against digestif called directly in the test *)
@@ -78,7 +78,7 @@ let header hdrs name = List.assoc_opt name hdrs
 let ops_with p ~op ~path =
   S.ops_fold p ~prefix:"" ~from_seq:0L ()
   >>= fun ops ->
-  Lwt.return
+  return
     (List.filter
        (fun (o : S.tree_op) -> o.S.o_op = op && o.S.o_path = path)
        ops)
@@ -111,7 +111,7 @@ let test_byte_roundtrip () =
   admin p >>= fun me ->
   let a = auth_of me in
   let rec iter_corpus = function
-    | [] -> Lwt.return ()
+    | [] -> return ()
     | (label, bytes) :: rest ->
       let b64 = Base64.encode_string bytes in
       (* the API surface *)
@@ -138,7 +138,7 @@ let test_byte_roundtrip () =
                     Alcotest.(check string) (label ^ ": prim len")
                       (Int64.to_string (Int64.of_int (String.length bytes)))
                       (Option.value (P.unstr len) ~default:"?");
-                    Lwt.return ()
+                    return ()
                 | _ ->
                     Alcotest.fail
                       (label ^ ": prim put result must be [hash kind len]"))
@@ -166,7 +166,7 @@ let test_byte_roundtrip () =
                    Alcotest.(check bool)
                      (label ^ ": over-cap prim get answers the cap error") true
                      (contains e "payload cap");
-                   Lwt.return ()
+                   return ()
                | `Ok _ ->
                    Alcotest.fail
                      (label ^ ": over-cap prim get must be an error answer"))
@@ -181,7 +181,7 @@ let test_byte_roundtrip () =
                        Alcotest.(check string)
                          (label ^ ": prim round-trip byte-identical") bytes
                          (Base64.decode_exn payload);
-                       Lwt.return ()
+                       return ()
                    | _ ->
                        Alcotest.fail
                          (label
@@ -210,7 +210,7 @@ let test_byte_roundtrip () =
   >>= fun (bcode, _, bbody, _) ->
   Alcotest.(check int) "byte kind still present" 200 bcode;
   Alcotest.(check string) "byte kind unchanged" tbytes bbody;
-  Lwt.return ()
+  return ()
 
 let test_byte_dedup_and_bloat () =
   setup () >>= fun p ->
@@ -229,7 +229,7 @@ let test_byte_dedup_and_bloat () =
         | [ r ] ->
             Alcotest.(check string) "storage does not grow (one row)" "1"
               (S.text r 0 "count");
-            Lwt.return ()
+            return ()
         | _ -> Alcotest.fail "count query shape")
   >>= fun () ->
    (* BLOAT INVERSION (byte-values.borg acceptance 3): the byte form is
@@ -266,7 +266,7 @@ let test_byte_dedup_and_bloat () =
      (String.length bytes < tree_len);
    Printf.printf "bloat ratio (tree-encoding bytes / raw bytes), 100 KiB page: %.1fx\n"
      (float_of_int tree_len /. float_of_int (String.length bytes));
-   Lwt.return ()
+   return ()
 
 (* -- journal completeness: cap denial + absent read are journaled ------ *)
 
@@ -288,7 +288,7 @@ let test_value_denials_journaled () =
         o.S.o_value_hash;
       Alcotest.(check (option int64)) "cap denial row has no version" None
         o.S.o_version;
-      Lwt.return ()
+      return ()
   | n -> Alcotest.failf "expected one value-put denial row, got %d" (List.length n))
   >>= fun () ->
   (* absent read journaled (acceptance 4: every value op journals) *)
@@ -301,7 +301,7 @@ let test_value_denials_journaled () =
   | [ o ] ->
       Alcotest.(check (option string)) "absent read row has no value" None
         o.S.o_value_hash;
-      Lwt.return ()
+      return ()
   | n -> Alcotest.failf "expected one value-get denial row, got %d" (List.length n)
 
 (* -- routes: template dispatch, reserved shadow, program runs ---------- *)
@@ -348,7 +348,7 @@ let test_template_route () =
     ~body:"" ~actor:None
   >>= fun r404 ->
   Alcotest.(check int) "method mismatch 404" 404 r404.Rt.code;
-  Lwt.return ()
+  return ()
 
 let test_reserved_shadow () =
   setup () >>= fun p ->
@@ -370,7 +370,7 @@ let test_reserved_shadow () =
         o.S.o_value_hash;
       Alcotest.(check (option int64)) "denial row has no version" None
         o.S.o_version;
-      Lwt.return ()
+      return ()
   | n ->
       Alcotest.failf "expected one reserved-shadow denial row, got %d"
         (List.length n))
@@ -384,7 +384,7 @@ let test_reserved_shadow () =
   Alcotest.(check int) "dispatch over a reserved path 404s" 404 r.Rt.code;
   Alcotest.(check string) "dispatch reserved answers plain 404" "not found"
     r.Rt.body;
-  Lwt.return ()
+  return ()
 
 let test_program_route () =
   setup () >>= fun p ->
@@ -432,9 +432,9 @@ let test_program_route () =
               "the request context is the run's input"
               [ Tuna.Hash.hex_of_tree (Tuna.Cstr.encode (J.to_string ctx)) ]
               row.S.r_input_hashes;
-            Lwt.return ())
+            return ())
   >>= fun () ->
-  S.fetch_journals p run_id >>= fun _js -> Lwt.return ()
+  S.fetch_journals p run_id >>= fun _js -> return ()
   >>= fun () ->
   (* and an anonymous visitor gets a service-attributed run (law 3) *)
   Rt.dispatch p ~service:me.S.i_id ~meth:"GET" ~site_path:"compute" ~query:None
@@ -448,7 +448,7 @@ let test_program_route () =
         | Some row ->
             Alcotest.(check string) "anonymous run attributed to the service"
               me.S.i_id (Option.value row.S.r_caller ~default:"");
-            Lwt.return ())
+            return ())
 
 let test_route_capability_and_lifecycle () =
   setup () >>= fun p ->
@@ -470,12 +470,12 @@ let test_route_capability_and_lifecycle () =
   | [ o ] ->
       Alcotest.(check (option string)) "publish denial journaled NULL" None
         o.S.o_value_hash;
-      Lwt.return ()
+      return ()
   | n -> Alcotest.failf "expected publish denial row, got %d" (List.length n))
   >>= fun () ->
   ops_with p ~op:"delete" ~path:"route/locked"
   >>= (function
-  | [ _ ] -> Lwt.return ()
+  | [ _ ] -> return ()
   | n -> Alcotest.failf "expected delete denial row, got %d" (List.length n))
   >>= fun () ->
   (* lifecycle (acceptance 5): publish, dispatch, delete, 404 *)
@@ -508,7 +508,7 @@ let test_route_capability_and_lifecycle () =
   Alcotest.(check int) "deleted route answers 404" 404 r2.Rt.code;
   Rt.get p ~actor:me.S.i_id ~site_path:"tmp/x" >>= fun (gcode, _) ->
   Alcotest.(check int) "route get after delete 404" 404 gcode;
-  Lwt.return ()
+  return ()
 
 (* rewind over route/ restores the prior route table exactly (routes are
    paths, so rewind-as-fold covers them; acceptance 5) *)
@@ -546,7 +546,7 @@ let test_route_rewind () =
   Rw.state p ~prefix:"route/rw" ~at_seq:after_a >>= fun rew_prior ->
   Alcotest.(check (list string)) "rewind restores the prior route table"
     [ "route/rw/a" ] (List.map (fun e -> e.Rw.path) rew_prior);
-  Lwt.return ()
+  return ()
 
 (* -- tree/del at the boundary ------------------------------------------ *)
 
@@ -606,7 +606,7 @@ let test_tree_del_boundary () =
         o.S.o_prev_version;
       Alcotest.(check (option int64)) "delete row version = the row's next version"
         (Some 2L) o.S.o_version;
-      Lwt.return ()
+      return ()
   | n -> Alcotest.failf "expected one delete effect row, got %d" (List.length n))
   >>= fun () ->
   (* ADMINS EXEMPT: no grant in the run's map, the live is_admin check
@@ -647,7 +647,7 @@ let test_tree_del_boundary () =
         o.S.o_value_hash;
       Alcotest.(check (option int64)) "denial row has no version" None
         o.S.o_version;
-      Lwt.return ()
+      return ()
   | n -> Alcotest.failf "expected one delete denial row, got %d" (List.length n))
   >>= fun () ->
   (* ABSENT denial journaled: covering grant, path does not exist *)
@@ -666,7 +666,7 @@ let test_tree_del_boundary () =
   | [ o ] ->
       Alcotest.(check (option int64)) "absent denial row has no version" None
         o.S.o_version;
-      Lwt.return ()
+      return ()
   | n -> Alcotest.failf "expected one absent denial row, got %d" (List.length n)
 
 (* rewind fold honors deletes: delete then rewind-to-before = path back *)
@@ -678,12 +678,12 @@ let test_tree_del_rewind () =
   let put path =
     Tp.dispatch ~pool:p ~actor:me.S.i_id ~name:"tree/put"
       ~args:(P.tree_of_list [ Tuna.Cstr.encode path; Tuna.Canon.parse "0" ])
-    >>= fun _ -> Lwt.return ()
+    >>= fun _ -> return ()
   in
   let del path =
     Tp.dispatch ~pool:p ~actor:me.S.i_id ~name:"tree/del"
       ~args:(P.tree_of_list [ Tuna.Cstr.encode path ])
-    >>= fun _ -> Lwt.return ()
+    >>= fun _ -> return ()
   in
   put "td/r/x" >>= fun () ->
   S.ops_fold p ~prefix:"td/r" ~from_seq:0L () >>= fun ops ->
@@ -715,7 +715,7 @@ let test_tree_del_rewind () =
          e.Rw.path;
        Alcotest.(check string) "restored value hash" vh e.Rw.value_hash;
        Alcotest.(check int64) "restored version" 1L e.Rw.version;
-       Lwt.return ()
+       return ()
    | n ->
        Alcotest.failf "expected exactly the restored path, got %d"
          (List.length n))
@@ -724,9 +724,8 @@ let () =
   match Sys.getenv_opt "TUNA_TEST_PG" with
   | None -> print_endline "m11 tests skipped (TUNA_TEST_PG not set)"
   | Some _ ->
-    let lwt _name f = Alcotest_lwt.test_case _name `Quick (fun _sw () -> f ()) in
-    Lwt_main.run
-      (Alcotest_lwt.run "m11"
+    let lwt _name f = Alcotest.test_case _name `Quick f in
+    Tuna_test_eio.run "m11"
          [ ( "byte-values"
            , [ lwt "round-trip + address law + kind disjoint" test_byte_roundtrip
              ; lwt "dedup + bloat inversion" test_byte_dedup_and_bloat
@@ -742,4 +741,4 @@ let () =
          ; ( "tree-del"
            , [ lwt "boundary allow/deny/absent + admin exempt"
                  test_tree_del_boundary
-             ; lwt "rewind fold honors deletes" test_tree_del_rewind ] ) ])
+             ; lwt "rewind fold honors deletes" test_tree_del_rewind ] ) ]

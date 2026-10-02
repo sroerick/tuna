@@ -30,7 +30,7 @@
    journal payload cap (Prims.payload_cap) are error answers, like
    tree/list (the API surface serves big payloads out-of-band). *)
 
-open Lwt.Infix
+open Tuna_store.Direct
 
 module S = Tuna_store.Store
 
@@ -62,7 +62,7 @@ let op_path_of_args name args =
 
 let journal p ~op ~path ~value_hash ~actor =
   S.op_append p ~op ~path ~value_hash ~prev_version:None ~version:None ~actor
-  >>= fun _ -> Lwt.return ()
+  >>= fun _ -> return ()
 
 let b64_decode s = match Base64.decode s with Ok b -> Some b | Error _ -> None
 
@@ -82,7 +82,7 @@ let result_tree ~hash ~kind ~len ~payload =
    admins exempt; live check (revocation bites on the next call) *)
 let put_allowed p actor =
   S.is_admin p actor >>= function
-  | true -> Lwt.return true
+  | true -> return true
   | false -> S.has_live_grant p actor
 
 (* -- value/put: [base64-bytes] -> [hash kind len] ---------------------- *)
@@ -91,15 +91,15 @@ let value_put p ~actor args =
   match Prims.list_of_tree args with
   | [ payload_t ] -> (
       match Prims.unstr payload_t with
-      | None -> Lwt.return (`Error "value/put: payload must be a base64 string tree")
+      | None -> return (`Error "value/put: payload must be a base64 string tree")
       | Some b64 -> (
           match b64_decode b64 with
-          | None -> Lwt.return (`Error "value/put: payload is not valid base64")
+          | None -> return (`Error "value/put: payload is not valid base64")
           | Some bytes -> (
               let len = Int64.of_int (String.length bytes) in
               let cap = Int64.of_int (S.value_max_bytes ()) in
               if len > cap then
-                Lwt.return
+                return
                   (`Error
                      (Printf.sprintf
                         "value/put: payload of %Ld bytes exceeds the cap of %Ld" len cap))
@@ -107,7 +107,7 @@ let value_put p ~actor args =
                 put_allowed p actor
                 >>= function
                 | false ->
-                    Lwt.return
+                    return
                       (`Error "value/put: caller holds no unrevoked grant")
                 | true ->
                     let hash = S.byte_hash bytes in
@@ -116,63 +116,63 @@ let value_put p ~actor args =
                     journal p ~op:"value-put" ~path:hash
                       ~value_hash:(Some hash) ~actor
                     >>= fun () ->
-                    Lwt.return
+                    return
                       (`Ok
                         (Prims.tree_of_list
                            [ Prims.str hash
                            ; Prims.str "bytes"
                            ; Prims.str (Int64.to_string len) ])))))
-  | _ -> Lwt.return (`Error "value/put: args must be [base64-bytes]")
+  | _ -> return (`Error "value/put: args must be [base64-bytes]")
 
 (* -- value/get: [hash] or [hash kind] -> [hash kind len payload] ------- *)
 
-let fetch_kind p ~hash ~kind : S.probe option Lwt.t =
+let fetch_kind p ~hash ~kind : S.probe option =
   match kind with
   | Some "bytes" ->
       S.byte_value_fetch p hash
-      >>= (function Some b -> Lwt.return (Some (S.Bytes b)) | None -> Lwt.return None)
+      >>= (function Some b -> return (Some (S.Bytes b)) | None -> return None)
   | Some "tree" ->
       S.value_fetch p hash
-      >>= (function Some t -> Lwt.return (Some (S.Tree t)) | None -> Lwt.return None)
+      >>= (function Some t -> return (Some (S.Tree t)) | None -> return None)
   | _ -> S.probe_value p hash
 
 let get p ~actor hash kind =
   match hash with
-  | None -> Lwt.return (`Error "value/get: hash must be a string tree")
+  | None -> return (`Error "value/get: hash must be a string tree")
   | Some hash -> (
       let hash = Tuna.Hash.normalize_hex hash in
       match kind with
       | Some k when k <> "bytes" && k <> "tree" ->
-          Lwt.return (`Error "value/get: kind must be \"bytes\" or \"tree\"")
+          return (`Error "value/get: kind must be \"bytes\" or \"tree\"")
       | _ -> (
           fetch_kind p ~hash ~kind
           >>= function
-          | None -> Lwt.return (`Error ("value/get: no value with hash " ^ hash))
+          | None -> return (`Error ("value/get: no value with hash " ^ hash))
           | Some (S.Bytes bytes) ->
               let len = Int64.of_int (String.length bytes) in
               if len > Int64.of_int Prims.payload_cap then
-                Lwt.return (`Error "value/get: value exceeds the journal payload cap")
+                return (`Error "value/get: value exceeds the journal payload cap")
               else
                 journal p ~op:"value-get" ~path:hash ~value_hash:None ~actor
                 >>= fun () ->
-                Lwt.return
+                return
                   (`Ok
                     (result_tree ~hash ~kind:"bytes" ~len
                        ~payload:(b64_encode bytes)))
           | Some (S.Tree ternary) ->
               let len = Int64.of_int (String.length ternary) in
               if len > Int64.of_int Prims.payload_cap then
-                Lwt.return (`Error "value/get: value exceeds the journal payload cap")
+                return (`Error "value/get: value exceeds the journal payload cap")
               else
                 journal p ~op:"value-get" ~path:hash ~value_hash:None ~actor
                 >>= fun () ->
-                Lwt.return (`Ok (result_tree ~hash ~kind:"tree" ~len ~payload:ternary))))
+                return (`Ok (result_tree ~hash ~kind:"tree" ~len ~payload:ternary))))
 
 let value_get p ~actor args =
   match Prims.list_of_tree args with
   | [ hash_t ] -> get p ~actor (Prims.unstr hash_t) None
   | [ hash_t; kind_t ] -> get p ~actor (Prims.unstr hash_t) (Prims.unstr kind_t)
-  | _ -> Lwt.return (`Error "value/get: args must be [hash] or [hash kind]")
+  | _ -> return (`Error "value/get: args must be [hash] or [hash kind]")
 
 (* -- value/len: [hash] -> len ------------------------------------------ *)
 
@@ -180,22 +180,22 @@ let value_len p ~actor args =
   match Prims.list_of_tree args with
   | [ hash_t ] -> (
       match Prims.unstr hash_t with
-      | None -> Lwt.return (`Error "value/len: hash must be a string tree")
+      | None -> return (`Error "value/len: hash must be a string tree")
       | Some hash ->
           let hash = Tuna.Hash.normalize_hex hash in
           S.probe_len p hash
           >>= function
-          | None -> Lwt.return (`Error ("value/len: no value with hash " ^ hash))
+          | None -> return (`Error ("value/len: no value with hash " ^ hash))
           | Some len ->
               journal p ~op:"value-len" ~path:hash ~value_hash:None ~actor
-              >>= fun () -> Lwt.return (`Ok (Prims.str (Int64.to_string len))))
-  | _ -> Lwt.return (`Error "value/len: args must be [hash]")
+              >>= fun () -> return (`Ok (Prims.str (Int64.to_string len))))
+  | _ -> return (`Error "value/len: args must be [hash]")
 
 (* -- dispatch ----------------------------------------------------------- *)
 
-let dispatch ~pool ~actor ~name ~args : answer Lwt.t =
+let dispatch ~pool ~actor ~name ~args : answer =
   match name with
   | "value/put" -> value_put pool ~actor args
   | "value/get" -> value_get pool ~actor args
   | "value/len" -> value_len pool ~actor args
-  | other -> Lwt.return (`Error ("unknown prim: " ^ other))
+  | other -> return (`Error ("unknown prim: " ^ other))

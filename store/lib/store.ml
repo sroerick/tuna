@@ -9,7 +9,7 @@
    - the journal hash chain is per run: row_hash =
      sha256(fingerprint row) over a fixed-field encoding; seq 0 chains
      from [genesis]. *)
-open Lwt.Infix
+open Direct.Infix
 
 module Db_alias = Db
 module V = Pgx.Value
@@ -72,8 +72,8 @@ let fetch_program p hash =
   Db.q ~params:[ p_str hash ] p select_program
   >>= fun rows ->
   (match rows with
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (program_of_row r hash))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (program_of_row r hash))
   | _ -> store_error "multiple program rows for hash %s" hash )
 
 (* get-or-create by hash: hash is content-addressed so conflicting
@@ -98,7 +98,7 @@ let upsert_program p ~hash ~ternary ~ir ~created_by =
   Db.q ~params:[ p_str hash ] p select_program
   >>= fun rows ->
   (match rows with
-  | [ r ] -> Lwt.return (program_of_row r hash)
+  | [ r ] -> Direct.return (program_of_row r hash)
   | n -> store_error "program upsert: fetch after insert gave %d rows" (List.length n)
          )
 
@@ -109,7 +109,7 @@ let list_programs p ?(limit = 200) () =
     "SELECT hash, ternary, ir::text, created_by::text FROM programs \
      ORDER BY created_at DESC LIMIT $1"
   >>= fun rows ->
-  Lwt.return (List.map (fun r -> program_of_row r "programs") rows)
+  Direct.return (List.map (fun r -> program_of_row r "programs") rows)
 
 (* -- runs ------------------------------------------------------------ *)
 
@@ -202,7 +202,7 @@ let insert_run p ~program_hash ?(inputs = []) ?(caller = None) ?(parent_run_id =
      $6::uuid, 'running', $7) RETURNING id::text"
   >>= fun rows ->
   (match rows with
-  | [ r ] -> Lwt.return (text r 0 "run.id")
+  | [ r ] -> Direct.return (text r 0 "run.id")
   | n -> store_error "insert_run: RETURNING gave %d rows" (List.length n) )
 
 let update_run_result p ~id ~status ?result_ternary ?step_count () =
@@ -235,7 +235,7 @@ let resolve_run_id p id =
   let n = String.length id in
   if n = 36 && id.[8] = '-' && id.[13] = '-' && id.[18] = '-' && id.[23] = '-'
      && String.for_all (fun c -> c = '-' || is_hex c) id then
-    Lwt.return (Some id)
+    Direct.return (Some id)
   else if n >= 8 && n <= 32 && String.for_all is_hex id then
     Db.q
       ~params:[ p_str (String.lowercase_ascii id) ]
@@ -244,15 +244,15 @@ let resolve_run_id p id =
        ORDER BY created_at LIMIT 2"
     >>= fun rows ->
     (match rows with
-    | [ r ] -> Lwt.return (Some (text r 0 "runs.id"))
-    | _ -> Lwt.return None (* absent or ambiguous: same 404 answer *))
-  else Lwt.return None
+    | [ r ] -> Direct.return (Some (text r 0 "runs.id"))
+    | _ -> Direct.return None (* absent or ambiguous: same 404 answer *))
+  else Direct.return None
 let fetch_run p id =
   Db.q ~params:[ p_str id ] p select_run
   >>= fun rows ->
   (match rows with
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (run_of_row r))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (run_of_row r))
   | _ -> store_error "multiple run rows for id %s" id )
 
 (* fetch_run_resolved: fetch_run plus prefix resolution; returns the
@@ -261,12 +261,12 @@ let fetch_run p id =
 let fetch_run_resolved p id =
   resolve_run_id p id
   >>= function
-  | None -> Lwt.return None
+  | None -> Direct.return None
   | Some full ->
       fetch_run p full
       >>= function
-      | None -> Lwt.return None (* raced a delete *)
-      | Some r -> Lwt.return (Some (full, r))
+      | None -> Direct.return None (* raced a delete *)
+      | Some r -> Direct.return (Some (full, r))
 
 (* list newest-first; caller/program filters optional *)
 let list_runs p ?(caller = None) ?(program = None) ?(limit = 50) () =
@@ -280,7 +280,7 @@ let list_runs p ?(caller = None) ?(program = None) ?(limit = 50) () =
      WHERE ($1::uuid IS NULL OR caller = $1::uuid) \
        AND ($2::text IS NULL OR program_hash = $2) \
      ORDER BY created_at DESC LIMIT $3"
-  >>= fun rows -> Lwt.return (List.map run_of_row rows)
+  >>= fun rows -> Direct.return (List.map run_of_row rows)
 
 (* -- demand-memo (borg/sharing.borg §demand-memo, migration 0011) ----
 
@@ -298,7 +298,7 @@ let demand_memo_get p ~caller ~fun_hash ~arg_hash =
     "SELECT result_ternary FROM demand_memo \
      WHERE caller = $1 AND fun_hash = $2 AND arg_hash = $3"
   >>= function
-  | [] -> Lwt.return None
+  | [] -> Direct.return None
   | [ r ] ->
       (* touch last_seen_at for retention ranking; fire-and-forget *)
       Db.q_unit
@@ -306,7 +306,7 @@ let demand_memo_get p ~caller ~fun_hash ~arg_hash =
         p
         "UPDATE demand_memo SET last_seen_at = now() \
          WHERE caller = $1 AND fun_hash = $2 AND arg_hash = $3"
-      >>= fun () -> Lwt.return (Some (text r 0 "demand_memo.result_ternary"))
+      >>= fun () -> Direct.return (Some (text r 0 "demand_memo.result_ternary"))
   | _ -> store_error "demand_memo: multiple rows for one key"
 
 let demand_memo_put p ~caller ~fun_hash ~arg_hash ~result_hash
@@ -326,7 +326,7 @@ let demand_memo_put p ~caller ~fun_hash ~arg_hash ~result_hash
 let demand_memo_count p =
   Db.q p "SELECT count(*) FROM demand_memo"
   >>= function
-  | [ r ] -> Lwt.return (int r 0 "count")
+  | [ r ] -> Direct.return (int r 0 "count")
   | _ -> store_error "demand_memo count: unexpected rows"
 
 (* the caller's whole garden memo (own-garden scope): seed a demand run
@@ -340,7 +340,7 @@ let demand_memo_list p ?(limit = 100_000) ~caller () =
     "SELECT fun_hash, arg_hash, result_ternary FROM demand_memo \
      WHERE caller = $1 ORDER BY last_seen_at DESC LIMIT $2"
   >>= fun rows ->
-  Lwt.return
+  Direct.return
     (List.map
        (fun r ->
          ( text r 0 "demand_memo.fun_hash"
@@ -402,7 +402,7 @@ let insert_run_trace p ~run_id (s : trace_summary) (events : trace_event list)
         head :: chunks tail
   in
   let rec insert_chunks = function
-    | [] -> Lwt.return ()
+    | [] -> Direct.return ()
     | evs :: rest ->
         let params =
           List.concat_map
@@ -453,9 +453,9 @@ let fetch_run_trace p run_id =
      dirty_firings, loop_detected, recorded, truncated FROM run_traces \
      WHERE run_id = $1::uuid"
   >>= function
-  | [] -> Lwt.return None
+  | [] -> Direct.return None
   | [ r ] ->
-      Lwt.return
+      Direct.return
         (Some
            { t_run_id = text r 0 "run_traces.run_id"
            ; t_semantics = text r 1 "run_traces.semantics"
@@ -475,7 +475,7 @@ let fetch_trace_events p run_id ~after_seq ~limit =
     "SELECT seq, kind, rule, fun_prefix, arg_prefix, note FROM trace_events \
      WHERE run_id = $1::uuid AND seq > $2 ORDER BY seq LIMIT $3"
   >>= fun rows ->
-  Lwt.return
+  Direct.return
     (List.map
        (fun r ->
          { v_seq = int r 0 "trace_events.seq"
@@ -604,11 +604,11 @@ let append_journal p ?(host_build = "tuna-dev") ~run_id ev =
      wall_ms, host_build, prev_hash, row_hash) \
      VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid, $7, $8, $9, $10, $11, $12, \
      $13, $14, $15)"
-  >>= fun () -> Lwt.return (seq, h)
+  >>= fun () -> Direct.return (seq, h)
 
 let fetch_journals p run_id =
   Db.q ~params:[ p_str run_id ] p select_journals
-  >>= fun rows -> Lwt.return (List.map journal_of_row rows)
+  >>= fun rows -> Direct.return (List.map journal_of_row rows)
 
 (* counterfactual fork bookkeeping (journal.counterfactual-edits; the
    journal copy/chain-rebuild itself goes through append_journal) *)
@@ -668,8 +668,8 @@ let select_dict_entry =
 let dict_get p ~identity_id ~name =
   Db.q ~params:[ p_str identity_id; p_str name ] p select_dict_entry
   >>= function
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (dict_entry_of_row r identity_id name))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (dict_entry_of_row r identity_id name))
   | _ -> store_error "repl_dict: multiple rows for %s/%s" identity_id name
 
 let dict_set p ~identity_id ~name ~ternary =
@@ -691,7 +691,7 @@ let dict_list p ~identity_id =
     "SELECT name, ternary, updated_at::text FROM repl_dict \
      WHERE identity_id = $1::uuid ORDER BY name"
   >>= fun rows ->
-  Lwt.return
+  Direct.return
     (List.map
        (fun r -> dict_entry_of_row r identity_id (text r 0 "repl_dict.name"))
        rows)
@@ -703,8 +703,8 @@ let repl_state_get p ~identity_id =
   Db.q ~params:[ p_str identity_id ] p
     "SELECT last_run_id::text FROM repl_state WHERE identity_id = $1::uuid"
   >>= function
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (text r 0 "repl_state.last_run_id"))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (text r 0 "repl_state.last_run_id"))
   | _ -> store_error "repl_state: multiple rows for %s" identity_id
 
 let repl_state_put p ~identity_id ~run_id =
@@ -722,8 +722,8 @@ let prim_get p key_ternary =
   let kh = Tuna.Hash.hex_of_string key_ternary in
   Db.q ~params:[ p_str kh ] p "SELECT key_ternary, value_ternary FROM prim_kv WHERE key_hash = $1"
   >>= function
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (text r 0 "prim_kv.key", text r 1 "prim_kv.value"))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (text r 0 "prim_kv.key", text r 1 "prim_kv.value"))
   | _ -> store_error "prim_kv: multiple rows for key %s" kh
 
 let prim_put p ~key_ternary ~value_ternary =
@@ -781,7 +781,7 @@ let mint_grant p ~prim ~args_attenuation ?(path_prefix = None) ~caller
     let id = text r 0 "grant.id" in
     Db.q ~params:[ p_str id ] p select_grant_by_id
     >>= (function
-         | [ r ] -> Lwt.return (grant_of_row r)
+         | [ r ] -> Direct.return (grant_of_row r)
          | n -> store_error "mint_grant: fetch gave %d rows" (List.length n)
                 )
   | n -> store_error "mint_grant: RETURNING gave %d rows" (List.length n) )
@@ -791,14 +791,14 @@ let list_grants p ?(limit = 100) () =
   Db.q ~params:[ p_int limit ] p
     ("SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
       minted_by::text, parent_grant::text, revoked_at::text FROM grants ORDER BY created_at DESC LIMIT $1")
-  >>= fun rows -> Lwt.return (List.map grant_of_row rows)
+  >>= fun rows -> Direct.return (List.map grant_of_row rows)
 
 let fetch_grant p id =
   Db.q ~params:[ p_str id ] p select_grant_by_id
   >>= fun rows ->
   (match rows with
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (grant_of_row r))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (grant_of_row r))
   | _ -> store_error "multiple grant rows for id %s" id )
 
 (* immediate, forward-only: next live boundary check fails *)
@@ -828,40 +828,40 @@ let prefix_match prefix path =
    pathological data, not a correctness device. *)
 let lineage_live p ~max_hops =
   let rec go hops id =
-    if hops > max_hops then Lwt.return false
+    if hops > max_hops then Direct.return false
     else
       fetch_grant p id
       >>= function
-      | None -> Lwt.return false (* dangling lineage = dead *)
-      | Some g when g.g_revoked_at <> None -> Lwt.return false
+      | None -> Direct.return false (* dangling lineage = dead *)
+      | Some g when g.g_revoked_at <> None -> Direct.return false
       | Some g -> (
           match g.g_parent_grant with
-          | None -> Lwt.return true
+          | None -> Direct.return true
           | Some parent -> go (hops + 1) parent)
   in
   fun id -> go 0 id
 
 let check_grant p ~id ~caller ?(paths = []) () :
-  [ `Ok | `Revoked | `Wrong_caller | `Unknown | `Prefix_denied ] Lwt.t =
+  [ `Ok | `Revoked | `Wrong_caller | `Unknown | `Prefix_denied ] =
   fetch_grant p id
   >>= function
-  | None -> Lwt.return `Unknown
-  | Some g when g.g_revoked_at <> None -> Lwt.return `Revoked
-  | Some g when g.g_caller <> caller -> Lwt.return `Wrong_caller
+  | None -> Direct.return `Unknown
+  | Some g when g.g_revoked_at <> None -> Direct.return `Revoked
+  | Some g when g.g_caller <> caller -> Direct.return `Wrong_caller
   | Some g -> (
       (* lineage death: an ancestor revoked kills the subtree's future *)
       (match g.g_parent_grant with
-       | None -> Lwt.return true
+       | None -> Direct.return true
        | Some parent -> lineage_live p ~max_hops:64 parent)
       >>= function
-      | false -> Lwt.return `Revoked
+      | false -> Direct.return `Revoked
       | true -> (
           match (g.g_path_prefix, paths) with
-          | None, _ -> Lwt.return `Ok
-          | Some _, [] -> Lwt.return `Prefix_denied
+          | None, _ -> Direct.return `Ok
+          | Some _, [] -> Direct.return `Prefix_denied
           | Some prefix, ps ->
-              if List.for_all (prefix_match prefix) ps then Lwt.return `Ok
-              else Lwt.return `Prefix_denied))
+              if List.for_all (prefix_match prefix) ps then Direct.return `Ok
+              else Direct.return `Prefix_denied))
 
 (* -- delegation-attenuation (grants.borg §delegation-attenuation) ---- *)
 
@@ -950,49 +950,48 @@ let attenuate_grant p ~parent_id ~prim ~args_attenuation ~path_prefix
   | `Unknown
   | `Revoked
   | `Wrong_caller
-  | `Not_narrower of string ]
-  Lwt.t =
+  | `Not_narrower of string ] =
   fetch_grant p parent_id
   >>= function
-  | None -> Lwt.return `Unknown
-  | Some parent when parent.g_revoked_at <> None -> Lwt.return `Revoked
-  | Some parent when parent.g_caller <> caller -> Lwt.return `Wrong_caller
+  | None -> Direct.return `Unknown
+  | Some parent when parent.g_revoked_at <> None -> Direct.return `Revoked
+  | Some parent when parent.g_caller <> caller -> Direct.return `Wrong_caller
   | Some parent -> (
       (match parent.g_parent_grant with
-       | None -> Lwt.return true
+       | None -> Direct.return true
        | Some ancestor -> lineage_live p ~max_hops:64 ancestor)
       >>= function
-      | false -> Lwt.return `Revoked (* dead lineage: nothing to narrow *)
+      | false -> Direct.return `Revoked (* dead lineage: nothing to narrow *)
       | true -> (
           match
             attenuation_narrower ~prim ~args_attenuation ~path_prefix parent
           with
-          | Error reason -> Lwt.return (`Not_narrower reason)
+          | Error reason -> Direct.return (`Not_narrower reason)
           | Ok () ->
               mint_grant p ~prim ~args_attenuation ~path_prefix ~caller
                 ~minted_by:(Some caller) ~parent_grant:(Some parent.g_id)
                 ()
-              >>= fun g -> Lwt.return (`Ok g)))
+              >>= fun g -> Direct.return (`Ok g)))
 
 (* lineage surfaces (audit): the ancestor chain (nearest first) and the
    descendant subtree (breadth via recursive CTE, depth 1 = direct
    children).  Bounded the same way as the live walk. *)
 let grant_lineage p ?(max_hops = 64) id =
   let rec go hops acc id =
-    if hops > max_hops then Lwt.return (List.rev acc)
+    if hops > max_hops then Direct.return (List.rev acc)
     else
       fetch_grant p id
       >>= function
       | None | Some { g_parent_grant = None; _ } ->
-          Lwt.return (List.rev acc)
+          Direct.return (List.rev acc)
       | Some { g_parent_grant = Some parent; _ } -> (
           fetch_grant p parent
           >>= function
-          | None -> Lwt.return (List.rev acc)
+          | None -> Direct.return (List.rev acc)
           | Some g -> go (hops + 1) (g :: acc) parent)
   in
   fetch_grant p id >>= function
-  | None -> Lwt.return []
+  | None -> Direct.return []
   | Some _ -> go 0 [] id
 
 let grant_descendants p ?(max_depth = 64) id =
@@ -1007,7 +1006,7 @@ let grant_descendants p ?(max_depth = 64) id =
      SELECT id FROM tree ORDER BY depth, id"
   >>= fun rows ->
   let rec fetch_all acc = function
-    | [] -> Lwt.return (List.rev acc)
+    | [] -> Direct.return (List.rev acc)
     | id :: rest -> (
         fetch_grant p id
         >>= function
@@ -1050,8 +1049,8 @@ let fetch_gc_tombstone p run_id =
     "SELECT journal_gced_policy FROM runs \
      WHERE id = $1::uuid AND journal_gced_at IS NOT NULL"
   >>= function
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (opt_text r 0))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (opt_text r 0))
   | _ -> store_error "runs: multiple rows for one id"
 
 (* PII redaction is an EXPLICIT chain break (journal.retention-gc): the
@@ -1096,8 +1095,8 @@ let fetch_identity p id =
   Db.q ~params:[ p_str id ] p select_identity_by_id
   >>= fun rows ->
   (match rows with
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (identity_of_row r))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (identity_of_row r))
   | _ -> store_error "multiple identity rows for id %s" id )
 
 let fetch_identity_by_name p name =
@@ -1105,8 +1104,8 @@ let fetch_identity_by_name p name =
     "SELECT id::text, name, token_hash, is_admin FROM identities WHERE name = $1"
   >>= fun rows ->
   (match rows with
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (identity_of_row r))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (identity_of_row r))
   | _ -> store_error "multiple identity rows for name %s" name )
 
 (* bootstrap (server-boot): insert (name, sha256 token) if absent;
@@ -1121,7 +1120,7 @@ let bootstrap_identity p ?(is_admin = true) ~name ~token () =
   >>= fun () ->
   fetch_identity_by_name p name
   >>= (function
-       | Some i -> Lwt.return i
+       | Some i -> Direct.return i
        | None -> store_error "bootstrap_identity: insert succeeded but fetch failed"
                  )
 
@@ -1140,7 +1139,7 @@ let mint_identity p ?(is_admin = false) ~name ~token () =
   >>= fun () ->
   fetch_identity_by_name p name
   >>= (function
-       | Some i -> Lwt.return i
+       | Some i -> Direct.return i
        | None -> store_error "mint_identity: insert succeeded but fetch failed")
 
 (* the identities roster (admin page/API): never carries token hashes *)
@@ -1148,7 +1147,7 @@ let list_identities p () =
   Db.q p
     "SELECT id::text, name, token_hash, is_admin FROM identities ORDER BY name"
   >>= fun rows ->
-  Lwt.return (List.map identity_of_row rows)
+  Direct.return (List.map identity_of_row rows)
 
 (* token verify (sha256 lookup) — the only identity query by secret *)
 let verify_token p token =
@@ -1156,9 +1155,9 @@ let verify_token p token =
     "SELECT id::text, name, token_hash, is_admin FROM identities WHERE token_hash = $1"
   >>= fun rows ->
   (match rows with
-   | [] -> Lwt.return None
-   | [ r ] -> Lwt.return (Some (identity_of_row r))
-   | _ -> Lwt.return None)
+   | [] -> Direct.return None
+   | [ r ] -> Direct.return (Some (identity_of_row r))
+   | _ -> Direct.return None)
 
 (* -- accounts: passwords + browser sessions (0013, pp-slice) -------
 
@@ -1174,15 +1173,15 @@ let verify_token p token =
 (* Log an auth attempt.  Never fails a login: log rows are telemetry,
    pp-slice has no throttle yet (chapter honest-limitations). *)
 let log_auth p ?(identity_id : string option) ~kind ~success () =
-  Lwt.catch
+  Direct.catch
     (fun () ->
       Db.q_unit
         ~params:[ p_opt identity_id; p_str kind; p_bool success ]
         p
         "INSERT INTO auth_log (identity_id, kind, success) \
          VALUES ($1::uuid, $2, $3)"
-      >>= fun () -> Lwt.return ())
-    (fun _ -> Lwt.return ())
+      >>= fun () -> Direct.return ())
+    (fun _ -> Direct.return ())
 
 (* Set (or rotate) an identity's password.  Upsert: one live password row
    per identity (UNIQUE(identity_id, kind)); each call rehashes with a
@@ -1199,7 +1198,7 @@ let set_password p ~identity_id ~password =
      VALUES ($1::uuid, $2, $3) \
      ON CONFLICT (identity_id, kind) \
      DO UPDATE SET secret_hash = EXCLUDED.secret_hash"
-  >>= fun () -> Lwt.return ()
+  >>= fun () -> Direct.return ()
 
 (* Username+password verify -> identity.  Unknown usernames still pay
    one dummy verify so known/unknown cost the same (timing flatten);
@@ -1214,7 +1213,7 @@ let verify_password p ~username ~password =
                ~stored:Credentials.dummy_hash
            in
            log_auth p ~kind:"password" ~success:false ()
-           >>= fun () -> Lwt.return None
+           >>= fun () -> Direct.return None
        | Some i ->
            Db.q ~params:[ p_str i.i_id ] p
              "SELECT secret_hash FROM credentials \
@@ -1227,19 +1226,19 @@ let verify_password p ~username ~password =
                    >>= fun () ->
                    (* last_used_at is telemetry: a failed touch never
                       fails the login (PP's same keep division) *)
-                   Lwt.catch
+                   Direct.catch
                      (fun () ->
                        Db.q_unit ~params:[ p_str i.i_id ] p
                          "UPDATE credentials SET last_used_at = now() \
                           WHERE identity_id = $1::uuid AND kind = 'password'"
-                       >>= fun () -> Lwt.return ())
-                     (fun _ -> Lwt.return ())
-                   >>= fun () -> Lwt.return (Some i)
+                       >>= fun () -> Direct.return ())
+                     (fun _ -> Direct.return ())
+                   >>= fun () -> Direct.return (Some i)
                | _ ->
                    (* wrong password, no row, or more rows - one
                       uniform deny, same log shape *)
                    log_auth p ~identity_id:i.i_id ~kind:"password" ~success:false ()
-                   >>= fun () -> Lwt.return None))
+                   >>= fun () -> Direct.return None))
 
 (* Mint an opaque session token for a login.  The raw token leaves the
    process exactly once (cookie value); auth_sessions stores only its
@@ -1257,14 +1256,14 @@ let mint_session p ~identity_id ~ttl_seconds =
      VALUES ($1::uuid, $2, now() + ($3::text || ' seconds')::interval)"
   >>= fun () ->
   log_auth p ~identity_id ~kind:"session" ~success:true ()
-  >>= fun () -> Lwt.return token
+  >>= fun () -> Direct.return token
 
 (* Verify a session cookie value -> identity.  Live = sha256 hit AND
    not revoked AND not expired; everything else is anonymous.  Misses
    are NOT logged: session lookups are per-page-request traffic, log
    rows would dilute (mints and logins carry the accounts story). *)
 let verify_session p token =
-  if String.length token = 0 then Lwt.return None
+  if String.length token = 0 then Direct.return None
   else
     Db.q ~params:[ p_str (Tuna.Hash.hex_of_string token) ] p
       "SELECT i.id::text, i.name, i.token_hash, i.is_admin \
@@ -1273,22 +1272,22 @@ let verify_session p token =
        AND s.expires_at > now() LIMIT 1"
   >>= fun rows ->
     (match rows with
-     | [] -> Lwt.return None
-     | [ r ] -> Lwt.return (Some (identity_of_row r))
-     | _ -> Lwt.return None)
+     | [] -> Direct.return None
+     | [ r ] -> Direct.return (Some (identity_of_row r))
+     | _ -> Direct.return None)
 
 (* Revoke-by-token (logout).  Idempotent: an already-revoked or unknown
    token is still a successful logout from the caller's view. *)
 let revoke_session p token =
-  Lwt.catch
+  Direct.catch
     (fun () ->
       Db.q_unit
         ~params:[ p_str (Tuna.Hash.hex_of_string token) ]
         p
         "UPDATE auth_sessions SET revoked_at = now() \
          WHERE token_hash = $1 AND revoked_at IS NULL"
-      >>= fun () -> Lwt.return ())
-    (fun _ -> Lwt.return ())
+      >>= fun () -> Direct.return ())
+    (fun _ -> Direct.return ())
 
 (* -- tree substrate: derived path index + chained op log (M10) --------
 
@@ -1329,8 +1328,8 @@ let select_path_entry =
 let path_get p ~path =
   Db.q ~params:[ p_str (path_hash path) ] p select_path_entry
   >>= function
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (path_entry_of_row r "tree_paths"))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (path_entry_of_row r "tree_paths"))
   | _ -> store_error "tree_paths: multiple rows for path %s" path
 
 (* -- the value side (content-addressed, migration 0006) --------------- *)
@@ -1345,8 +1344,8 @@ let value_put p ~hash ~ternary =
 let value_fetch p hash =
   Db.q ~params:[ p_str hash ] p "SELECT ternary FROM tree_values WHERE hash = $1"
   >>= function
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (text r 0 "tree_values.ternary"))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (text r 0 "tree_values.ternary"))
   | _ -> store_error "tree_values: multiple rows for hash %s" hash
 
 (* -- byte values (M11, migration 0008) --------------------------------
@@ -1381,16 +1380,16 @@ let byte_value_put p ~hash ~bytes =
 let byte_value_fetch p hash =
   Db.q ~params:[ p_str hash ] p "SELECT bytes FROM byte_values WHERE hash = $1"
   >>= function
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (V.to_binary_exn (col r 0)))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (V.to_binary_exn (col r 0)))
   | _ -> store_error "byte_values: multiple rows for hash %s" hash
 
 let byte_value_len p hash =
   Db.q ~params:[ p_str hash ] p
     "SELECT octet_length(bytes) FROM byte_values WHERE hash = $1"
   >>= function
-  | [] -> Lwt.return None
-  | [ r ] -> Lwt.return (Some (int64 r 0 "byte_values.len"))
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (int64 r 0 "byte_values.len"))
   | _ -> store_error "byte_values: multiple rows for hash %s" hash
 
 (* probe-both-stores resolution (byte-values.borg law 1): the kind is
@@ -1402,11 +1401,11 @@ type probe = Tree of string | Bytes of string
 let probe_value p hash =
   value_fetch p hash
   >>= function
-  | Some ternary -> Lwt.return (Some (Tree ternary))
+  | Some ternary -> Direct.return (Some (Tree ternary))
   | None -> (
       byte_value_fetch p hash >>= function
-      | Some bytes -> Lwt.return (Some (Bytes bytes))
-      | None -> Lwt.return None)
+      | Some bytes -> Direct.return (Some (Bytes bytes))
+      | None -> Direct.return None)
 
 (* octet length of whichever store holds [hash] (the value/len cheap
    probe: lengths without materializing payloads) *)
@@ -1414,13 +1413,13 @@ let probe_len p hash =
   Db.q ~params:[ p_str hash ] p
     "SELECT octet_length(ternary) FROM tree_values WHERE hash = $1"
   >>= function
-  | [ r ] -> Lwt.return (Some (int64 r 0 "tree_values.len"))
+  | [ r ] -> Direct.return (Some (int64 r 0 "tree_values.len"))
   | [] -> (
       Db.q ~params:[ p_str hash ] p
         "SELECT octet_length(bytes) FROM byte_values WHERE hash = $1"
       >>= function
-      | [ r ] -> Lwt.return (Some (int64 r 0 "byte_values.len"))
-      | [] -> Lwt.return None
+      | [ r ] -> Direct.return (Some (int64 r 0 "byte_values.len"))
+      | [] -> Direct.return None
       | _ -> store_error "byte_values: multiple rows for hash %s" hash)
   | _ -> store_error "tree_values: multiple rows for hash %s" hash
 
@@ -1430,42 +1429,42 @@ let probe_len p hash =
 (* a bare non-uuid actor (tree_ops actors are free text) simply holds
    nothing; cast failures read as false, never raise *)
 let is_admin p id =
-  Lwt.catch
+  Direct.catch
     (fun () ->
       Db.q ~params:[ p_str id ] p
         "SELECT is_admin FROM identities WHERE id = $1::uuid"
       >>= function
-      | [ r ] -> Lwt.return (bool r 0 "identity.is_admin")
-      | _ -> Lwt.return false)
-    (fun _ -> Lwt.return false)
+      | [ r ] -> Direct.return (bool r 0 "identity.is_admin")
+      | _ -> Direct.return false)
+    (fun _ -> Direct.return false)
 
 (* value/put capability: the caller holds at least one unrevoked grant *)
 let has_live_grant p caller =
-  Lwt.catch
+  Direct.catch
     (fun () ->
       Db.q ~params:[ p_str caller ] p
         "SELECT 1 FROM grants WHERE caller = $1::uuid AND revoked_at IS NULL LIMIT 1"
       >>= (function
-            | [] -> Lwt.return false
-            | _ -> Lwt.return true))
-    (fun _ -> Lwt.return false)
+            | [] -> Direct.return false
+            | _ -> Direct.return true))
+    (fun _ -> Direct.return false)
 
 (* M11 route publish/delete capability: an unrevoked grant of [caller]
    whose prefix covers [path] (NULL prefix covers everything) *)
 let has_covering_grant p caller path =
-  Lwt.catch
+  Direct.catch
     (fun () ->
       Db.q ~params:[ p_str caller ] p
         "SELECT path_prefix FROM grants WHERE caller = $1::uuid AND revoked_at IS NULL"
       >>= fun rows ->
-      Lwt.return
+      Direct.return
         (List.exists
            (fun r ->
              match opt_text r 0 with
              | None -> true
              | Some pfx -> prefix_match pfx path)
            rows))
-    (fun _ -> Lwt.return false)
+    (fun _ -> Direct.return false)
 
 (* unconditional write: INSERT at version 1, or version+1 on the
    existing row (tree/put prim).  Returns the new version. *)
@@ -1481,7 +1480,7 @@ let path_put p ~path ~value_hash ~owner =
      RETURNING version"
   >>= fun rows ->
   (match rows with
-   | [ r ] -> Lwt.return (int64 r 0 "tree_paths.version")
+   | [ r ] -> Direct.return (int64 r 0 "tree_paths.version")
    | n -> store_error "path_put: RETURNING gave %d rows" (List.length n))
 
 (* versioned CAS write (tree/cas):
@@ -1497,8 +1496,8 @@ let path_put_cas p ~path ~value_hash ~owner ~expected_version ~expected_hash =
   let classify () =
     path_get p ~path
     >>= function
-    | None -> Lwt.return `Absent
-    | Some _ -> Lwt.return `Conflict
+    | None -> Direct.return `Absent
+    | Some _ -> Direct.return `Conflict
   in
   match expected_version with
   | None | Some 0L ->
@@ -1509,7 +1508,7 @@ let path_put_cas p ~path ~value_hash ~owner ~expected_version ~expected_hash =
          VALUES ($2, $1, $3, 1, $4) ON CONFLICT (path_hash) DO NOTHING \
          RETURNING version"
       >>= (function
-            | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
+            | [ r ] -> Direct.return (`Ok (int64 r 0 "tree_paths.version"))
             | [] -> classify ()
             | n -> store_error "path_put_cas: RETURNING gave %d rows" (List.length n))
   | Some n -> (
@@ -1533,7 +1532,7 @@ let path_put_cas p ~path ~value_hash ~owner ~expected_version ~expected_hash =
       in
       Db.q ~params p sql
       >>= (function
-            | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
+            | [ r ] -> Direct.return (`Ok (int64 r 0 "tree_paths.version"))
             | [] -> classify ()
             | n -> store_error "path_put_cas: RETURNING gave %d rows" (List.length n)))
 
@@ -1548,19 +1547,19 @@ let path_delete p ~path ~expected_version =
       Db.q ~params:[ p_str h ] p
         "DELETE FROM tree_paths WHERE path_hash = $1 RETURNING version"
       >>= (function
-            | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
-            | [] -> Lwt.return `Absent
+            | [ r ] -> Direct.return (`Ok (int64 r 0 "tree_paths.version"))
+            | [] -> Direct.return `Absent
             | n -> store_error "path_delete: RETURNING gave %d rows" (List.length n))
   | Some n ->
       Db.q ~params:[ p_str h; p_int64 n ] p
         "DELETE FROM tree_paths WHERE path_hash = $1 AND version = $2 \
          RETURNING version"
       >>= (function
-            | [ r ] -> Lwt.return (`Ok (int64 r 0 "tree_paths.version"))
+            | [ r ] -> Direct.return (`Ok (int64 r 0 "tree_paths.version"))
             | [] -> (
                 path_get p ~path >>= function
-                | None -> Lwt.return `Absent
-                | Some _ -> Lwt.return `Conflict)
+                | None -> Direct.return `Absent
+                | Some _ -> Direct.return `Conflict)
             | n -> store_error "path_delete: RETURNING gave %d rows" (List.length n))
 
 (* prefix range scan: every path starting with [prefix], byte-wise
@@ -1574,7 +1573,7 @@ let path_list p ?(limit = 1000) ~prefix () =
      WHERE path >= ($1 COLLATE \"C\") \
        AND path < (($1 || chr(255)) COLLATE \"C\") \
      ORDER BY path COLLATE \"C\" LIMIT $2"
-  >>= fun rows -> Lwt.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
+  >>= fun rows -> Direct.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
 
 (* -- the op log (sha256-chained; rewind folds it) --------------------- *)
 
@@ -1653,7 +1652,7 @@ let op_append_conn c ~op ~path ~value_hash ~prev_version ~version ~actor =
     "INSERT INTO tree_ops (seq, path, op, value_hash, prev_version, version, \
      actor, ts, op_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, \
      to_timestamp($8::double precision), $9)"
-  >>= fun () -> Lwt.return (seq, h)
+  >>= fun () -> Direct.return (seq, h)
 
 (* pool-level append: one op row on the global log.  Returns (seq, op_hash). *)
 let op_append p ~op ~path ~value_hash ~prev_version ~version ~actor =
@@ -1675,7 +1674,7 @@ let ops_fold p ?(prefix = "") ?(from_seq = 0L) ?(to_seq = Int64.max_int) () =
             ; p_int64 to_seq
             ; p_opt (if prefix = "" then None else Some prefix) ]
     p sql
-  >>= fun rows -> Lwt.return (List.map tree_op_of_row rows)
+  >>= fun rows -> Direct.return (List.map tree_op_of_row rows)
 
 (* chain walk over fetched rows: recompute each op_hash from its fields
    + the previous row's STORED op_hash (the log stores no prev column,
@@ -1736,7 +1735,7 @@ let ns_fork p ~src_prefix ~dst_prefix ~actor =
           rows
       in
       let rec insert_all n = function
-        | [] -> Lwt.return n
+        | [] -> Direct.return n
         | (np, vh) :: rest ->
             Db.q_conn_unit
               ~params:[ p_str (path_hash np); p_str np; p_str vh; p_str actor ]
@@ -1751,7 +1750,7 @@ let ns_fork p ~src_prefix ~dst_prefix ~actor =
         ~prev_version:None ~version:None ~actor
       >>= fun _fk ->
       let rec log_copies = function
-        | [] -> Lwt.return copied
+        | [] -> Direct.return copied
         | (np, vh) :: rest ->
             op_append_conn c ~op:"put" ~path:np ~value_hash:(Some vh)
               ~prev_version:None ~version:(Some 1L) ~actor
@@ -1767,7 +1766,7 @@ let ns_fork p ~src_prefix ~dst_prefix ~actor =
 let ops_head_seq p =
   Db.q p "SELECT COALESCE(MAX(seq), 0) FROM tree_ops"
   >>= function
-  | [ r ] -> Lwt.return (int64 r 0 "tree_ops.head")
+  | [ r ] -> Direct.return (int64 r 0 "tree_ops.head")
   | _ -> store_error "tree_ops head: unexpected row count"
 
 (* A pulled op plus its TRUE global predecessor hash (the op_hash of
@@ -1808,7 +1807,7 @@ let ops_window p ~from_seq ~limit =
        FROM tree_ops) t \
      WHERE seq >= $1 ORDER BY seq LIMIT $2"
   >>= fun rows ->
-  Lwt.return
+  Direct.return
     (List.map
        (fun r ->
          { w_op = tree_op_of_row r; w_prev_hash = text r 9 "window.prev_hash" })
@@ -1830,7 +1829,7 @@ let fed_apply_effect_conn c ~dst_prefix ~suffix ~value_hash ~owner =
      RETURNING version"
   >>= fun rows ->
   (match rows with
-   | [ r ] -> Lwt.return (int64 r 0 "tree_paths.version")
+   | [ r ] -> Direct.return (int64 r 0 "tree_paths.version")
    | _ -> store_error "fed_apply: RETURNING gave %d rows" (List.length rows))
 
 (* does any of the three value homes hold [hash]?  apply refuses a
@@ -1840,14 +1839,14 @@ let fed_apply_effect_conn c ~dst_prefix ~suffix ~value_hash ~owner =
    byte_values, or a compiled program (a program hash resolves as its
    own ternary). *)
 let value_present p hash =
-  Lwt.catch
+  Direct.catch
     (fun () ->
       Db.q ~params:[ p_str hash ] p
         "SELECT 1 FROM tree_values WHERE hash = $1 \
          UNION ALL SELECT 1 FROM byte_values WHERE hash = $1 \
          UNION ALL SELECT 1 FROM programs WHERE hash = $1 LIMIT 1"
-      >>= (function [] -> Lwt.return false | _ -> Lwt.return true))
-    (fun _ -> Lwt.return false)
+      >>= (function [] -> Direct.return false | _ -> Direct.return true))
+    (fun _ -> Direct.return false)
 
 (* Apply a window of (op, true-predecessor-hash) pairs into [dst_prefix].
    Each row is first re-verified against its carried predecessor (so a
@@ -1871,22 +1870,22 @@ let value_present p hash =
 let fed_apply p ~actor ~dst_prefix ~src_prefix
     (ops : (tree_op * string) list) =
   Db.with_tx p (fun c ->
-      if ops = [] then Lwt.return (`Applied [])
+      if ops = [] then Direct.return (`Applied [])
       else
         let rows = List.map (fun (o, h) -> { w_op = o; w_prev_hash = h }) ops in
         (match verify_window_rows rows with
-         | `Bad msg -> Lwt.return (`Refused ("window chain broken: " ^ msg))
+         | `Bad msg -> Direct.return (`Refused ("window chain broken: " ^ msg))
          | `Ok ->
         let rec check prev = function
-          | [] -> Lwt.return `Ok
+          | [] -> Direct.return `Ok
           | ((o : tree_op), _) :: rest ->
               if not (prefix_match src_prefix o.o_path) then
-                Lwt.return
+                Direct.return
                   (`Bad
                     (Printf.sprintf "seq %Ld: path %S outside src prefix %S"
                        o.o_seq o.o_path src_prefix))
               else if o.o_seq <= prev then
-                Lwt.return
+                Direct.return
                   (`Bad
                     (Printf.sprintf
                        "seq %Ld: window is not strictly increasing" o.o_seq))
@@ -1897,7 +1896,7 @@ let fed_apply p ~actor ~dst_prefix ~src_prefix
                     >>= (function
                           | true -> check o.o_seq rest
                           | false ->
-                              Lwt.return
+                              Direct.return
                                 (`Bad
                                   (Printf.sprintf
                                      "seq %Ld: value %s not held locally (pull \
@@ -1907,10 +1906,10 @@ let fed_apply p ~actor ~dst_prefix ~src_prefix
         in
         check Int64.min_int ops
         >>= (function
-              | `Bad msg -> Lwt.return (`Refused msg)
+              | `Bad msg -> Direct.return (`Refused msg)
               | `Ok ->
                   let rec apply acc = function
-                    | [] -> Lwt.return (`Applied (List.rev acc))
+                    | [] -> Direct.return (`Applied (List.rev acc))
                     | ((o : tree_op), _) :: rest ->
                         let suffix =
                           String.sub o.o_path (String.length src_prefix)
@@ -1924,7 +1923,7 @@ let fed_apply p ~actor ~dst_prefix ~src_prefix
                         (if is_effect then
                            fed_apply_effect_conn c ~dst_prefix ~suffix
                              ~value_hash:(Option.get o.o_value_hash) ~owner:actor
-                         else Lwt.return 1L)
+                         else Direct.return 1L)
                         >>= fun newv ->
                         op_append_conn c
                           ~op:(if is_effect then "put" else "cas")
