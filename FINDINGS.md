@@ -247,6 +247,38 @@ five F6-named members (math/add, math/sub, math/mul, math/cmp,
 math/neg); the ledger invariant stays pure (verify-8 [8.5]); no
 further prim has been proposed through any channel.
 
+## F9 — SUPERLATIVE OVERREACH (forensics)
+
+> borg/forensics.borg pre-registration: the 2026-10-02 review
+> hypothesis called sabra code with the stdlib vocabulary
+> "EXTREMELY debuggable" relative to conventional stacks. TRIGGER:
+> any frozen localisation/collaboration/counterfactual gate (verify-10
+> gates 1–5) misses.
+
+**Status: not triggered** (2026-10-04). The deliberate-fault corpus
+landed (15 faults: 8 class-1 structural, 3 class-2 semantic, 2 class-3
+world-via-journal, 2 class-4 divergence) and
+`scripts/verify-10-forensics.sh` measured every gate at or above its
+frozen threshold — class-1 first-diff 8/8 = 100.0% exact mutation path
+(>=90), class-2 3/3 = 100.0% def boundary with a provenance-named span
+(>=80), class-1/2 max 2 API queries (<=8), class-3 max 1 (<=12),
+two transcript runs agree on every answer exactly, class-3 2/2 forks
+reach a different terminal status with both records replay-verified,
+class-4 2/2 close as `loop` with a named (fun, arg) closure pair, the
+count-preservation counterexample is pinned. The background pitch
+language keeps EXTREMELY; if any future gate miss is observed, this is
+the entry that records it (drop the superlative, keep "a debugging
+discipline over hash-addressed artifacts — receipts all the way
+down"), and the artifacts stay load-bearing either way — the same
+F5/F6 regime: MEASURE, never massage.
+
+The inverse overreach is pre-failed too: gates passing scope the claim
+to stdlib-v1-scale programs and agent debuggers, structural evidence
+only — a blast radius out to "all agent work" is a future chapter with
+its own corpus, never this one's marketing. Measured numbers live in
+the corpus README (`scripts/forensics-corpus/README.md`) and the
+chapter agent note.
+
 ---
 
 ## RUNTIME PURITY THESIS — the pure-step core (not an F-class failure)

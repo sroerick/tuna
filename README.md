@@ -207,7 +207,7 @@ tests/        alcotest suites (unit / compiler / prim / store / differential)
 dune runtest                     # 60+ alcotest suites + 24-entry differential corpus (3 engines agree)
 scripts/smoke-api.sh             # 14 sections over a live server
 scripts/smoke-ui.sh              # 17 sections over the htmx UI
-scripts/verify-1..7-*.sh         # acceptance criteria 1–7 (callable in any order, exit 0 on green)
+scripts/verify-1..10-*.sh        # acceptance criteria 1–10 (callable in any order, exit 0 on green)
 borge lint && borge report       # book/reality consistency
 ```
 

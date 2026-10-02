@@ -11,7 +11,7 @@
       or fail in public. Sequenced after stdlib v1: the fault
       corpus injects into stdlib-bound programs, honoring the
       vocabulary-first dogfood gate.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section forensics-v1
   (doc "The protocol is a LOOP over existing API objects with zero
@@ -21,9 +21,9 @@
         hashes. No new kernel code is in scope (core byte-identical
         rule as stdlib); implementation lands as scripts plus one
         verify number.")
-  (status planned)
+  (status implemented)
   (subsection protocol
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       SEAL. The failing run rides its deriv record: pinned program
@@ -57,7 +57,7 @@
       That is the collaboration claim - debugging without shared
       state. |))))
   (subsection fault-corpus
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       N >= 12 deliberate faults over stdlib-v1-bound programs, four
@@ -79,9 +79,21 @@
       mutation (never hand-edited), so the corpus is itself
       reproducible, and every injected mutation lands as a
       journaled CAS patch - the corpus is auditable history like
-      everything else. |))))
+      everything else.
+
+      OUTCOME 2026-10-04: N = 15 faults (8 class-1, 3 class-2,
+      2 class-3, 2 class-4), all scripted-mutated and injected as
+      CAS patches (scripts/forensics-corpus/forensics.py + tree.py;
+      per-fault annotations in the driver's FAULTS table, protocol
+      curl sequence and fault table in the corpus README).
+      Every class-1/2 fault is an OBSERVED behavior change (a
+      deliberate fault, not an inert edit); class-1 first-diff
+      localizes the exact mutation path (path+"1" for swap-arms,
+      where the swapped fork keeps its shape and diff descends)
+      and class-2 first-diff lands at the def boundary with a
+      provenance-named span. |))))
   (subsection measurable-claims
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Gates the chapter can pass or fail in public. Numbers stay
@@ -98,9 +110,10 @@
          transcript queries are part of the compared state.
       4. COUNTERFACTUAL. Every class-3 fault's fork reaches a
          different terminal status, and replay-verify passes both
-         records.
+         records; every class-4 omega closes as `loop` with a
+         named (fun, arg) closure pair, never a fuel burn.
       5. UNATTENDED. The full loop seal->handoff runs as
-         scripts/verify-9-forensics.sh against the live server
+         scripts/verify-10-forensics.sh against the live server
          with zero human state; exit 0 green, 1 any-miss, 2
          malformed, mirroring deriv-check exit semantics.
       CLAIMS DELIBERATELY NOT MADE (recorded so future agents do
@@ -112,15 +125,17 @@
       law pins identical program + inputs across engines, and is a
       workload signal (broken base cases flame up as count or fuel
       deltas) plus a record-integrity pin (deriv equality) - which
-      is all this corpus claims through it. |))))
+      is all this corpus claims through it. The counterexample is
+      PINNED in the corpus and re-checked on every gate run (two
+      programs, identical step counts, different result trees). |))))
   (subsection acceptance
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       1. The corpus lands with scripted mutation sources plus
          expected annotations; every injection is a journaled CAS
          patch.
-      2. scripts/verify-9-forensics.sh reports the measured number
+      2. scripts/verify-10-forensics.sh reports the measured number
          beside each gate; a miss is recorded in FINDINGS.md under
          the failure definition below, never an unpassed test kept
          adjacent-undocumented.
@@ -130,12 +145,27 @@
       4. SEQUENCING GATE: make follows stdlib v1's acceptance -
          faults ride stdlib programs, so this corpus says nothing
          until the vocabulary exists.
-      5. borge lint/report green; the full battery green. |))))
+      5. borge lint/report green; the full battery green.
+
+      AGENT NOTE 2026-10-04 (measured, verify-10 green): corpus
+      15 faults; gate 1 class-1 8/8 = 100.0% exact mutation path
+      (>=90), class-2 3/3 = 100.0% def boundary + provenance span
+      (>=80); gate 2 class-1/2 max 2 queries (<=8), class-3 max 1
+      (<=12); gate 3 collaboration agree exactly across the driver
+      re-run from the same starting hashes; gate 4 class-3 2/2
+      different terminal with both records verified, class-4 2/2
+      `loop` with a closure pair and verified replay; gate 5 the
+      unattended script itself; counterexample pinned.
+      SCOPE (chapter acceptance 3 + the inverse overreach): gates
+      passing scopes the claim to stdlib-v1-scale programs and agent
+      debuggers only - structural evidence, not a claim about all
+      agent work; a broader blast radius is a future chapter with
+      its own corpus. |))))
   (subsection pre-registered-failure
-   (status planned)
+   (status implemented)
    (details
     (doc (|
-      F7 SUPERLATIVE OVERREACH. TRIGGER: any frozen gate 1-5
+      F9 SUPERLATIVE OVERREACH. TRIGGER: any frozen gate 1-5
       misses. THEN: the operator pitch language drops the word
       EXTREMELY and retains 'a debugging discipline over
       hash-addressed artifacts - receipts all the way down'; the
@@ -145,4 +175,10 @@
       inverse overreach is also pre-failed: gates passing scopes
       the claim to stdlib-v1-scale programs and agent debuggers
       only; any blast radius out to 'all agent work' is a future
-      chapter with its own corpus, never this one's marketing. |))))))
+      chapter with its own corpus, never this one's marketing.
+
+      OUTCOME 2026-10-04: NOT TRIGGERED - all five gates pass at the
+      frozen thresholds (measured numbers above). F9 is registered
+      in FINDINGS.md as a placeholder: the trigger is live, the
+      evidence is the verify-10 run, and any future gate miss is
+      recorded there as F9, never smoothed. |))))))
