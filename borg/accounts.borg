@@ -1,0 +1,157 @@
+(project tuna-accounts
+ (doc "Tuna book chapter: the pp-slice - tuna as a pricklypear-like live habitat slice. Two credential tiers over ONE identity store (bearer tokens for agents, opaque cookie sessions for browsers), admin-only identity minting with non-admin defaults, and the anonymous public rim (welcome, /code, /agent.txt, /.well-known/agent.json, /src.tgz). Research question, stated so it can be refuted: a tree-calculus habitat whose access law is already 'the route record is the capability' (borg/routes.borg law 3) needs NO second permission matrix for a human tier - browser sessions can ride the same identities rows and the same path-prefix grants, so the whole pp-slice lands as additive credential tables plus reserved public surfaces, never a new authz model.")
+ (status implemented)
+ (convention ocaml-dune)
+ (section accounts
+  (doc "The identity store stays singular: `identities` (0001) is the one subject table; the pp-slice adds credentials, sessions, and an audit log beside it, and the public face is reserved surfaces that match before the route dispatcher (routes.borg law 2). Nothing here resolves names at a prim boundary - grants remain arguments (AGENTS 7).")
+  (status implemented)
+  (subsection credential-tiers
+   (status implemented)
+   (details
+    (doc (|
+      Tuna has ONE subject table (`identities`, migration 0001;
+      `is_admin` gates only the four admin acts - mint identities,
+      route publish, grant admin view, others' grants) and now two
+      credential tiers over it, both resolving to a `Store.identity`:
+
+      BEARER (agent tier, unchanged).  `Authorization: Bearer
+      <token>` on every `/api/*` route; sha256 stored in
+      `identities.token_hash`; boot mints root (TUNA_BOOTSTRAP_TOKEN,
+      printed once) and fed peers per TUNA_FED_PEERS.
+
+      SESSION (human tier, the pp-slice).  Migration 0013 adds
+      `credentials(kind, secret_hash, unique(identity_id, kind))`,
+      `auth_sessions(token_hash, expires_at, revoked_at)` and
+      `auth_log`.  POST /login accepts username+password OR a bearer
+      token; BOTH mint an opaque session row (32 random bytes hex;
+      only its sha256 is stored; 14-day TTL) and set the
+      `tuna_session` cookie HttpOnly + SameSite=Lax.  The cookie
+      carries ONLY the session token - it supersedes the v0 stance
+      where the cookie carried a raw bearer.  Logout revokes the
+      row.  `Api.authenticate` keeps bearer FIRST (agents) and falls
+      back to the session cookie (browser clients on /api/*).
+
+      INTERIM HASHING, NAMED.  `credentials.secret_hash` uses the
+      PP-compatible interim string `sha256$salt$digest` with
+      `digest = sha256(salt_hex ^ ":" ^ password)`, salt from
+      /dev/urandom.  Not a memory-hard KDF; argon2id is the planned
+      drop-in and the format is string-compatible so a future
+      upgrade verifies legacy rows and transparently rehashes on
+      success - no flag day.  Verify is constant-time; an unknown
+      username is timing-flattened against a fixed dummy hash so the
+      endpoint does not oracle account existence.  No CSRF token and
+      no login throttle yet; `auth_log` exists so a throttle/forensics
+      pass has data instead of guesses.
+
+      BOOT.  `TUNA_BOOTSTRAP_PASSWORD` (optional) ensures root's
+      password credential each boot; setting a new value rotates it.
+      Unset means no insecure default - root signs in by its bearer
+      token at the login page's token form. |))))
+  (subsection identity-minting
+   (status implemented)
+   (details
+    (doc (|
+      Identity minting is the ONE admin gate that is not a grant
+      (the subject exists before any grant can reference it):
+      `POST /api/identities` and the `/identities` htmx page mint a
+      NON-ADMIN identity by default (`admin=true` is an explicit
+      opt-in) and return its bearer token ONCE alongside an optional
+      initial password.  `GET /api/identities` is the roster, no
+      token hashes.  A non-admin gets 403 on mint.
+
+      BOUNDARY AUDIT (the plan's T2 question).  A non-admin identity
+      already behaves as intended because the authority is the grant
+      row, not the identity kind: it can run/compile, keep its own
+      REPL dictionary (per-identity dest), mint/attenuate/revoke its
+      OWN grants (store holder checks), and read public pages.  It
+      cannot mint identities (new is_admin gate), revoke others'
+      grants (holder check), or write outside its path-prefix garden
+      (grants are the only capability at a prim boundary, and route
+      publish requires a covering grant).  No second permission
+      matrix was added - the audit found no hole that needed one. |))))
+  (subsection public-rim
+   (status implemented)
+   (details
+    (doc (|
+      The hard-public face is reserved (routes.borg law 2 list grew
+      by this book change: welcome, code, agent.txt, src.tgz,
+      .well-known, identities), so a route record can never shadow
+      it.  All anonymous, matching before the route dispatcher:
+
+      /welcome   front page: what tuna is, the calculus in two
+                 lines, links to /code, the manifests, /src.tgz,
+                 /login, /health.
+      /code      read-only browser for newest programs + runs
+                 (data-first; a server page, not a route record,
+                 because it carries no capability and lists dynamic
+                 rows - recorded call per the routes chapter).
+      /agent.txt / /.well-known/agent.json   agent manifest
+                 generated in OCaml (server/lib/agent.ml, shaped
+                 after PP's agent_discovery): auth model, first
+                 calls, endpoint census, replay + deriv verify
+                 surfaces, htmx hints.  Base URL derived from the
+                 request's forwarded host headers, so it is correct
+                 behind a reverse proxy.
+      /src.tgz   the server's own source at HEAD.  Generated by
+                 scripts/deploy/build-public.sh (`git archive HEAD`,
+                 no _build, no secrets) into TUNA_PUBLIC_DIR and
+                 served from disk by Dream.from_filesystem - no
+                 github dependency at serve time.  Reflects HEAD at
+                 the last build-public run, not necessarily the
+                 running binary.
+      /health    tokenless liveness, unchanged. |))))
+  (subsection acceptance
+   (status implemented)
+   (details
+    (doc (|
+      1. PUBLIC SURFACES.  Against a live isolated instance,
+         /welcome /code /agent.txt /.well-known/agent.json /health
+         answer 200 anonymously; /src.tgz is a valid gzipped tar;
+         unknown public paths are plain 404.  `scripts/smoke-public.sh`.
+      2. SESSION TIER.  Password login mints a session cookie; the
+         cookie drives /api/*; logout revokes it and the same cookie
+         then 401s.  Bearer still works on /api/*; unauthenticated
+         /api/* is 401.  `tests/session_tests.ml` (PG-gated, own
+         scratch db) + smoke-public [10].
+      3. MINTING.  An admin mints a NON-ADMIN identity + password;
+         the returned bearer token authenticates; the minted identity
+         is 403 on identity mint; the admin /identities page shows
+         the form and a non-admin sees an explanation, not the form.
+         smoke-public [8][9][11].
+      4. BOOK/REALITY.  `borge lint && borge report` clean; the
+         routes reserved list transcribed in server/lib/routes.ml
+         matches the pinned list in borg/routes.borg.
+
+      OUTCOMES 2026-10-02 - green.
+      - T1 (0013) + tests/session_tests.ml green under scratch db.
+      - T2 API + /identities page; smoke-public [8][9] green.
+      - T3 public face (agent.ml + pages/public.ml + src.tgz slot);
+        smoke-public [1]-[6][12] green.
+      - T4 scripts/serve.sh + scripts/deploy/{build-public.sh,
+        tuna.service,reverse-proxy.md}; serve.sh start boots PG +
+        migrations + build + src.tgz + server on :18092.
+      - T5 this chapter + only one inline line in tuna.borg; full
+        `dune build @all && dune runtest tests` green, all three
+        smokes (public + api + ui) green against :18092. |))))
+  (subsection pre-registered-failures
+   (status implemented)
+   (details
+    (doc (|
+      F10 SESSION CONFUSION.  The two credential tiers drift into
+      two authorization models (a session that is implicitly more
+      privileged than its bearer, or a second permission matrix
+      beside the grant rows).  TRIGGER: any pp-slice change that
+      resolves a session to anything other than its identity's
+      grants + is_admin.  THEN: it is a book issue - the authority
+      is the grant row (AGENTS 7); revert, or amend this chapter
+      and routes.borg together in the open.
+
+      F11 RIM SHADOWING.  A route record begins serving a reserved
+      public path (a stale reserved list, a new /src-like surface
+      added in code without the book change).  TRIGGER: dispatch
+      answers a reserved site path, or the transcribed list in
+      routes.ml diverges from borg/routes.borg.  THEN: the book
+      change lands FIRST (the list grows by book change, never in
+      code), the code list follows in the same commit, and a
+      regression test pins the collision denial. |)))))
+)

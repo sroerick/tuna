@@ -117,9 +117,12 @@ let bearer_token req =
   | _ -> None
 
 let authenticate pool req =
+  (* the rim (pp-slice accounts): bearer FIRST (the agent tier,
+     unchanged), then the session cookie (the browser tier: a
+     logged-in session may drive /api/* exactly like PP's pp_session;
+     CSRF is the recorded honest limitation, SameSite=Lax only) *)
   match bearer_token req with
-  | None -> Lwt.return None
-  | Some token ->
+  | Some token -> (
       Store.verify_token pool token
       >>= function
       | None -> Lwt.return None
@@ -128,7 +131,20 @@ let authenticate pool req =
             (Some
                { auth_id = i.Store.i_id
                ; auth_name = i.Store.i_name
-               ; auth_is_admin = i.Store.i_is_admin })
+               ; auth_is_admin = i.Store.i_is_admin }))
+  | None -> (
+      match Dream.cookie req ~decrypt:false Auth.cookie_name with
+      | None -> Lwt.return None
+      | Some tok ->
+          Store.verify_session pool tok
+          >>= function
+          | None -> Lwt.return None
+          | Some i ->
+              Lwt.return
+                (Some
+                   { auth_id = i.Store.i_id
+                   ; auth_name = i.Store.i_name
+                   ; auth_is_admin = i.Store.i_is_admin }))
 
 (* 5xx guard: domain/store errors become a JSON 500 with the message;
    Dream's default handler would otherwise answer html. *)
@@ -856,6 +872,66 @@ let revoke_grant pool auth req =
               Store.revoke_grant pool id
               >>= fun () ->
                (j_ok (`Assoc [ ("revoked", `String id) ])))
+
+(* -- identities (pp-slice T2: admin-only minting) --------------------
+
+   Minting is the one admin gate that is not a grant: only an admin
+   identity may create another identity.  The response carries the
+   bearer token ONCE (only its sha256 is stored); pass "password" to
+   also set an initial browser credential.  The new identity is
+   NON-ADMIN unless the caller explicitly asks for admin=true — the
+   slice's default posture.  GET lists the roster (never token
+   hashes). *)
+
+let post_identity pool auth req =
+  if not auth.auth_is_admin then
+    (j_err ~code:403 "only an admin identity may mint identities")
+  else
+    body_json req >>= function
+    | Error msg -> (j_err msg)
+    | Ok j -> (
+        match get_string_opt j "name" with
+        | None -> (j_err "missing \"name\"")
+        | Some name -> (
+            let name = String.trim name in
+            if name = "" then (j_err "\"name\" must be non-empty")
+            else
+              let token = Tokens.random_token_hex () in
+              Store.fetch_identity_by_name pool name
+              >>= (function
+                    | Some _ -> (j_err ~code:409 "identity name already exists")
+                    | None ->
+                        let is_admin =
+                          Option.value (get_bool_opt j "is_admin") ~default:false
+                        in
+                        Store.mint_identity pool ~is_admin ~name ~token ()
+                        >>= fun i ->
+                        (match get_string_opt j "password" with
+                         | Some pw when String.trim pw <> "" ->
+                             Store.set_password pool ~identity_id:i.Store.i_id
+                               ~password:pw
+                         | _ -> Lwt.return ())
+                        >>= fun () ->
+                        (j_ok ~code:201
+                           (`Assoc
+                             [ ("id", `String i.Store.i_id)
+                             ; ("name", `String i.Store.i_name)
+                             ; ("is_admin", `Bool i.Store.i_is_admin)
+                             ; ("token", `String token) ])))))
+
+let get_identities pool _auth _req =
+  Store.list_identities pool ()
+  >>= fun ids ->
+  (j_ok
+     (`Assoc
+       [ ( "identities"
+         , `List
+             (List.map
+                (fun (i : Store.identity) ->
+                  `Assoc
+                    [ ("id", `String i.i_id); ("name", `String i.i_name)
+                    ; ("is_admin", `Bool i.i_is_admin) ])
+                ids) ) ]))
 
 (* delegation-attenuation (grants.borg §delegation-attenuation): mint a
    narrower grant FROM an existing one.  Only the holder may attenuate
@@ -1827,6 +1903,8 @@ let api_routes pool =
     ; Dream.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))
       ; Dream.post "/api/grants" (with_auth pool (post_grant pool))
+      ; Dream.post "/api/identities" (with_auth pool (post_identity pool))
+      ; Dream.get "/api/identities" (with_auth pool (get_identities pool))
       ; Dream.post "/api/grants/:id/attenuate" (with_auth pool (attenuate_grant pool))
       ; Dream.get "/api/grants/:id" (with_auth pool (get_grant pool))
       ; Dream.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))
@@ -1847,10 +1925,18 @@ let api_routes pool =
       ; Dream.get "/api/route/get" (with_auth pool (get_route_get pool))
       ; Dream.get "/api/route/list" (with_auth pool (get_route_list pool)) ]
 
+(* the public artifact directory (pp-slice T3): scripts/deploy/build-public.sh
+   writes src.tgz here at boot/refresh; absent file is a plain 404 *)
+let public_dir () =
+  match Sys.getenv_opt "TUNA_PUBLIC_DIR" with
+  | Some d when String.trim d <> "" -> String.trim d
+  | _ -> "/tmp/tuna-pp-public"
+
 (* assemble the full router: health + JSON API + human pages + static *)
 let router ?(static_dir = "server/static") pool =
   Dream.router
     (Dream.get "/health" (health pool)
+    :: Dream.get "/src.tgz" (Dream.from_filesystem (public_dir ()) "src.tgz")
     :: api_routes pool
     @ Pages.open_routes pool
     @ Pages.routes pool
@@ -1888,6 +1974,21 @@ let serve ~port ~bootstrap_token =
         Lwt.return pool
   in
   boot >>= fun pool ->
+  (* accounts tier (pp-slice): TUNA_BOOTSTRAP_PASSWORD ensures root's
+     password credential each boot — the PP_BOOTSTRAP analog, but with
+     NO insecure default: unset means root signs in by its bearer token
+     (the login page's token form); set means password logins work for
+     root.  Setting it again with a new value rotates the password. *)
+  (match Sys.getenv_opt "TUNA_BOOTSTRAP_PASSWORD" with
+   | Some pw when String.trim pw <> "" ->
+       Store.fetch_identity_by_name pool "root"
+       >>= (function
+            | Some root ->
+                Store.set_password pool ~identity_id:root.Store.i_id
+                  ~password:(String.trim pw)
+            | None -> Lwt.return ())
+   | _ -> Lwt.return ())
+  >>= fun () ->
   boot_fed_peers pool >>= fun () ->
   (* sabra stdlib v1 (borg/stdlib.borg): seed the sabralib dictionary
      by replaying every def record through the ordinary def round.

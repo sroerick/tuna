@@ -140,10 +140,29 @@ let test_capture_safety () =
                  (Tuna.Canon.encode t)
            | _ -> Alcotest.fail "expected not-leaf = true")))
 
+let test_reserved_public_face () =
+  (* borg/accounts.borg + routes.borg law 2: the pp-slice public rim is
+     reserved, so a published route record can never shadow it.  The
+     transcribed list in server/lib/routes.ml must carry every pinned
+     path (this test is the book/reality pin; borge lint catches the
+     other direction - the book list growing without code). *)
+  let pinned =
+    [ "welcome"; "code"; "agent.txt"; "src.tgz"; ".well-known"
+    ; "identities" ]
+  in
+  List.iter
+    (fun p ->
+      Alcotest.(check bool) (p ^ " is reserved") true
+        (Tuna_server.Routes.reserved_site_path p))
+    pinned
+
 let () =
   let open Alcotest in
   run "repl"
     [ ("commands", [ test_case "parse" `Quick test_parse_command ])
     ; ("dictionary", [ test_case "substitution" `Quick test_dictionary_substitution ])
     ; ( "capture"
-      , [ test_case "shadowing" `Quick test_capture_safety ] ) ]
+      , [ test_case "shadowing" `Quick test_capture_safety ] )
+    ; ( "reserved"
+      , [ test_case "pp-slice public rim is reserved" `Quick
+            test_reserved_public_face ] ) ]

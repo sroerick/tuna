@@ -1,0 +1,34 @@
+# pp-slice T4: systemd user unit exemplar.
+#
+# Install (no root; a user unit under your own systemd):
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/deploy/tuna.service ~/.config/systemd/user/tuna.service
+#   # edit WorkingDirectory + EnvironmentFile for your checkout/instance
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now tuna.service
+#   systemctl --user status tuna.service
+#
+# The service runs `scripts/serve.sh start` in the foreground-shape
+# (serve.sh daemonizes its own server; Type=oneshot would suit a
+# supervisor that also owns PG).  Here we let serve.sh own the process
+# and Restart=always re-runs it, matching the local glochid exemplar.
+[Unit]
+Description=tuna tree-calculus habitat (pp-slice)
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/dev/wyo.tech/tuna-pp
+# Per-instance knobs live in an env file (mode 600 if it holds a token):
+#   TUNA_DB_PORT=5436 TUNA_HTTP_PORT=18092 TUNA_DEV_DIR=/tmp/tuna-pp-dev
+#   TUNA_PUBLIC_DIR=/tmp/tuna-pp-public
+#   TUNA_BOOTSTRAP_TOKEN=...   (first boot prints one if unset)
+#   TUNA_BOOTSTRAP_PASSWORD=... (optional root browser password)
+EnvironmentFile=-%h/.config/tuna/env
+ExecStart=%h/dev/wyo.tech/tuna-pp/scripts/serve.sh start
+ExecStop=%h/dev/wyo.tech/tuna-pp/scripts/serve.sh stop
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=default.target

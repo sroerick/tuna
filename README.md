@@ -201,6 +201,91 @@ reference/    vendored upstream tree-calculus (normative) + CL twin
 tests/        alcotest suites (unit / compiler / prim / store / differential)
 ```
 
+## Public face (pp-slice)
+
+Tuna serves a pricklypear-shaped public rim.  The anonymous surfaces
+(reserved in `borg/routes.borg` law 2; the routes chapter's list grew
+by that book change):
+
+| path | what |
+|---|---|
+| `/welcome` | front page: what tuna is, the calculus in two lines, links |
+| `/code` | read-only browser for recent programs + runs |
+| `/agent.txt` | prose agent manifest (auth model, first calls, rules) |
+| `/.well-known/agent.json` | machine contract (endpoints, auth, discovery) |
+| `/src.tgz` | tarball of the server's own source at HEAD |
+| `/health` | tokenless liveness (`{"status":"ok","db":true}`) |
+
+`/agent.txt` and `/.well-known/agent.json` are generated in OCaml
+(`server/lib/agent.ml`) and derive their base URL from the request's
+forwarded host headers, so they are correct behind a reverse proxy.
+`/src.tgz` is served from `TUNA_PUBLIC_DIR` (default
+`/tmp/tuna-pp-public`) and produced by
+`scripts/deploy/build-public.sh`, which runs `git archive HEAD` — no
+github dependency at serve time.
+
+## Accounts: two tiers
+
+Tuna has one identity store (`identities`), used by two credential
+tiers:
+
+- **Bearer tokens** (the agent tier) — unchanged.  Every `/api/*`
+  route accepts `Authorization: Bearer <token>`.  Boot prints root's
+  once; an admin mints more.
+- **Browser sessions** (the human tier) — `POST /login` takes
+  username+password (or a bearer token) and mints an opaque session row
+  (`auth_sessions`, migration 0013); the `tuna_session` cookie is
+  HttpOnly + SameSite=Lax and carries only the session token (14-day
+  TTL, revoked on logout).
+
+Admin-only: minting identities (`POST /api/identities` or the
+`/identities` page).  A minted identity is **non-admin** by default and
+may run/compile, keep its own REPL dictionary, mint/attenuate/revoke
+its own grants, and read public pages.  It cannot mint identities,
+revoke others' grants, or touch other identities' namespaces (path-
+prefix grants garden the tree names).  `TUNA_BOOTSTRAP_PASSWORD`
+(optional) ensures root's password credential each boot; unset means
+root signs in with its bearer token at the login page's token form.
+
+## Deploy (pp-slice)
+
+One operator command on the serving host:
+
+```
+scripts/serve.sh start     # PG + migrations + build + src.tgz + serve
+scripts/serve.sh status    # :TUNA_HTTP_PORT health
+scripts/serve.sh stop
+```
+
+`scripts/serve.sh` honors every `TUNA_*` knob and is distinct from the
+dev loop (`scripts/dev.sh`).  A systemd **user** unit exemplar lives at
+`scripts/deploy/tuna.service` (copy to `~/.config/systemd/user/`, edit
+paths, `systemctl --user enable --now tuna.service`).  The TLS/edge
+fragment and the flip procedure are in
+`scripts/deploy/reverse-proxy.md`: terminate TLS at Caddy/nginx and
+forward to `127.0.0.1:$TUNA_HTTP_PORT`; tuna never sees a private key.
+Per-instance secrets live in an env file (mode 600), never in the tree.
+
+## Honest limitations (pp-slice)
+
+Recorded, not hidden:
+
+- **Interim password hashing.** Credentials use the PP-compatible
+  interim format `sha256$salt$digest` (`digest = sha256(salt ^ ":" ^
+  password)`), not a memory-hard KDF.  Argon2id is named as planned;
+  the format is string-compatible so a future upgrade verifies legacy
+  rows and transparently rehashes on success — no flag day.  There is
+  no server-side pepper yet.
+- **No CSRF token.**  The session cookie is SameSite=Lax only; browser
+  clients may drive `/api/*` with the session cookie, so same-site
+  cross-origin requests are the residual risk.  Bearer-only agents are
+  unaffected.
+- **No OAuth/JWT**, no password reset, no login throttling.  `auth_log`
+  rows exist so a throttle/forensics pass has data instead of guesses.
+- **TLS is at the reverse proxy**; tuna speaks plain HTTP on loopback.
+- **`/src.tgz` reflects HEAD at the last `build-public.sh` run**, not
+  necessarily the running binary; re-run `serve.sh start` after a pull.
+
 ## Tests & acceptance
 
 ```

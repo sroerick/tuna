@@ -102,6 +102,15 @@ let upsert_program p ~hash ~ternary ~ir ~created_by =
   | n -> store_error "program upsert: fetch after insert gave %d rows" (List.length n)
          )
 
+(* recent programs newest-first (the /code public face; content-
+   addressed, so created_by may be NULL for pre-identity rows) *)
+let list_programs p ?(limit = 200) () =
+  Db.q ~params:[ p_int limit ] p
+    "SELECT hash, ternary, ir::text, created_by::text FROM programs \
+     ORDER BY created_at DESC LIMIT $1"
+  >>= fun rows ->
+  Lwt.return (List.map (fun r -> program_of_row r "programs") rows)
+
 (* -- runs ------------------------------------------------------------ *)
 
 module Run_status = struct
@@ -1116,6 +1125,31 @@ let bootstrap_identity p ?(is_admin = true) ~name ~token () =
        | None -> store_error "bootstrap_identity: insert succeeded but fetch failed"
                  )
 
+(* admin mint (pp-slice T2): a NEW non-admin (default) identity with
+   its own bearer token.  The raw token is returned to the caller ONCE
+   and never stored (only sha256); the identity row is do-nothing on a
+   name collision (ON CONFLICT DO NOTHING) so a duplicate mint cannot
+   silently overwrite an existing identity's token — the caller sees
+   the existing row's id but the returned token will not verify. *)
+let mint_identity p ?(is_admin = false) ~name ~token () =
+  Db.q_unit
+    ~params:[ p_str name; p_str (Tuna.Hash.hex_of_string token); p_bool is_admin ]
+    p
+    "INSERT INTO identities (name, token_hash, is_admin) VALUES ($1, $2, $3) \
+     ON CONFLICT (name) DO NOTHING"
+  >>= fun () ->
+  fetch_identity_by_name p name
+  >>= (function
+       | Some i -> Lwt.return i
+       | None -> store_error "mint_identity: insert succeeded but fetch failed")
+
+(* the identities roster (admin page/API): never carries token hashes *)
+let list_identities p () =
+  Db.q p
+    "SELECT id::text, name, token_hash, is_admin FROM identities ORDER BY name"
+  >>= fun rows ->
+  Lwt.return (List.map identity_of_row rows)
+
 (* token verify (sha256 lookup) — the only identity query by secret *)
 let verify_token p token =
   Db.q ~params:[ p_str (Tuna.Hash.hex_of_string token) ] p
@@ -1125,6 +1159,136 @@ let verify_token p token =
    | [] -> Lwt.return None
    | [ r ] -> Lwt.return (Some (identity_of_row r))
    | _ -> Lwt.return None)
+
+(* -- accounts: passwords + browser sessions (0013, pp-slice) -------
+
+   The browser tier over the SAME identities: kind-tagged credentials
+   (v1: kind='password', INTERIM sha256$salt$digest — the PP legacy
+   format, argon2id named as planned in the honest-limitations tone of
+   both READMEs) and opaque session tokens (auth_sessions: only the
+   sha256 is stored, expiry + revoke-on-logout, exactly PP's
+   mint/lookup/revoke shape on flat 0001-style rows).  Bearer auth
+   above is untouched — the agent tier.  auth_log rows run alongside
+   so throttling/forensics have data, not guesses. *)
+
+(* Log an auth attempt.  Never fails a login: log rows are telemetry,
+   pp-slice has no throttle yet (chapter honest-limitations). *)
+let log_auth p ?(identity_id : string option) ~kind ~success () =
+  Lwt.catch
+    (fun () ->
+      Db.q_unit
+        ~params:[ p_opt identity_id; p_str kind; p_bool success ]
+        p
+        "INSERT INTO auth_log (identity_id, kind, success) \
+         VALUES ($1::uuid, $2, $3)"
+      >>= fun () -> Lwt.return ())
+    (fun _ -> Lwt.return ())
+
+(* Set (or rotate) an identity's password.  Upsert: one live password row
+   per identity (UNIQUE(identity_id, kind)); each call rehashes with a
+   fresh salt — a repeated set is a rotation, and boot-time ensure
+   (TUNA_BOOTSTRAP_PASSWORD) rewrites the row identically when the
+   operator leaves it alone (the salt churns but the effective secret
+   does not). *)
+let set_password p ~identity_id ~password =
+  let hash = Credentials.hash_password password in
+  Db.q_unit
+    ~params:[ p_str identity_id; p_str "password"; p_str hash ]
+    p
+    "INSERT INTO credentials (identity_id, kind, secret_hash) \
+     VALUES ($1::uuid, $2, $3) \
+     ON CONFLICT (identity_id, kind) \
+     DO UPDATE SET secret_hash = EXCLUDED.secret_hash"
+  >>= fun () -> Lwt.return ()
+
+(* Username+password verify -> identity.  Unknown usernames still pay
+   one dummy verify so known/unknown cost the same (timing flatten);
+   the row AND the hash check both have to pass, and neither failure
+   path names which half failed. *)
+let verify_password p ~username ~password =
+  fetch_identity_by_name p (String.trim username)
+  >>= (function
+       | None ->
+           let _ =
+             Credentials.verify_password password
+               ~stored:Credentials.dummy_hash
+           in
+           log_auth p ~kind:"password" ~success:false ()
+           >>= fun () -> Lwt.return None
+       | Some i ->
+           Db.q ~params:[ p_str i.i_id ] p
+             "SELECT secret_hash FROM credentials \
+              WHERE identity_id = $1::uuid AND kind = 'password'"
+           >>= (function
+               | [ r ] when
+                   Credentials.verify_password password
+                     ~stored:(text r 0 "credentials.secret") ->
+                   log_auth p ~identity_id:i.i_id ~kind:"password" ~success:true ()
+                   >>= fun () ->
+                   (* last_used_at is telemetry: a failed touch never
+                      fails the login (PP's same keep division) *)
+                   Lwt.catch
+                     (fun () ->
+                       Db.q_unit ~params:[ p_str i.i_id ] p
+                         "UPDATE credentials SET last_used_at = now() \
+                          WHERE identity_id = $1::uuid AND kind = 'password'"
+                       >>= fun () -> Lwt.return ())
+                     (fun _ -> Lwt.return ())
+                   >>= fun () -> Lwt.return (Some i)
+               | _ ->
+                   (* wrong password, no row, or more rows - one
+                      uniform deny, same log shape *)
+                   log_auth p ~identity_id:i.i_id ~kind:"password" ~success:false ()
+                   >>= fun () -> Lwt.return None))
+
+(* Mint an opaque session token for a login.  The raw token leaves the
+   process exactly once (cookie value); auth_sessions stores only its
+   sha256.  Expiry is the caller's TTL seconds (default at the login
+   handler). *)
+let mint_session p ~identity_id ~ttl_seconds =
+  let token = Credentials.mint_session_token () in
+  Db.q_unit
+    ~params:
+      [ p_str identity_id
+      ; p_str (Tuna.Hash.hex_of_string token)
+      ; p_int64 (Int64.of_int ttl_seconds) ]
+    p
+    "INSERT INTO auth_sessions (identity_id, token_hash, expires_at) \
+     VALUES ($1::uuid, $2, now() + ($3::text || ' seconds')::interval)"
+  >>= fun () ->
+  log_auth p ~identity_id ~kind:"session" ~success:true ()
+  >>= fun () -> Lwt.return token
+
+(* Verify a session cookie value -> identity.  Live = sha256 hit AND
+   not revoked AND not expired; everything else is anonymous.  Misses
+   are NOT logged: session lookups are per-page-request traffic, log
+   rows would dilute (mints and logins carry the accounts story). *)
+let verify_session p token =
+  if String.length token = 0 then Lwt.return None
+  else
+    Db.q ~params:[ p_str (Tuna.Hash.hex_of_string token) ] p
+      "SELECT i.id::text, i.name, i.token_hash, i.is_admin \
+       FROM auth_sessions s JOIN identities i ON i.id = s.identity_id \
+       WHERE s.token_hash = $1 AND s.revoked_at IS NULL \
+       AND s.expires_at > now() LIMIT 1"
+  >>= fun rows ->
+    (match rows with
+     | [] -> Lwt.return None
+     | [ r ] -> Lwt.return (Some (identity_of_row r))
+     | _ -> Lwt.return None)
+
+(* Revoke-by-token (logout).  Idempotent: an already-revoked or unknown
+   token is still a successful logout from the caller's view. *)
+let revoke_session p token =
+  Lwt.catch
+    (fun () ->
+      Db.q_unit
+        ~params:[ p_str (Tuna.Hash.hex_of_string token) ]
+        p
+        "UPDATE auth_sessions SET revoked_at = now() \
+         WHERE token_hash = $1 AND revoked_at IS NULL"
+      >>= fun () -> Lwt.return ())
+    (fun _ -> Lwt.return ())
 
 (* -- tree substrate: derived path index + chained op log (M10) --------
 
