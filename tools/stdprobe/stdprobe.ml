@@ -62,6 +62,7 @@ let () =
   d "tree-eq" "(rec-fix eq-fn)";
   d "list-eq" "(lambda (xs) (lambda (ys) (tree-eq xs ys)))";
   d "mag-canonical" "(lambda (bits) (list-fold (lambda (hd) (lambda (acc) ((tree-case ((tree-case %0 (lambda (c) (pair %10 %0)) (lambda (u) (lambda (v) %0))) hd) (lambda (c2) (pair hd acc)) (lambda (ua) (lambda (va) (pair hd acc)))) acc))) %0 bits))";
+  d "int-canonical" "(lambda (n) ((tree-case (pair %0 %0) (lambda (c) (pair %0 %0)) (lambda (sign) (lambda (mag) ((lambda (m) ((tree-case (pair %0 %0) (lambda (c2) (pair (is-stem sign) m)) (lambda (u2) (lambda (v2) (pair (is-stem sign) m)))) m)) (mag-canonical mag))))) n))";
 
   eval "not" ["%10"]; eval "not" ["%0"];
   eval "is-leaf" ["%0"]; eval "is-leaf" ["%10"]; eval "is-leaf" ["%200"];
@@ -102,6 +103,15 @@ let () =
   eval "mag-canonical" ["%20210200"];     (* [f,t,f] (=2) -> [f,t] *)
   eval "mag-canonical" ["%202102100"];    (* [f,t,t] (=6) -> unchanged *)
   eval "mag-canonical" ["%10"];           (* junk stem spine -> nil *)
+  eval "int-canonical" ["%200"];           (* +0 -> %200 *)
+  eval "int-canonical" ["%202100"];        (* +1 unchanged *)
+  eval "int-canonical" ["%2102100"];       (* -1 unchanged *)
+  eval "int-canonical" ["%2100"];          (* -0 -> +0 (both zeros one form) *)
+  eval "int-canonical" ["%20210200"];      (* +(mag [t,f]) -> +1 *)
+  eval "int-canonical" ["%2020200"];       (* +(mag [f,f]) -> +0 *)
+  eval "int-canonical" ["%22002100"];      (* junk fork sign, [t] -> +1 *)
+  eval "int-canonical" ["%0"];             (* junk leaf int -> +0 *)
+  eval "int-canonical" ["%10"];            (* junk stem int -> +0 *)
 
   eval "is-zero" ["%0"];
   eval "is-zero" ["%10"];

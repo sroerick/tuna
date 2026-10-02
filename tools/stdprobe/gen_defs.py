@@ -140,5 +140,21 @@ MAG_F = lam2("hd", "acc",
     "acc"))
 d("mag-canonical", lam("bits", L("list-fold", MAG_F, "%0", "bits")))
 
+# int-canonical: fork(sign-bool, m) with m = mag-canonical mag; m nil
+# -> both zeros one form (fork false nil), sign dropped. canonical sign
+# = is-stem (bool collision law: fork junk reads positive). junk int
+# (leaf/stem at top) -> canonical zero.
+d("int-canonical", lam("n",
+  dispatch(L("pair", "%0", "%0"),
+           lam("c", L("pair", "%0", "%0")),
+           lam2("sign", "mag",
+             L(lam("m",
+               dispatch(L("pair", "%0", "%0"),
+                        lam("c2", L("pair", L("is-stem", "sign"), "m")),
+                        lam2("u2", "v2", L("pair", L("is-stem", "sign"), "m")),
+                        "m")),
+               L("mag-canonical", "mag"))),
+           "n")))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
