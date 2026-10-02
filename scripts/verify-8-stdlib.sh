@@ -127,4 +127,49 @@ ROUNDS=$(psql_q -At -c \
   fail "expected >= $MF_COUNT sabralib-attributed def rounds, got $ROUNDS"
 echo "[8.4] sabralib rows=$COUNT, attributed rounds=$ROUNDS (>= $MF_COUNT)"
 
+echo "[8.5] ledger bridge: posting list -> balance by the int core"
+# postings [+2, -3, +1, -1] -> balance -1 ... small (F6: <=2-bit mags)
+#   +2 = 20202100, -3 = 2102102100, +1 = 202100, -1 = 2102100
+# the list (cons-as-fork): [+2, -3, +1, -1]
+POSTINGS="2202021002210210210022021002102100"  # placeholder, computed below
+POSTINGS=$(python3 - <<'PYEOF'
+def cons(h, t): return "2" + h + t
+leaf = "0"
+l = cons("20202100", cons("2102102100", cons("202100", cons("2102100", leaf))))
+print(l)
+PYEOF
+)
+OUT=$(repl "$(python3 - "$POSTINGS" <<'PYEOF'
+import json, sys
+print(json.dumps({"command": "(lambda (w) (list-fold int-add int-zero w))",
+                  "inputs": [sys.argv[1]]}))
+PYEOF
+)")
+STATUS=$(repl_field "$OUT" status)
+[ "$STATUS" = "normal" ] || fail "balance run must be normal (got $STATUS)"
+BAL=$(repl_field "$OUT" ternary)
+[ "$BAL" = "2102100" ] || fail "balance must be -1 (got $BAL)"
+RUN_ID=$(repl_field "$OUT" run_id)
+V=$(run_verify_status "$RUN_ID")
+[ "$V" = "verified" ] || fail "balance run must replay-verify (got $V)"
+echo "[8.5] balance = $BAL, replay $V; deriv seal next"
+STEPS=$(repl_field "$OUT" steps)
+
+eval "$OPAM_ENV" 2>/dev/null || true
+dune build tools/deriv-check/deriv_check.exe 2>/dev/null || \
+  fail "could not build deriv-check"
+DC=_build/default/tools/deriv-check/deriv_check.exe
+curl -sf -m 300 -H "$AUTH" "$BASE/api/runs/$RUN_ID/deriv" | $DC - >/dev/null \
+  && echo "[8.5] deriv-check exit 0 (sealed receipt verified offline)" \
+  || fail "deriv-check failed on the balance run (steps=$STEPS)"
+
+echo "[8.6] core untouched (acceptance 6)"
+BASELINE="${TUNA_STDLIB_BASELINE:-0185b1a}"
+if git diff --quiet "$BASELINE"..HEAD -- interpreter compiler common 2>/dev/null; then
+  echo "[8.6] interpreter/compiler/common byte-identical since $BASELINE"
+else
+  git diff --stat "$BASELINE"..HEAD -- interpreter compiler common || true
+  fail "core touched since $BASELINE"
+fi
+
 echo "verify-8-stdlib: green"
