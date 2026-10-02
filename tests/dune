@@ -184,3 +184,25 @@
  (action
   (bash
    "bash %{workspace_root}/scripts/test-store.sh %{exe:deriv_tests.exe} ../migrations tuna_test_deriv")))
+
+; math prim differential (borg/math-prims.borg acceptance 1): embed the
+; stdlib transcript for the in-test reference compile (same rule shape
+; as server/lib/dune's stdlib_embed)
+(rule
+ (target stdlib_defs_test.ml)
+ (deps ../stdlib/v1/core.defs ../tools/stdprobe/embed.py)
+ (action
+  (with-stdout-to %{target}
+   (run python3 %{workspace_root}/tools/stdprobe/embed.py
+     %{workspace_root}/stdlib/v1/core.defs))))
+
+(executable
+ (name math_prim_tests)
+ (modules math_prim_tests math_prim_golden stdlib_defs_test)
+ (libraries tuna tuna_interp tuna_compiler tuna_server alcotest))
+
+(rule
+ (alias runtest)
+ (deps math_prim_tests.exe (source_tree ../stdlib))
+ (action
+  (run %{exe:math_prim_tests.exe})))

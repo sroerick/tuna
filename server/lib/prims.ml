@@ -46,7 +46,15 @@ let names =
        hash-gated, puts capability-gated outside the grant map) *)
   ; "value/put"
   ; "value/get"
-  ; "value/len" ]
+  ; "value/len"
+    (* math prim family (borg/math-prims.borg; the F6 consequence):
+       host-mirrored law-5 int ops, O(bits) per call, additive under
+       contract "2" - no payload shape changes anywhere *)
+  ; "math/add"
+  ; "math/sub"
+  ; "math/mul"
+  ; "math/cmp"
+  ; "math/neg" ]
 
 let exists name = List.mem name names
 
@@ -237,4 +245,24 @@ let dispatch ~name ~args ~kv ~allowlist : answer Lwt.t =
           | Some u -> http_get ~allowlist u
           | None -> Lwt.return (`Error "http/get: url must be a string tree"))
       | [] -> Lwt.return (`Error "http/get: missing url argument"))
+  | "math/add" -> (
+      match list_of_tree args with
+      | [ a; b ] -> Lwt.return (`Ok (Math_prims.add a b))
+      | _ -> Lwt.return (`Error "math/add: args must be [a b]"))
+  | "math/sub" -> (
+      match list_of_tree args with
+      | [ a; b ] -> Lwt.return (`Ok (Math_prims.sub a b))
+      | _ -> Lwt.return (`Error "math/sub: args must be [a b]"))
+  | "math/mul" -> (
+      match list_of_tree args with
+      | [ a; b ] -> Lwt.return (`Ok (Math_prims.mul a b))
+      | _ -> Lwt.return (`Error "math/mul: args must be [a b]"))
+  | "math/cmp" -> (
+      match list_of_tree args with
+      | [ a; b ] -> Lwt.return (`Ok (Math_prims.cmp a b))
+      | _ -> Lwt.return (`Error "math/cmp: args must be [a b]"))
+  | "math/neg" -> (
+      match list_of_tree args with
+      | [ a ] -> Lwt.return (`Ok (Math_prims.neg a))
+      | _ -> Lwt.return (`Error "math/neg: args must be [a]"))
   | other -> Lwt.return (`Error ("unknown prim: " ^ other))
