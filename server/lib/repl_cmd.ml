@@ -89,7 +89,7 @@ let parse_error fmt = Printf.ksprintf (fun s -> raise (Parse_error s)) fmt
 
 let is_term_source s =
   String.length s > 0
-  && (s.[0] = '(' || s.[0] = '%' || s.[0] = '[' || s.[0] = '"'
+  && (s.[0] = '(' || s.[0] = '%' || s.[0] = '[' || s.[0] = '{' || s.[0] = '"'
      || (s.[0] >= '0' && s.[0] <= '9')
      || (s.[0] = '-' && String.length s > 1 && s.[1] >= '0' && s.[1] <= '9'))
 

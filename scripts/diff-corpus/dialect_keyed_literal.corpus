@@ -1,0 +1,9 @@
+name dialect_keyed_literal
+program 212012102100212120021201110210200200
+arg 10
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 221021002211021000
+expect_steps 10

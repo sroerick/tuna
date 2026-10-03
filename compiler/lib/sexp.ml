@@ -19,9 +19,12 @@
 
    Dialect sugar (borg/dialect.borg) is a TOTAL reader fold into this
    grammar: brackets desugar to pair-applications, decimal atoms to
-   Tree_lit of the canonical law-5 int (Tuna.Int_enc), and let to
-   nested lambda applications.  A sugar form and its hand-written twin
-   compile to the identical tree and step count (acceptance 12.1). *)
+   Tree_lit of the canonical law-5 int (Tuna.Int_enc), let to nested
+   lambda applications, and keyed literals {...} to the bracket list of
+   [key value] pairs the record vocabulary already reads (a :name key
+   reads as the dictionary name key-name; borg/dialect.borg v0.2).  A
+   sugar form and its hand-written twin compile to the identical tree
+   and step count (acceptance 12.1). *)
 
 exception Lex_error of int * string
 
@@ -30,10 +33,10 @@ open Ir
 (* ---------- lexer ---------- *)
 
 let is_delim c =
-  c = '(' || c = ')' || c = '[' || c = ']' || c = ';' || c = '%' || c = ' '
-  || c = '\t' || c = '\n' || c = '\r'
+  c = '(' || c = ')' || c = '[' || c = ']' || c = '{' || c = '}' || c = ':'
+  || c = ';' || c = '%' || c = ' ' || c = '\t' || c = '\n' || c = '\r'
 
-type token = LP | RP | LB | RB | Atom of int * string
+type token = LP | RP | LB | RB | LC | RC | Atom of int * string
 
 let lex (src : string) : token list =
   let toks = ref [] in
@@ -57,6 +60,29 @@ let lex (src : string) : token list =
     else if c = ']' then (
       push RB;
       incr i)
+    else if c = '{' then (
+      push LC;
+      incr i)
+    else if c = '}' then (
+      push RC;
+      incr i)
+    else if c = ':' then begin
+      (* a keyed-literal key: ":name" lexes as an atom spelled with the
+         leading colon; the parser maps it to the dictionary name
+         "key-name" inside {...}. *)
+      let start = !i in
+      incr i;
+      let j = ref !i in
+      while
+        !j < n
+        && src.[!j] <> ':' && src.[!j] <> '{' && src.[!j] <> '}'
+        && src.[!j] <> '[' && src.[!j] <> ']' && src.[!j] <> '(' && src.[!j] <> ')'
+        && not (src.[!j] = ' ' || src.[!j] = '\t' || src.[!j] = '\n' || src.[!j] = '\r')
+      do incr j done;
+      if !j = !i then raise (Lex_error (start, "empty key after ':'"));
+      push (Atom (start, String.sub src start (!j - start)));
+      i := !j
+    end
     else if c = '%' then begin
       let start = !i in
       incr i;
@@ -147,9 +173,46 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
         raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found ']'" what start))
     | Some LB ->
         raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found '['" what start))
+    | Some RC ->
+        raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found '}'" what start))
+    | Some LC ->
+        raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found '{'" what start))
     | None -> raise (Ir.Error ([], Printf.sprintf "%s: unterminated list at offset %d" what start))
   in
-    let rec parse_term scope =
+    let resolve_atom scope off (a : string) : Ir.t =
+    (* resolve a bare name: lambda scope > dictionary > builtin > pending
+       unbound.  Shared by ordinary occurrences and keyed-literal keys
+       ("key-<name>"), so a :name key reads exactly as the atom key-name. *)
+    if List.find_opt (fun name -> name = a) scope <> None then
+      Var ({ id = fresh (); span = { off; len = String.length a }; name = a })
+    else
+      try
+        let tree = Hashtbl.find dict a in
+        Tree_lit ({ id = fresh (); span = { off; len = String.length a }; tree })
+      with Not_found -> (
+        match builtin_tree a with
+        | Some tree ->
+            Tree_lit ({ id = fresh (); span = { off; len = String.length a }; tree })
+        | None ->
+            let vid = fresh () in
+            pending := { var_id = vid; name = a; off } :: !pending;
+            Var ({ id = vid; span = { off; len = String.length a }; name = a }))
+  in
+  (* [a b c] and every keyed-literal pair share this construction: the
+     cons chain (pair a (pair b (pair c 0))).  pair is the Leaf literal,
+     the terminal 0 the leaf literal. *)
+  let pair_chain sp (elems : Ir.t list) : Ir.t =
+    let pair_head () = Tree_lit { id = fresh (); span = sp; tree = Tuna.Tree.Leaf } in
+    let tail = Leaf_lit { id = fresh (); span = sp } in
+    List.fold_right
+      (fun e acc ->
+        App
+          { id = fresh (); span = sp
+          ; fn = App { id = fresh (); span = sp; fn = pair_head (); arg = e }
+          ; arg = acc })
+      elems tail
+  in
+  let rec parse_term scope =
       match peek () with
       | None -> raise (Ir.Error ([], "unexpected end of input"))
       | Some LP -> (
@@ -208,6 +271,20 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
                         Printf.sprintf
                           "prim: expected a quoted name at offset %d, found ']'"
                           start))
+              | Some LC ->
+                  raise
+                    (Ir.Error
+                       ([],
+                        Printf.sprintf
+                          "prim: expected a quoted name at offset %d, found '{'"
+                          start))
+              | Some RC ->
+                  raise
+                    (Ir.Error
+                       ([],
+                        Printf.sprintf
+                          "prim: expected a quoted name at offset %d, found '}'"
+                          start))
               | None ->
                   raise
                     (Ir.Error
@@ -217,7 +294,7 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
             let args = ref [] in
             let rec collect () =
               match peek () with
-              | Some (Atom (_, _)) | Some LP | Some LB ->
+              | Some (Atom (_, _)) | Some LP | Some LB | Some LC ->
                   args := parse_term scope :: !args;
                   collect ()
               | _ -> ()
@@ -234,7 +311,7 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
             let args = ref [] in
             let rec collect () =
               match peek () with
-              | Some (Atom (_, _)) | Some LP | Some LB ->
+              | Some (Atom (_, _)) | Some LP | Some LB | Some LC ->
                   args := parse_term scope :: !args;
                   collect ()
               | _ -> ()
@@ -256,13 +333,17 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
         let rec collect () =
           match peek () with
           | Some RB -> advance ()
-          | Some (Atom (_, _)) | Some LP | Some LB ->
+          | Some (Atom (_, _)) | Some LP | Some LB | Some LC ->
               elems := parse_term scope :: !elems;
               collect ()
           | Some RP ->
               raise
                 (Ir.Error
                    ([], Printf.sprintf "[list]: expected ']' at offset %d, found ')'" start))
+          | Some RC ->
+              raise
+                (Ir.Error
+                   ([], Printf.sprintf "[list]: expected ']' at offset %d, found '}'" start))
           | None ->
               raise
                 (Ir.Error
@@ -270,23 +351,56 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
         in
         collect ();
         let sp : Ir.span = { off = start; len = !pos - start } in
-        (* [a b c] desugars to the cons chain (pair a (pair b (pair c 0)))
-           — the exact term the hand twin writes, so the compiled tree and
-           step count are identical (acceptance 12.1).  pair is the Leaf
-           literal; the terminal 0 is the leaf literal. *)
-        let pair_head sp =
-          Tree_lit { id = fresh (); span = sp; tree = Tuna.Tree.Leaf }
+        pair_chain sp (List.rev !elems)
+    | Some RC ->
+        raise (Ir.Error ([], Printf.sprintf "unexpected '}' at offset %d" !pos))
+    | Some LC ->
+        (* {..}: a KEYED LITERAL (borg/dialect.borg v0.2).  Each entry
+           is a :name key followed by a value term; the form desugars to
+           the bracket list of [key-value value] two-lists the record
+           vocabulary already reads.  A :name key resolves to the
+           dictionary name "key-name" (scope > dictionary > builtin),
+           exactly as a bare atom would, so the schema stays data.
+           The desugar is [key value] = (pair key (pair value 0)). *)
+        advance ();
+        let start = !pos - 1 in
+        let pairs = ref [] in
+        let rec key_loop () =
+          match peek () with
+          | Some RC -> advance ()
+          | Some (Atom (kot, k)) when String.length k > 0 && k.[0] = ':' -> (
+              advance ();
+              let name = String.sub k 1 (String.length k - 1) in
+              let key_ir = resolve_atom scope kot ("key-" ^ name) in
+              let val_ir =
+                match peek () with
+                | Some RC ->
+                    raise
+                      (Ir.Error
+                         ([],
+                          Printf.sprintf "{%s}: needs a value at offset %d" k
+                            start))
+                | _ -> parse_term scope
+              in
+              let sp : Ir.span = { off = kot; len = String.length k } in
+              pairs := pair_chain sp [ key_ir; val_ir ] :: !pairs;
+              key_loop ())
+          | Some (Atom (_, a)) ->
+              raise
+                (Ir.Error
+                   ( [],
+                     Printf.sprintf
+                       "{{}: expected a :key at offset %d, found %S" start a ))
+          | _ ->
+              raise
+                (Ir.Error
+                   ([],
+                    Printf.sprintf
+                      "{{}: expected '}' or a :key at offset %d" start))
         in
-        let tail = Leaf_lit { id = fresh (); span = sp } in
-        List.fold_right
-          (fun e acc ->
-            App
-              { id = fresh (); span = sp
-              ; fn =
-                  App
-                    { id = fresh (); span = sp; fn = pair_head sp; arg = e }
-              ; arg = acc })
-          (List.rev !elems) tail
+        key_loop ();
+        let sp : Ir.span = { off = start; len = !pos - start } in
+        pair_chain sp (List.rev !pairs)
     | Some (Atom (off, a)) -> (
         advance ();
         match a.[0] with
@@ -322,33 +436,7 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
                 let tree = Option.get (Tuna.Int_enc.of_decimal_atom a) in
                 let sp : Ir.span = { off; len = String.length a } in
                 Tree_lit ({ id = fresh (); span = sp; tree })
-              else if is_var_atom a then (
-                match List.find_opt (fun name -> name = a) scope with
-                | Some _ ->
-                    let sp : Ir.span = { off; len = String.length a } in
-                    Var ({ id = fresh (); span = sp; name = a })
-                | None -> (
-                    (try
-                       (* dictionary-bound name (M9): the REPL's defines are
-                          read as literal trees — compile IS reduction keeps
-                          holding, and the value's tree appears in the tags
-                          under the occurrence's own span *)
-                       let tree = Hashtbl.find dict a in
-                       let sp : Ir.span = { off; len = String.length a } in
-                       Tree_lit ({ id = fresh (); span = sp; tree })
-                     with Not_found -> (
-                         match builtin_tree a with
-                         | Some tree ->
-                             let sp : Ir.span = { off; len = String.length a } in
-                             Tree_lit ({ id = fresh (); span = sp; tree })
-                         | None ->
-                             let vid = fresh () in
-                             pending :=
-                               { var_id = vid; name = a; off } :: !pending;
-                             (* placeholder node; will abort after the walk below *)
-                             Var
-                               ({ id = vid; span = { off; len = String.length a }
-                                ; name = a })))))
+              else if is_var_atom a then resolve_atom scope off a
               else
                 raise
                   (Ir.Error

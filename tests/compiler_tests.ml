@@ -163,6 +163,48 @@ let sugar_tests =
       "unexpected ')'";
   ]
 
+(* keyed literals: a {...} form maps each :name key to the dictionary
+   name key-name and desugars to the bracket list of [key value] pairs;
+   with the key-* defs in the dictionary, the form and its hand twin
+   compile to the identical tree (borg/dialect.borg v0.2). *)
+let keyed_tests =
+  let dict =
+    [ ("key-state", Tuna.Canon.parse_exn "10")
+    ; ("key-title", Tuna.Canon.parse_exn "110")
+    ; ("key-who", Tuna.Canon.parse_exn "1110")
+    ; ("key-when", Tuna.Canon.parse_exn "11110") ]
+  in
+  let comp src = Tuna_compiler.Bracket.compile_source ~dictionary:dict src in
+  let keyed name form twin =
+    Alcotest.test_case name `Quick (fun () ->
+        let a = comp form and b = comp twin in
+        Alcotest.(check string) (name ^ ": identical ternary") b.ternary a.ternary;
+        Alcotest.(check int) (name ^ ": identical steps") b.steps a.steps)
+  in
+  [
+    keyed "one key" "{:state 1}" "[[key-state 1]]";
+    keyed "two keys" "{:state 1 :title \"x\"}"
+      "[[key-state 1] [key-title \"x\"]]";
+    keyed "keyed literal in a let" "(let ((r {:state 1})) r)"
+      "(let ((r [[key-state 1]])) r)";
+    keyed "keyed literal as an application argument"
+      "(lambda (f) (f {:state 1}))" "(lambda (f) (f [[key-state 1]]))";
+    keyed "empty keyed literal is the empty list" "{}" "[]";
+    Alcotest.test_case "keyed key resolves through the dictionary" `Quick
+      (fun () ->
+        (* a missing key names the missing key-<name> def *)
+        match comp "{:nope 1}" with
+        | _ -> Alcotest.fail "expected unbound key-nope"
+        | exception Tuna_compiler.Ir.Error (_, msg) ->
+            Alcotest.(check bool) "names key-nope" true
+              (let needle = "key-nope" and n = String.length "key-nope" in
+               let rec go i =
+                 i + n <= String.length msg
+                 && (String.sub msg i n = needle || go (i + 1))
+               in
+               go 0));
+  ]
+
 let int_codec_tests =
   List.map
     (fun (name, f) -> Alcotest.test_case name `Quick f)
@@ -373,6 +415,7 @@ let () =
         ("reader", reader_tests);
         ("dialect", dialect_tests);
         ("dialect sugar", sugar_tests);
+        ("keyed literals", keyed_tests);
         ("int codec", int_codec_tests);
         ("compile", compile_tests);
       ("extensional", extensional_tests);
