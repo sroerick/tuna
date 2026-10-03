@@ -66,6 +66,24 @@ let cases =
   ; ("stdlib_mag-mul-fn", ("(((rec-fix mag-mul-fn) (pair %10 %0) w) %0)", "%2102100"))
   ; ("stdlib_mag-mul", ("(mag-mul w %202100)", "%2102100"))
   ; ("stdlib_int-mul", ("(int-mul w %20202100)", "%2102100"))
+  ; ( "dialect_rec-get-present",
+      ("(rec-get %202100 w)", "%222021002021020210022202021002000") )
+  ; ( "dialect_rec-get-absent",
+      ("(rec-get %20202100 w)", "%222021002021020210022202021002000") )
+  ; ( "dialect_rec-has",
+      ("(rec-has %202100 w)", "%222021002021020210022202021002000") )
+  ; ( "dialect_rec-val",
+      ("(rec-val %202100 w)", "%222021002021020210022202021002000") )
+  ; ( "dialect_rec-upd",
+      ("(rec-upd %202100 %20202100 w)", "%222021002021020210022202021002000") )
+  ; ( "dialect_list-filter",
+      ("(list-filter is-leaf w)", "%2100") )
+  ; ( "dialect_bracket_let",
+      ("(let ((a 1) (b 2)) [a b 42 -7])", "%0") )
+  ; ( "dialect_bracket_arg",
+      ("[w 1 2]", "%110") )
+  ; ( "dialect_record_shape",
+      ("[[1 w] [2 0]]", "%10") )
   ]
 
 let () =

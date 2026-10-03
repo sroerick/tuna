@@ -344,6 +344,88 @@ d("int-mul", lam("x", lam("y",
       "ca")),
     L("int-canonical", "y"))), L("int-canonical", "x")))))
 
+# ---- L4 records (borg/dialect.borg records; stdlib v1.1 additive) ----
+#
+# A record IS A LIST of (key value) TWO-LISTS, per the ONE list law.
+# An ENTRY is the bracket form [k v] = (pair k (pair v 0)) = a 2-list:
+#   first entry        = k        (the key)
+#   first (second e)   = v        (the value; second e is the [v] tail)
+# Keys are small-nat tags (law 4) by default; ANY tree keys a lookup
+# because comparison is tree-eq (cstr string keys work too, priced by
+# the fuel table).  Options follow law 3: none = leaf, some x = stem x.
+#
+# list-fold is fold-RIGHT: f e1 (f e2 ..).  A later bind can overwrite
+# acc, so the OUTERMOST (leftmost) duplicate key wins deterministically.
+d("none", "%0")
+d("some", lam("x", L("%0", "x")))
+
+# rec-get: leftmost matching value as an option; none when absent.
+# tree-case reads the bool from tree-eq (leaf=false -> keep acc;
+# stem=true -> this entry's value; fork/junk -> keep acc).
+d("rec-get", lam("key", lam("rec",
+  L("list-fold",
+    lam("kv", lam("acc",
+      dispatch("acc",
+               lam("c", L("some", L("first", L("second", "kv")))),
+               lam2("l", "r", "acc"),
+               L("tree-eq", L("first", "kv"), "key")))),
+    "%0",
+    "rec"))))
+
+# rec-val: the raw value under key, or leaf (=0 = none) when absent.
+# Unwraps the option convention (none=leaf, some x=stem x) so arithmetic
+# consumers do not each re-implement the tree-case.
+d("rec-val", lam("key", lam("rec",
+  L(L("tree-case",
+      "%0",
+      lam("c", "c"),
+      lam2("l", "r", "%0")),
+    L("rec-get", "key", "rec")))))
+
+# rec-has: the option is stem exactly when the key was found.
+d("rec-has", lam("key", lam("rec",
+  L("is-stem", L("rec-get", "key", "rec")))))
+
+# rec-replace rebuilds a matching entry as a fresh [key val] two-list,
+# keeping order; absent keys are left alone (rec-upd owns appending).
+d("rec-replace", lam("key", lam("val", lam("rec",
+  L("list-fold",
+    lam("kv", lam("acc",
+      L("pair",
+        dispatch("kv",
+                 lam("c", L("pair", "key", L("pair", "val", "%0"))),
+                 lam2("l", "r", "kv"),
+                 L("tree-eq", L("first", "kv"), "key")),
+        "acc"))),
+    "%0",
+    "rec")))))
+
+# rec-upd: replace if present, else append [key val] at the end.  On
+# unique-key records (which rec-upd itself maintains) this is "set".
+# if(THEN ELSE COND): cond is rec-has (stem=true -> keep replaced).
+d("rec-upd", lam("key", lam("val", lam("rec",
+  L(lam("replaced",
+      L("if",
+        "replaced",
+        L("list-append", "replaced",
+          L("pair", L("pair", "key", L("pair", "val", "%0")), "%0")),
+        L("rec-has", "key", "rec"))),
+    L("rec-replace", "key", "val", "rec"))))))
+
+# ---- L4 list helpers (borg/dialect.borg; cited by the todo port) ----
+
+# list-filter: keep elements for which pred answers stem (true); the
+# empty leaf answers false.  Preserves order.
+d("list-filter", lam("pred", lam("xs",
+  L("list-fold",
+    lam("x", lam("acc",
+      dispatch("acc",
+               lam("c", "acc"),
+               lam("c", L("pair", "x", "acc")),
+               L("pred", "x")))),
+    "%0",
+    "xs"))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
 

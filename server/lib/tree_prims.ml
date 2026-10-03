@@ -228,7 +228,7 @@ let tree_list p ~actor args =
       match Prims.unstr prefix_t with
       | None -> return (`Error "tree/list: prefix must be a string tree")
       | Some prefix -> (
-          match validate_path "tree/list" prefix with
+          match validate_prefix "tree/list" prefix with
           | Some e -> return (`Error e)
           | None -> (
               S.path_list p ~prefix ~limit:list_cap ()

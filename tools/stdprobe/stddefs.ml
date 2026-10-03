@@ -53,4 +53,12 @@ let all = [
   ("mag-mul-fn", "(lambda (self) (lambda (b) (lambda (a) (lambda (acc) ((tree-case acc (lambda (jm2) acc) (lambda (bhd) (lambda (btl) ((tree-case (self btl (pair %0 a) acc) (lambda (jm) (self btl (pair %0 a) (mag-add acc a))) (lambda (j1) (lambda (j2) (self btl (pair %0 a) acc)))) bhd)))) b)))))");
   ("mag-mul", "(lambda (a) (lambda (b) (mag-canonical (((rec-fix mag-mul-fn) b) a %0))))");
   ("int-mul", "(lambda (x) (lambda (y) ((lambda (ca) ((lambda (cb) ((tree-case cb (lambda (jm3) cb) (lambda (sa) (lambda (ma) ((tree-case ca (lambda (jm4) ca) (lambda (sb) (lambda (mb) (int-canonical (pair (bool-xor sa sb) (mag-mul ma mb)))))) cb)))) ca)) (int-canonical y))) (int-canonical x))))");
+  ("none", "%0");
+  ("some", "(lambda (x) (%0 x))");
+  ("rec-get", "(lambda (key) (lambda (rec) (list-fold (lambda (kv) (lambda (acc) ((tree-case acc (lambda (c) (some (first (second kv)))) (lambda (l) (lambda (r) acc))) (tree-eq (first kv) key)))) %0 rec)))");
+  ("rec-val", "(lambda (key) (lambda (rec) ((tree-case %0 (lambda (c) c) (lambda (l) (lambda (r) %0))) (rec-get key rec))))");
+  ("rec-has", "(lambda (key) (lambda (rec) (is-stem (rec-get key rec))))");
+  ("rec-replace", "(lambda (key) (lambda (val) (lambda (rec) (list-fold (lambda (kv) (lambda (acc) (pair ((tree-case kv (lambda (c) (pair key (pair val %0))) (lambda (l) (lambda (r) kv))) (tree-eq (first kv) key)) acc))) %0 rec))))");
+  ("rec-upd", "(lambda (key) (lambda (val) (lambda (rec) ((lambda (replaced) (if replaced (list-append replaced (pair (pair key (pair val %0)) %0)) (rec-has key rec))) (rec-replace key val rec)))))");
+  ("list-filter", "(lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case acc (lambda (c) acc) (lambda (c) (pair x acc))) (pred x)))) %0 xs)))");
 ]
