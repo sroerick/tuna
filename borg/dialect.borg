@@ -1,0 +1,271 @@
+(project tuna-dialect
+ (doc "Tuna book chapter: the sabra dialect v0.1 - construction sugar
+      at the reader, implementing the OPERATOR HUNCH PINNED in borg/
+      stdlib.borg (conventions law 6) the day the stdlib froze: BRACKET
+      FORMS AS CONSTRUCTION plus NUMBER LITERALS decoding to int law 5,
+      held back by the Forth law until the stdlib made - it made
+      2026-10-03 (verify-8) and arithmetic made beside it (math prims,
+      verify-9), so the freeze lifts and this chapter exists. The
+      opening citation is the owner's dogfood probe: an agent tasked to
+      port the todo board logic into sabra reported the language 'not
+      mature enough' - the exact judgement the 2026-10-02 review said
+      the vocabulary-first gate exists to prevent: the probe ran before
+      this chapter's vocabulary existed. It left no artifact in the
+      work tree, so this chapter carries its OWN
+      dogfood as acceptance (the TODO BRIDGE, 12.5) and treats
+      writability as something to MEASURE at make time, not remember.
+      Research question, stated so it can be refuted: the missing
+      maturity is READER-LEVEL SUGAR plus the record vocabulary it
+      unlocks - every form desugars at the reader into the grammar the
+      compiler accepts today; zero IR node kinds, zero interpreter
+      change, one common/ codec, additive stdlib v1.1 rows. Sugar that
+      cannot so fold is a FINDING (F13), never a patch. Naming: sabra
+      stays the owner's leaning; every artifact here is named by
+      function (grammar, codec, corpus rows), nothing depends on the
+      word.")
+ (status planned)
+ (* agent note (|2026-10-02 chapter authored on the operator's launch,
+      after the rim-eio merge. Bookkeeping coordinated with the book:
+      acceptance instrument is the next free script (12 ->
+      scripts/verify-12-dialect.sh); failures are F13 (sugar seam) and
+      F14 (writability ceiling) - F10/F11 are accounts, F12 is the
+      rim. The todo-probe relay is quoted from the operator
+      conversation; no transcript or source survived to cite, which is
+      itself recorded here so nobody hunts for it. The hunch text this
+      chapter makes is borg/stdlib.borg conventions law 6 - bracket
+      forms first, number literals second, nopales brackets FORBIDDEN.
+      Operator review of the finished port (read the sabra source) is
+      expected at make time and its verdict lands in this chapter's
+      note; it is input to a future vocabulary pass, deliberately not
+      an F14 trigger - triggers stay objective like the F9 gates.|) *)
+ (convention ocaml-dune)
+ (section dialect
+  (doc "Construction sugar at the reader plus the record vocabulary it
+       unlocks. Everything else honors the Forth law: syntax stays
+       frozen elsewhere, the dictionary grows, and any syntax addition
+       must FOLD into what already exists or go FINDINGS.")
+  (status planned)
+  (subsection laws
+   (status planned)
+   (details
+    (doc (|
+      L1 PARENS COMPUTE, BRACKETS CONSTRUCT. [...] is the data form:
+         a term that builds structure and cannot evaluate further
+         than its own elements; (...) stays computation. Brackets are
+         reserved OUTSIDE this habitat too: the nopales reader must
+         keep them FORBIDDEN so the paren-habitat vs bracket-calculus
+         tell survives the F3 bridge (the stdlib pin, kept here as
+         law).
+      L2 DESUGAR IS A TOTAL READER FOLD. Every sugar form expands at
+         parse time into a term the TODAY grammar accepts. The
+         expansion is CHECKED, never trusted: form and hand-written
+         expansion must compile to the identical tree and agree on
+         step counts (12.1). Desugared nodes inherit the sugar
+         form's span, so IR paths coincide with the hand form's and
+         diagnostics/provenance do not move.
+      L3 NUMBER LITERALS ARE LITERALS. Decimal and -decimal atoms
+         read as Tree_lit of the CANONICAL int (stdlib conventions
+         law 5), exactly as %ternary pins read: not shadowable, not
+         identifiers, canonical at read (-0 = 0 = fork false nil).
+         No float, no hex, no widths. Bare digit runs are a lexical
+         ERROR today, so the positive flip is purely additive; the
+         negative flip reserves the -digits shape, which IS a small
+         grammar change - audited (12.2), and -digits-then-letters
+         stays an identifier.
+      L4 FORM HEADS RESERVE. lambda/prim/runtime reserve their head
+         atoms today; let joins that set, and letrec joins it ONLY
+         if it ships (L5). Non-head atoms stay free: a word named
+         'let' remains a legal def and identifier; only the form-head
+         position goes reserved, so sources are audited anyway
+         (12.2).
+      L5 VOCABULARY BEFORE KEYWORDS. A form exists only on a
+         CITATION from the port (the stdlib's measured-need
+         standard); where a stdlib def can carry the job, the def
+         wins. letrec and every further sugar idea (patterns,
+         operators, more literal domains, multi-binding letrec) are
+         GATED on that citation - not shipped, not sketched here.
+      L6 SUGAR IS PRICED. Every form lands with its corpus twin
+         (12.1), its construction-triage and compiled-size rows in
+         the fuel table (12.4), and the F5 watch extended to
+         desugared output: sugar must not multiply compiled size
+         against its hand-written twin. |))))
+  (subsection forms
+   (status planned)
+   (details
+    (doc (|
+      BRACKETS (pinned first move). [a b c] desugars at the reader
+         to (pair a (pair b (pair c 0))) - the cons-applications the
+         compiler accepts today; [] is 0. Construction cost is
+         claimed ZERO triage (pair is Leaf: apply wrappers are not
+         rule firings; AGENTS 4); 12.4 measures the claim and 12.1
+         pins desugar identity against the hand pair-chain.
+      NUMBERS (pinned second move). 42 reads as the Tree_lit of the
+         int-law-5 tree; -7 likewise (sign flipped). The DECODER is
+         a common/ module beside Tuna.Cstr - reader, tests, probes
+         and the stdlib gen pipeline share ONE codec for law-5 ints
+         (the seeded stdlib executes no host code, so the encoding
+         has to live as code here); the stdlib rows stay the
+         semantic REFERENCE for it (differential-pinned like the
+         math prims: literal 2 must agree with int-add int-one
+         int-one).
+      LET (v0.1, cited by the port). (let ((x a) (y b)) B)
+         desugars to ((lambda (x) ((lambda (y) B) b)) a): sequential
+         right-nesting; lambda-param shadowing gives the scoping
+         for free. Reserved as a head form (L4). If the finished
+         port never uses it, drop it before landing - do not ship
+         unused grammar.
+      LETREC (gated, default OUT of v0.1). The single-binding
+         shape (letrec ((f E)) B), where E may mention f,
+         desugars to (let ((f ((rec-fix (lambda (f) E))))) B);
+         multiple or mutual bindings are out of scope (L5). GATE:
+         ships only if the port measurably trips threading the
+         rec-fix idiom by hand. LAW when it ships: dialect keywords
+         may lean on STDLIB NAMES; resolution order stands (param >
+         identity > sabralib > builtins), shadowing wins, collisions
+         recorded not prevented.
+      Strings need NO new form: string literals are already reader
+         terms (Tuna.Cstr) and ride the one list law; text payloads
+         belong to byte-values + the prim world per byte-values law
+         4. |))))
+  (subsection records
+   (status planned)
+   (details
+    (doc (|
+      THE CONVENTION the stdlib deferred out of v1 ('record/assoc
+      conventions ... adding one is a book change citing measured
+      need' - this chapter's port is that citation): a record IS A
+      LIST of (key value) TWO-LISTS. The ONE list law carries it;
+      no second list convention is introduced, ever. Constructors
+      compose with the sugar: [k v] is (pair k (pair v 0)); a
+      record literal is a bracket list of those pairs.
+
+      KEY DOMAIN is decided at MAKE TIME by the fuel table (12.4),
+      ties break to TAGS: law-4 small-nat keys (tags are what nats
+      are for; constructor cost zero triage; they collide with
+      bool/option readings by design - recorded, not prevented)
+      versus cstr string keys (greppable, but pure string ops price
+      like unary bloat per byte-values law 4, so strings must EARN
+      the row on measured numbers, not on readability taste).
+
+      VALUES stay open per the ordinary conventions (strings,
+      ints, whole trees-as-programs all legal fields).
+
+      DEFS land as stdlib v1.1 ADDITIVE rows through the seeded
+      pipeline unchanged (gen_defs -> freeze -> manifest bump ->
+      generated embed; seeding stays skip-if-exists additive; a
+      product hash that changes lands as new hashes, history
+      untouched). NAMED BY THE PORT, never speculative: the
+      candidates are rec-get (option answer per stdlib law 3),
+      rec-upd, rec-has, plus whatever the todo port actually
+      reaches for (filters, sorts) - the port writes the manifest
+      additions, the manifest does not anticipate it. Every def
+      property-pinned, manifest-rowed, corpus-entered: verify-8
+      stays the referee and must stay green over 53+v1.1 rows.
+      |))))
+  (subsection todo-bridge
+   (status planned)
+   (details
+    (doc (|
+      THE DOGFOOD - the 2026-10-02 review's named product candidate,
+      done in-calculus: the todo board's ITEM LOGIC in sabra against
+      real boundary effects.
+
+      SHAPE: a sabra program holding a granted namespace (default
+      todo-cal/, disjoint from the host page's todo/ flat ids, so
+      the OCaml board and the sabra board coexist without artifact
+      noise in each other's pages - the page code is untouched by
+      this chapter; a UI swap is an owner product call outside the
+      research frame). Effects per grants law 7: paths arrive as
+      granted arguments, never resolved. The program tree/lists its
+      prefix; tree/gets each item (a record tree per the records
+      subsection) and decodes fields; answers board queries (open
+      and done counts via MATH PRIMS - aggregates ride the prim per
+      the F6 consequence while INVARIANT CHECKS stay pure: state is
+      only open|done, counts re-foldable by replay); transitions an
+      item state on the handed id and tree/puts the updated record
+      back. Every boundary call journaled; the transcript is a run
+      row like any other.
+
+      RECORD SHAPE is the port's first-class use of the new
+      conventions: title (string), state (small nat or bool tag,
+      make-time call), attribution (who as string, when as int via
+      number literals). Exact field set pinned at make time by what
+      the program writes - this paragraph is deliberately NOT the
+      schema; the bridge source is.
+      |))))
+  (subsection acceptance
+   (status planned)
+   (details
+    (doc (|
+      Instrument: scripts/verify-12-dialect.sh over a live dev
+      server (the shared verify-lib preamble; probes live where the
+      other chapters keep theirs). Green means ALL hold:
+
+      12.1 DESUGAR EQUALITY. Every shipped sugar form paired with its
+          hand-written expansion: identical program hash, identical
+          step counts, all three engines agreeing. Rows join the
+          diff corpus (dialect_*): each number literal against its
+          %-pin twin, each bracket list against its pair-chain twin,
+          let against the lambda twin, letrec (if shipped) against
+          the rec-fix twin. This is the law that makes sugar unable
+          to smuggle semantics.
+      12.2 COMPAT. (a) every existing corpus source re-compiles to
+          its recorded hash - the reader change is strictly
+          additive; (b) grep audit: no stdlib name, corpus fixture
+          or stored program source uses the newly reserved shapes
+          ((let as a form head; -digit-run identifiers); (c)
+          double-boot seeding still green, zero duplicates over
+          53+v1.1 rows (verify-8 [8.1] re-run).
+      12.3 READER SEAM. The landing commit's compiler diff touches
+          sexp.ml ONLY (lexer + desugar + head reservation); Ir.ml,
+          bracket.ml, interpreter/ byte-identical; the common/ codec
+          beside Cstr is the only other core-side addition. A
+          violation is F13, never a patch.
+      12.4 FUEL TABLE (recorded at make time, both engines - the
+          D-class instrument): bracket construction vs hand
+          pair-chain (the zero-triage claim, measured); record
+          get/upd over the port's own records; tag-keys vs
+          string-keys (the key-domain decision row); bridge runs at
+          4/64/512 items under pinned fuel 1e7 - exact steps
+          recorded beside the F-class cousins.
+      12.5 TODO BRIDGE. The dogfood run: status normal; journal
+          complete for every boundary call; replay identity green;
+          deriv-sealed and deriv-check exit 0 - the ledger-bridge
+          shape (verify-8 [8.5]) widened to a namespace-sized
+          workload, invariants pure, aggregates on prims.
+      12.6 BOOK HYGIENE. stdlib v1.1 rows in the manifest; corpus
+          grows by the dialect rows without losing a single old
+          entry; borge lint + report clean; the F13/F14 statuses, if
+          they move, move in the same commit as the evidence.
+      |))))
+  (subsection pre-registered-failures
+   (status planned)
+   (details
+    (doc (|
+      F13 SUGAR SEAM BREACH. TRIGGER: any v0.1 form cannot desugar
+      into the reader's existing grammar; or a 12.1 row diverges on
+      tree or steps; or any form pushes a change into Ir.ml,
+      bracket.ml or interpreter/; or desugar multiplies compiled
+      size against the hand twin (L6). THEN: the fold thesis fails
+      for that form - DROP the form (never keep it by growing IR or
+      the core), record in FINDINGS.md, and route the true need (if
+      real) to a linking/pretty-printer chapter. This is the
+      stdlib acceptance-6 law applied to the reader seam.
+
+      F14 WRITABILITY CEILING. TRIGGER: the bridge cannot close at
+      512 items under the pinned budget (fuel 1e7, default size
+      cap) or blows TUNA_RUN_MAX_SECONDS into deadline_exceeded;
+      or the compiled bridge program exceeds 100k nodes (the F5
+      wire, carried from defs to programs); or the port cannot be
+      completed without a prim family outside the pinned set
+      (tree/*, value/*, math/*). THEN: construction sugar plus the
+      record vocabulary did not buy package-scale writability -
+      record with the port source and the 12.4 rows as evidence;
+      the consequence is an evidence-named vocabulary or linking
+      pass, NEVER more keywords adjudicated on taste. The owner's
+      plain read of the finished port ('could a stranger write
+      this?') is recorded beside the verdict either way, as input
+      to that pass - deliberately not a trigger, to keep F14 as
+      objective as the F9 gates. |))))
+ )
+)

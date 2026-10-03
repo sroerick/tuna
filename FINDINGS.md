@@ -310,6 +310,48 @@ this triggered; it did not, so the swap stands. No bridge, no flag.
 
 ---
 
+## F13 — SUGAR SEAM BREACH (dialect)
+
+> borg/dialect.borg pre-registration: reader-level sugar is sold as a
+> total fold into the existing grammar. TRIGGER: any v0.1 form cannot
+> desugar into the reader's existing grammar; or a desugar-equality row
+> (12.1) diverges on tree or steps; or any form pushes a change into
+> Ir.ml, bracket.ml or interpreter/; or desugar multiplies compiled
+> size against its hand-written twin (law L6).
+
+**Status: pre-registered** (2026-10-02), make pending. THEN, if
+observed: the fold thesis fails for that form — DROP the form (never
+keep it by growing IR or the core), and route the true need, if real,
+to a linking/pretty-printer chapter. This is stdlib acceptance law 6
+("if any stdlib def requires a core change to work, that is a
+FINDING, not a patch") applied to the reader seam.
+
+---
+
+## F14 — WRITABILITY CEILING (dialect)
+
+> borg/dialect.borg pre-registration: the chapter's thesis is that
+> construction sugar + the record vocabulary buys package-scale
+> writability — the exact judgement the failed todo probe made ("the
+> language is not mature enough") is the thing to be measured, not
+> remembered. TRIGGER: the todo bridge cannot close at 512 items under
+> the pinned budget (fuel 1e7, default size cap) or blows
+> TUNA_RUN_MAX_SECONDS into deadline_exceeded; or the compiled bridge
+> program exceeds 100k nodes (the F5 wire, carried from defs to
+> programs); or the port cannot be completed without a prim family
+> outside the pinned set (tree/*, value/*, math/*).
+
+**Status: pre-registered** (2026-10-02), make pending. THEN, if
+observed: record with the port source and the 12.4 fuel-table rows as
+evidence; the consequence is an evidence-named vocabulary or linking
+pass, never more keywords adjudicated on taste. The operator's plain
+read of the finished port ("could a stranger write this?") is
+recorded beside the verdict either way, as input to that pass —
+deliberately not a trigger, so the F-class stays as objective as the
+F9 gates.
+
+---
+
 ## RUNTIME PURITY THESIS — the pure-step core (not an F-class failure)
 
 This is not one of F1–F4; it is the operator thesis itself (tuna.borg
