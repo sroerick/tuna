@@ -135,6 +135,27 @@ def main():
           f"replay verified")
     print(f"  transition: state open->done via tree/get+tree/put, replay {tv}")
 
+    # --- the FILTER query: open item titles (list-filter + list-map) ---
+    with open(os.path.join(ROOT, "scripts", "dialect", "todo-open.sabra")) as f:
+        openq = f.read()
+    oph = repl("def todo-open-v12 " + openq)["program_hash"]
+    orun = post("/api/runs", {"program_hash": oph, "inputs": [pfx],
+                              "grants": [gl], "fuel": 10_000_000,
+                              "size_cap": 100_000})
+    or_ = orun["run"]
+    if or_["status"] != "normal":
+        raise SystemExit(f"bridge_probe: open-query status {or_['status']}")
+    # two open items remain after the transition?  b was done, a is now
+    # done, c is open -> exactly one title.  Assert the result is a
+    # ONE-element list of a string tree (the filter really filtered).
+    res = or_["result_ternary"]
+    if not res.startswith("2"):  # a cons
+        raise SystemExit(f"bridge_probe: open-query must be a non-empty list ({res[:40]})")
+    ov = get(f"/api/runs/{or_['id']}")["run"]["verify_status"]
+    if ov != "verified":
+        raise SystemExit(f"bridge_probe: open-query replay {ov} != verified")
+    print(f"  open-query: list-filter + list-map, replay {ov}")
+
 
 if __name__ == "__main__":
     main()

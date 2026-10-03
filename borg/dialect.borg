@@ -214,9 +214,17 @@
       LANDED: source scripts/dialect/todo-board.sabra (the fold /
       read half) + scripts/dialect/todo-transition.sabra (the write
       half: tree/get an item, flip state in-calculus, tree/put it
-      back), driver scripts/dialect/bridge_probe.py, checked by
-      acceptance 12.5.  Both halves journal tree/get, tree/put,
-      tree/list, math/add and replay-verify.
+      back) + scripts/dialect/todo-open.sabra (the filter query:
+      list-filter the open items, list-map their titles - the reach
+      list-filter was cited for), driver scripts/dialect/
+      bridge_probe.py, checked by acceptance 12.5.  All three halves
+      journal tree/get, tree/put, tree/list, math/add and
+      replay-verify.  BUILD NOTE: list-filter's first draft dispatched
+      the wrong scrutinee (tree-case reads the PREDICATE's answer, not
+      the accumulator); caught by the open-query before landing, fixed
+      by regenerating the row - a reminder that the defs, unlike the
+      reader sugar, are checked only by their corpus, so every v1.1
+      def needs its exercised row (verify-8 law 2).
       The granted prefix travels WITHOUT a trailing slash (`todo-cal`,
       not `todo-cal/`): tree/list's prefix argument is a plain path
       that still selects the `todo-cal/*` slice, and the grant's
@@ -297,7 +305,7 @@
       12.4 FUEL TABLE: bracket compile cost equals the hand pair-chain
          (zero triage); rec-upd corpus 4,683 v0 steps; rec-get
          2,158 (present) / 2,321 (absent); rec-has 2,162; rec-val
-         2,163; list-filter 276.
+         2,163; list-filter 286.
       12.5 TODO BRIDGE: 2 open / 1 done, 7 journal rows (tree/list +
          six math/add), replay verified.  Source:
          scripts/dialect/todo-board.sabra; driver

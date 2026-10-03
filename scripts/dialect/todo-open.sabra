@@ -1,0 +1,17 @@
+; todo-open.sabra — the dialect chapter's todo dogfood, a FILTER query
+; (borg/dialect.borg, TODO BRIDGE / acceptance 12.5).
+;
+; Takes a granted namespace prefix and answers the OPEN item titles, in
+; board order.  This is the list-filter + list-map reach the v1.1
+; vocabulary was cited for: filter the entry list by state, map each
+; surviving record to its title.  tree/list is the only effect.
+;
+;   key 1 = state: %10 = open, %0 = done
+;   key 2 = title (cstr string)
+
+(lambda (prefix)
+  (let ((is-open (lambda (entry)
+                 (tree-eq (rec-val 1 (first (second entry))) %10))))
+    (let ((title (lambda (entry) (rec-val 2 (first (second entry))))))
+      (list-map title
+        (list-filter is-open (prim "tree/list" prefix))))))

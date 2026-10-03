@@ -123,4 +123,4 @@ def rec-replace (lambda (key) (lambda (val) (lambda (rec) (list-fold (lambda (kv
 
 def rec-upd (lambda (key) (lambda (val) (lambda (rec) ((lambda (replaced) (if replaced (list-append replaced (pair (pair key (pair val %0)) %0)) (rec-has key rec))) (rec-replace key val rec)))))
 
-def list-filter (lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case acc (lambda (c) acc) (lambda (c) (pair x acc))) (pred x)))) %0 xs)))
+def list-filter (lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case (lambda (c) acc) (lambda (c) (pair x acc)) (lambda (l) (lambda (r) acc))) (pred x)))) %0 xs)))

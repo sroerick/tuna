@@ -60,5 +60,5 @@ let all = [
   ("rec-has", "(lambda (key) (lambda (rec) (is-stem (rec-get key rec))))");
   ("rec-replace", "(lambda (key) (lambda (val) (lambda (rec) (list-fold (lambda (kv) (lambda (acc) (pair ((tree-case kv (lambda (c) (pair key (pair val %0))) (lambda (l) (lambda (r) kv))) (tree-eq (first kv) key)) acc))) %0 rec))))");
   ("rec-upd", "(lambda (key) (lambda (val) (lambda (rec) ((lambda (replaced) (if replaced (list-append replaced (pair (pair key (pair val %0)) %0)) (rec-has key rec))) (rec-replace key val rec)))))");
-  ("list-filter", "(lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case acc (lambda (c) acc) (lambda (c) (pair x acc))) (pred x)))) %0 xs)))");
+  ("list-filter", "(lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case (lambda (c) acc) (lambda (c) (pair x acc)) (lambda (l) (lambda (r) acc))) (pred x)))) %0 xs)))");
 ]
