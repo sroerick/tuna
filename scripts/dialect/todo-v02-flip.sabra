@@ -1,0 +1,11 @@
+; todo-v02-flip.sabra — the v0.2 write half: one prelude call.
+;
+; The 12.5 transition hand-rolled open<->done with rec-val/rec-upd on
+; numeric keys; v0.2 ships it as todo-flip.  Read (tree/get), flip,
+; write back (tree/put): the two boundary effects stay journaled, the
+; invariant (state is only todo-open|todo-done) is recomputed by
+; replay.
+
+(lambda (item-path)
+  (let ((rec (prim "tree/get" item-path)))
+    (prim "tree/put" item-path (todo-flip rec))))

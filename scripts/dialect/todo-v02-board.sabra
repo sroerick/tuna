@@ -1,0 +1,20 @@
+; todo-v02-board.sabra — the v0.2 board summary (borg/dialect.borg v0.2).
+;
+; The 12.5 bridge folded the same board with numeric keys and rec-*
+; calculus and answered [[1 <open>] [2 <done>]].  This is the retry on
+; the shipped prelude: the fold is todo-open-count, the item accessor
+; todo-entry, and the RESULT is a keyed literal.  The schema keys
+; (key-open key-total) are ordinary defs defined beside the port - the
+; reader knows no fields, the schema stays data.
+;
+;   {:open <open-count> :total <item-count>}
+;
+; Effects: tree/list over the granted prefix; math/add on the folds
+; (F6: aggregates on the prim).
+
+(lambda (prefix)
+  (let ((items (prim "tree/list" prefix)))
+    {:open (todo-open-count items)
+     :total (list-fold (lambda (e) (lambda (acc) (prim "math/add" acc 1)))
+                       0
+                       items)}))

@@ -1,0 +1,26 @@
+; todo-v02-open.sabra — the v0.2 filter query: prelude accessors only.
+;
+; The 12.5 query reached for first/second/rec-val on numeric keys;
+; v0.2 names the fields (todo-entry todo-state todo-title todo-open).
+; Same reach, no calculus: filter the entry list by state, collect the
+; titles in board order.
+;
+; SHAPE NOTE (probe-found, 2026-10-02): the composition must keep its
+; lambdas INLINE and its def applications DIRECT.  list-map applied to
+; a def-spliced lambda argument misapplies (machine AND CL reference
+; agree on the wrong answer - FINDINGS non-F note), and list-append is
+; a broken v1 def (append xs ys = reverse(xs) ++ ys; append 0 x = x -
+; FINDINGS non-F note).  The collection therefore rides an inline
+; pair-prepend list-fold: list-fold traverses right-to-left, so the
+; prepend preserves board order.
+
+(lambda (prefix)
+  (let ((open-items
+          (list-filter
+            (lambda (entry)
+              (tree-eq (todo-state (todo-entry entry)) todo-open))
+            (prim "tree/list" prefix))))
+    (list-fold
+      (lambda (entry) (lambda (acc) (pair (todo-title (todo-entry entry)) acc)))
+      0
+      open-items)))

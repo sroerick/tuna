@@ -438,3 +438,50 @@ monad-shaped `Prim_eval.Make` still exists as the reference engine, so
 "no Lwt under interpreter/" is now true of the CORE (flat.ml) and the
 public path (eval.ml -> flat_drive), with the recursive reference kept
 intentionally.
+
+## NON-F — v0.2 TODO PRELUDE PROBE: three standing v1 defects (found 2026-10-02, NOT fixed)
+
+Not F-class (neither pre-registered nor fixed in this batch). The v0.2
+todo retry (`scripts/dialect/prelude_probe.py` + `todo-v02-*.sabra`)
+drove the shipped prelude end to end and surfaced three defects in the
+v1 layer the chapter's own probes had dodged. Repros are one REPL/run
+each; all three reproduce on `list-map`/`list-append`/`first` shapes
+with zero v0.2 sugar involved.
+
+1. SILENT GRANT DENIAL mid-fold (machine/run layer). A prim whose grant
+   is missing does not fail the run: `todo-open-count` over
+   `tree/list` with grants `[tree/list]` only (no `math/add`) returns
+   `status: normal`, `verify_status: verified`, and a poisoned
+   accumulator tree (a giant Stem-nest) instead of the count. The same
+   program with `math/add` granted returns exactly 2. The board in
+   12.5 masked this by granting both prims. Expected (verify-1's own
+   law): a denied prim denies the RUN.
+
+2. LIST-MAP MISAPPLIES DEF-SPLICED LAMBDA ARGS (stdlib/encoding).
+   `(list-map todo-title xs)` yields a list of leaves; the SAME
+   `todo-title` applied directly to the same record returns the title;
+   an INLINE lambda bound the same way (list-filter's `pred`) works.
+   The CL reference (`reference/.../tree-calculus.py`) reduces the
+   seeded trees to the same wrong answer, so this is the frozen tree
+   itself, not the v0 machine: `(pair (g h) acc)` under the compiled
+   encodings does not behave as its source. The 12.5 open-query dodged
+   it with LET-bound lambdas. list-map has no corpus row exercising a
+   def argument (verify-8 law 2 gap).
+
+3. LIST-APPEND IS reverse(xs) ++ ys (stdlib v1 def). `(list-append 0 5)`
+   returns bare `5`; `(list-append [1 2] 3)` scrambles to `[2 1 3]`;
+   only single-element prefixes accidentally work. It survived because
+   its only caller (rec-upd) builds assoc lists whose order lookup
+   ignores. No corpus row.
+
+Also pinned (not a defect): `list-fold` traverses right-to-left, so an
+inline pair-prepend fold is ORDER-PRESERVING - the probe's open-query
+relies on it and pins the exact board-order twin.
+
+Probe consequence: `todo-v02-open.sabra` keeps its lambdas inline and
+its def applications direct, and the probe grants `math/add` wherever
+a prelude fold runs. All five probe stages green: create (one journaled
+tree/put), keyed-literal board, named flip + read-back, exact open
+query, live board re-run - every run replay-verified.
+
+---
