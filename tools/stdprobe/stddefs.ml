@@ -60,5 +60,20 @@ let all = [
   ("rec-has", "(lambda (key) (lambda (rec) (is-stem (rec-get key rec))))");
   ("rec-replace", "(lambda (key) (lambda (val) (lambda (rec) (list-fold (lambda (kv) (lambda (acc) (pair ((tree-case kv (lambda (c) (pair key (pair val %0))) (lambda (l) (lambda (r) kv))) (tree-eq (first kv) key)) acc))) %0 rec))))");
   ("rec-upd", "(lambda (key) (lambda (val) (lambda (rec) ((lambda (replaced) (if replaced (list-append replaced (pair (pair key (pair val %0)) %0)) (rec-has key rec))) (rec-replace key val rec)))))");
-  ("list-filter", "(lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case (lambda (c) acc) (lambda (c) (pair x acc)) (lambda (l) (lambda (r) acc))) (pred x)))) %0 xs)))");
+  ("list-filter", "(lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case acc (lambda (c) (pair x acc)) (lambda (l) (lambda (r) acc))) (pred x)))) %0 xs)))");
+  ("key-state", "%10");
+  ("key-title", "%110");
+  ("key-who", "%1110");
+  ("key-when", "%11110");
+  ("todo-open", "%10");
+  ("todo-done", "%0");
+  ("todo-state", "(lambda (r) (rec-val key-state r))");
+  ("todo-title", "(lambda (r) (rec-val key-title r))");
+  ("todo-who", "(lambda (r) (rec-val key-who r))");
+  ("todo-when", "(lambda (r) (rec-val key-when r))");
+  ("todo-entry", "(lambda (e) (first (second e)))");
+  ("todo-item", "(lambda (s) (lambda (t) (lambda (w) (lambda (n) (pair (pair key-state (pair s %0)) (pair (pair key-title (pair t %0)) (pair (pair key-who (pair w %0)) (pair (pair key-when (pair n %0)) %0))))))))");
+  ("todo-created", "(lambda (path) (lambda (title) (lambda (who) (prim \"tree/put\" path (todo-item todo-open title who 1727000000)))))");
+  ("todo-flip", "(lambda (r) (rec-upd key-state (if %0 %10 (tree-eq (todo-state r) todo-open)) r))");
+  ("todo-open-count", "(lambda (items) (list-fold (lambda (e) (lambda (acc) (if (prim \"math/add\" acc 1) acc (tree-eq (todo-state (todo-entry e)) todo-open)))) 0 items))");
 ]

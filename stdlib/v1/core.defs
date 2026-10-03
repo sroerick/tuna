@@ -123,4 +123,34 @@ def rec-replace (lambda (key) (lambda (val) (lambda (rec) (list-fold (lambda (kv
 
 def rec-upd (lambda (key) (lambda (val) (lambda (rec) ((lambda (replaced) (if replaced (list-append replaced (pair (pair key (pair val %0)) %0)) (rec-has key rec))) (rec-replace key val rec)))))
 
-def list-filter (lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case (lambda (c) acc) (lambda (c) (pair x acc)) (lambda (l) (lambda (r) acc))) (pred x)))) %0 xs)))
+def list-filter (lambda (pred) (lambda (xs) (list-fold (lambda (x) (lambda (acc) ((tree-case acc (lambda (c) (pair x acc)) (lambda (l) (lambda (r) acc))) (pred x)))) %0 xs)))
+
+def key-state %10
+
+def key-title %110
+
+def key-who %1110
+
+def key-when %11110
+
+def todo-open %10
+
+def todo-done %0
+
+def todo-state (lambda (r) (rec-val key-state r))
+
+def todo-title (lambda (r) (rec-val key-title r))
+
+def todo-who (lambda (r) (rec-val key-who r))
+
+def todo-when (lambda (r) (rec-val key-when r))
+
+def todo-entry (lambda (e) (first (second e)))
+
+def todo-item (lambda (s) (lambda (t) (lambda (w) (lambda (n) (pair (pair key-state (pair s %0)) (pair (pair key-title (pair t %0)) (pair (pair key-who (pair w %0)) (pair (pair key-when (pair n %0)) %0))))))))
+
+def todo-created (lambda (path) (lambda (title) (lambda (who) (prim "tree/put" path (todo-item todo-open title who 1727000000)))))
+
+def todo-flip (lambda (r) (rec-upd key-state (if %0 %10 (tree-eq (todo-state r) todo-open)) r))
+
+def todo-open-count (lambda (items) (list-fold (lambda (e) (lambda (acc) (if (prim "math/add" acc 1) acc (tree-eq (todo-state (todo-entry e)) todo-open)))) 0 items))

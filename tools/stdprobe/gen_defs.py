@@ -426,6 +426,47 @@ d("list-filter", lam("pred", lam("xs",
     "%0",
     "xs"))))
 
+# ---- L5 keyed-literal keys + todo prelude (borg/dialect.borg v0.2) ----
+#
+# The reader's {...} keyed literal maps each :name to the dictionary
+# name key-name; these defs are the conventional schema the todo port
+# writes against.  Small-nat tags (law 4) WIN the key-domain decision:
+# the fuel table measured a tag lookup at 2,051 v0 steps against int
+# keys 4,418 and cstr string keys 27,817 (13.5x), so a shipped record
+# key is a small nat even
+# though the rec-* operations accept ANY tree as a key.
+#
+# The todo-* layer is ordinary vocabulary over rec-*: create, accessors,
+# flip, and an open-count fold.  All are ZERO-cost aliases or tiny
+# composition, so a product writes call sites, not calculus.
+d("key-state", "%10")
+d("key-title", "%110")
+d("key-who",   "%1110")
+d("key-when",  "%11110")
+d("todo-open", "%10")
+d("todo-done", "%0")
+d("todo-state", lam("r", L("rec-val", "key-state", "r")))
+d("todo-title", lam("r", L("rec-val", "key-title", "r")))
+d("todo-who",   lam("r", L("rec-val", "key-who", "r")))
+d("todo-when",  lam("r", L("rec-val", "key-when", "r")))
+d("todo-entry", lam("e", L("first", L("second", "e"))))
+d("todo-item", lam("s", lam("t", lam("w", lam("n",
+  L("pair", L("pair", "key-state", L("pair", "s", "%0")),
+    L("pair", L("pair", "key-title", L("pair", "t", "%0")),
+      L("pair", L("pair", "key-who", L("pair", "w", "%0")),
+        L("pair", L("pair", "key-when", L("pair", "n", "%0")), "%0")))))))))
+d("todo-created", lam("path", lam("title", lam("who",
+  L("prim", "\"tree/put\"", "path", L("todo-item", "todo-open", "title", "who", "1727000000"))))))
+d("todo-flip", lam("r",
+  L("rec-upd", "key-state",
+    L("if", "%0", "%10", L("tree-eq", L("todo-state", "r"), "todo-open")), "r")))
+d("todo-open-count", lam("items",
+  L("list-fold",
+    lam("e", lam("acc",
+      L("if", L("prim", "\"math/add\"", "acc", "1"), "acc",
+        L("tree-eq", L("todo-state", L("todo-entry", "e")), "todo-open")))),
+    "0", "items")))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
 

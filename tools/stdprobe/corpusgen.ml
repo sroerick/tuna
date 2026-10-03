@@ -84,6 +84,12 @@ let cases =
       ("[w 1 2]", "%110") )
   ; ( "dialect_record_shape",
       ("[[1 w] [2 0]]", "%10") )
+  ; ( "dialect_keyed_literal",
+      ("{:state todo-open :title w}", "%10") )
+  ; ( "dialect_keyed_accessor",
+      ("(todo-state {:state todo-open :title w})", "%10") )
+  ; ( "dialect_todo_flip",
+      ("(todo-state (todo-flip {:state todo-open :title w}))", "%10") )
   ]
 
 let () =
