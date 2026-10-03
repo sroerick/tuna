@@ -1,0 +1,9 @@
+name dialect_record_shape
+program 2121200212012021002102002022202021002000
+arg 10
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 22202100210022202021002000
+expect_steps 8

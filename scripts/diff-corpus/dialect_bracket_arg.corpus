@@ -1,0 +1,9 @@
+name dialect_bracket_arg
+program 2102022021002202021000
+arg 110
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 211022021002202021000
+expect_steps 2

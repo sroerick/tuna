@@ -1,4 +1,4 @@
 (library
  (name tuna)
- (modules tree canon hash cstr cprim)
+ (modules tree canon hash cstr cprim int_enc)
  (libraries digestif))

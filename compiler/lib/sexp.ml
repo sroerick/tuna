@@ -2,16 +2,26 @@
 
    Grammar (whitespace, ";" line comments):
      <term> ::= (lambda (<var>+) <term>)   multi-arg sugar for nested lambdas
+              | (let ((<var> <term>)+) <term>)   sequential let (desugars)
               | (<term> <term>+)           left-assoc application
               | <var>                      identifier (- _ a-z A-Z 0-9, not all ternary digits)
               | 0                          leaf literal
+              | <digits>                   integer literal -> canonical int law 5
+              | -<digits>                  negative integer literal (law 5)
               | %<ternary>                 literal tree by ternary encoding
+              | [<term>*]                  list construction -> cons applications
               | "..."                      string literal -> the Cstr string tree
 
    Dialect builtins (reader-level, shadowable by a lambda param or a
    dictionary entry): pair/cons alias the leaf, which is extensionally
    the fork constructor (apply Leaf a = Stem a; apply (Stem a) b =
-   Fork (a, b) — both wrapper applications, zero triage steps).*)
+   Fork (a, b) — both wrapper applications, zero triage steps).
+
+   Dialect sugar (borg/dialect.borg) is a TOTAL reader fold into this
+   grammar: brackets desugar to pair-applications, decimal atoms to
+   Tree_lit of the canonical law-5 int (Tuna.Int_enc), and let to
+   nested lambda applications.  A sugar form and its hand-written twin
+   compile to the identical tree and step count (acceptance 12.1). *)
 
 exception Lex_error of int * string
 
@@ -20,10 +30,10 @@ open Ir
 (* ---------- lexer ---------- *)
 
 let is_delim c =
-  c = '(' || c = ')' || c = ';' || c = '%' || c = ' ' || c = '\t' || c = '\n'
-  || c = '\r'
+  c = '(' || c = ')' || c = '[' || c = ']' || c = ';' || c = '%' || c = ' '
+  || c = '\t' || c = '\n' || c = '\r'
 
-type token = LP | RP | Atom of int * string
+type token = LP | RP | LB | RB | Atom of int * string
 
 let lex (src : string) : token list =
   let toks = ref [] in
@@ -40,6 +50,12 @@ let lex (src : string) : token list =
       incr i)
     else if c = ')' then (
       push RP;
+      incr i)
+    else if c = '[' then (
+      push LB;
+      incr i)
+    else if c = ']' then (
+      push RB;
       incr i)
     else if c = '%' then begin
       let start = !i in
@@ -127,6 +143,10 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
         raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found '('" what start))
     | Some (Atom (_, a)) ->
         raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found %S" what start a))
+    | Some RB ->
+        raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found ']'" what start))
+    | Some LB ->
+        raise (Ir.Error ([], Printf.sprintf "%s: expected ')' at offset %d, found '['" what start))
     | None -> raise (Ir.Error ([], Printf.sprintf "%s: unterminated list at offset %d" what start))
   in
     let rec parse_term scope =
@@ -137,6 +157,7 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
           let start = !pos - 1 in
           match peek () with
           | Some (Atom (_, "lambda")) -> parse_lambda start scope
+          | Some (Atom (_, "let")) -> parse_let start scope
           | Some (Atom (_, "runtime")) -> parse_runtime start scope
           | Some (Atom (_, "prim")) ->
             (* (prim "name" args...): boundary call. "prim" is reserved as
@@ -173,6 +194,20 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
                         Printf.sprintf
                           "prim: expected a quoted name at offset %d, found '('"
                           start))
+              | Some LB ->
+                  raise
+                    (Ir.Error
+                       ([],
+                        Printf.sprintf
+                          "prim: expected a quoted name at offset %d, found '['"
+                          start))
+              | Some RB ->
+                  raise
+                    (Ir.Error
+                       ([],
+                        Printf.sprintf
+                          "prim: expected a quoted name at offset %d, found ']'"
+                          start))
               | None ->
                   raise
                     (Ir.Error
@@ -182,7 +217,7 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
             let args = ref [] in
             let rec collect () =
               match peek () with
-              | Some (Atom (_, _)) | Some LP ->
+              | Some (Atom (_, _)) | Some LP | Some LB ->
                   args := parse_term scope :: !args;
                   collect ()
               | _ -> ()
@@ -199,7 +234,7 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
             let args = ref [] in
             let rec collect () =
               match peek () with
-              | Some (Atom (_, _)) | Some LP ->
+              | Some (Atom (_, _)) | Some LP | Some LB ->
                   args := parse_term scope :: !args;
                   collect ()
               | _ -> ()
@@ -212,6 +247,46 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
               head (List.rev !args))
     | Some RP ->
         raise (Ir.Error ([], Printf.sprintf "unexpected ')' at offset %d" !pos))
+    | Some RB ->
+        raise (Ir.Error ([], Printf.sprintf "unexpected ']' at offset %d" !pos))
+    | Some LB ->
+        advance ();
+        let start = !pos - 1 in
+        let elems = ref [] in
+        let rec collect () =
+          match peek () with
+          | Some RB -> advance ()
+          | Some (Atom (_, _)) | Some LP | Some LB ->
+              elems := parse_term scope :: !elems;
+              collect ()
+          | Some RP ->
+              raise
+                (Ir.Error
+                   ([], Printf.sprintf "[list]: expected ']' at offset %d, found ')'" start))
+          | None ->
+              raise
+                (Ir.Error
+                   ([], Printf.sprintf "[list]: unterminated at offset %d" start))
+        in
+        collect ();
+        let sp : Ir.span = { off = start; len = !pos - start } in
+        (* [a b c] desugars to the cons chain (pair a (pair b (pair c 0)))
+           — the exact term the hand twin writes, so the compiled tree and
+           step count are identical (acceptance 12.1).  pair is the Leaf
+           literal; the terminal 0 is the leaf literal. *)
+        let pair_head sp =
+          Tree_lit { id = fresh (); span = sp; tree = Tuna.Tree.Leaf }
+        in
+        let tail = Leaf_lit { id = fresh (); span = sp } in
+        List.fold_right
+          (fun e acc ->
+            App
+              { id = fresh (); span = sp
+              ; fn =
+                  App
+                    { id = fresh (); span = sp; fn = pair_head sp; arg = e }
+              ; arg = acc })
+          (List.rev !elems) tail
     | Some (Atom (off, a)) -> (
         advance ();
         match a.[0] with
@@ -243,6 +318,10 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
                 let s = String.sub a 1 (String.length a - 2) in
                 let sp : Ir.span = { off; len = String.length a } in
                 Tree_lit ({ id = fresh (); span = sp; tree = Tuna.Cstr.encode s })
+              else if Tuna.Int_enc.of_decimal_atom a <> None then
+                let tree = Option.get (Tuna.Int_enc.of_decimal_atom a) in
+                let sp : Ir.span = { off; len = String.length a } in
+                Tree_lit ({ id = fresh (); span = sp; tree })
               else if is_var_atom a then (
                 match List.find_opt (fun name -> name = a) scope with
                 | Some _ ->
@@ -323,6 +402,77 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
       (match lam with
        | Lam ({ span = _; _ } as r) -> Ir.Lam { r with span = sp }
        | _ -> assert false)
+
+  (* (let ((x a) (y b)) B) desugars to the sequential lambda
+     application ((lambda (x) ((lambda (y) B) b)) a): each binding's
+     scope is its own body (and the later bindings), so lambda-param
+     shadowing semantics apply for free.  The sugar is a total fold:
+     the hand-written twin compiles to the identical tree and step
+     count (borg/dialect.borg L2, acceptance 12.1). *)
+  and parse_let start scope =
+    advance () (* 'let' *);
+    (match peek () with
+     | Some LP -> advance ()
+     | _ ->
+         raise
+           (Ir.Error
+              ([],
+               Printf.sprintf
+                 "let: expected '(' before the binding list at offset %d" start)));
+    let bindings = ref [] in
+    let seen = ref scope in
+    let rec binding_loop () =
+      match peek () with
+      | Some RP -> advance ()
+      | Some LP ->
+          advance ();
+          let bstart = !pos - 1 in
+          let name =
+            match peek () with
+            | Some (Atom (_, a)) when is_var_atom a ->
+                advance ();
+                a
+            | _ ->
+                raise
+                  (Ir.Error
+                     ([],
+                      Printf.sprintf "let: expected a binding name at offset %d"
+                        bstart))
+          in
+          (* each binding's rhs sees the bindings BEFORE it (sequential
+             let), but not itself (that would be letrec, L5 gated). *)
+          let rhs = parse_term !seen in
+          expect_rp bstart "let binding";
+          bindings := (name, rhs) :: !bindings;
+          seen := name :: !seen;
+          binding_loop ()
+      | _ ->
+          raise
+            (Ir.Error
+               ([], Printf.sprintf "let: malformed binding list at offset %d" start))
+    in
+    binding_loop ();
+    (match !bindings with
+     | [] ->
+         raise
+           (Ir.Error
+              ([], Printf.sprintf "let: empty binding list at offset %d" start))
+     | _ -> ());
+    let body = parse_term (List.rev_map fst !bindings @ scope) in
+    expect_rp start "let";
+    let sp : Ir.span = { off = start; len = !pos - start } in
+    (* bindings were collected in source order; desugar right-nested so
+       the LAST binding's lambda is innermost (sequential scope). *)
+    let rec desugar = function
+      | [] -> body
+      | (name, rhs) :: rest ->
+          let inner = desugar rest in
+          Ir.App
+            { id = fresh (); span = sp
+            ; fn = Ir.Lam { id = fresh (); span = sp; param = name; body = inner }
+            ; arg = rhs }
+    in
+    desugar (List.rev !bindings)
 
   (* (runtime (prim "name" args...)): mark a prim call run-time-only.
      compile-IS must not fire it while compiling — prims only execute

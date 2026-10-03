@@ -112,6 +112,99 @@ let reader_tests =
                "(lambda (pair) (runtime (prim \"echo\" pair)))"));
     ]
 
+(* ---------- dialect v0.1 sugar (borg/dialect.borg) ---------- *)
+
+(* Desugar-equality: sugar source and its hand-written twin must
+   compile to the SAME tree (hash) and the same compile steps — the law
+   that makes sugar unable to smuggle semantics (acceptance 12.1). *)
+let desugars name sugar twin expected =
+  Alcotest.test_case name `Quick (fun () ->
+      let a = Tuna_compiler.Bracket.compile_source sugar in
+      let b = Tuna_compiler.Bracket.compile_source twin in
+      Alcotest.(check string) (name ^ ": identical ternary") b.ternary a.ternary;
+      Alcotest.(check string) (name ^ ": identical hash") b.hash_hex a.hash_hex;
+      Alcotest.(check int) (name ^ ": identical steps") b.steps a.steps;
+      match expected with
+      | Some e -> Alcotest.(check string) (name ^ ": expected") e a.ternary
+      | None -> ())
+
+let sugar_tests =
+  [
+    (* brackets -> cons chains *)
+    desugars "[1 2 3] is the pair chain" "[1 2 3]"
+      "(pair 1 (pair 2 (pair 3 0)))" (Some "220210022020210022021021000");
+    desugars "[] is 0" "[]" "0" (Some "0");
+    desugars "[x] is (pair x 0)" "(lambda (x) [x])" "(lambda (x) (pair x 0))" None;
+    desugars "nested brackets" "[[1 2] [3 4]]"
+      "(pair (pair 1 (pair 2 0)) (pair (pair 3 (pair 4 0)) 0))" None;
+    desugars "bracket with an application element" "(lambda (f) (lambda (x) [(f x) 1]))"
+      "(lambda (f) (lambda (x) (pair (f x) (pair 1 0))))" None;
+    (* numbers -> canonical law-5 Tree_lit *)
+    desugars "1 decodes to int law 5" "1" "%202100" (Some "202100");
+    desugars "2 decodes to int law 5" "2" "%20202100" None;
+    desugars "42 decodes to int law 5" "42" "%202021020210202100" None;
+    desugars "-7 decodes to int law 5" "-7" "%2102102102100" None;
+    desugars "-0 canonicalizes to the one zero" "-0" "%200" None;
+    desugars "00 canonicalizes to the one zero" "00" "%200" None;
+    (* let -> nested lambda applications *)
+    desugars "let single binding" "(let ((x 1)) x)" "((lambda (x) x) 1)" None;
+    desugars "let sequential scoping" "(let ((x 1) (y x)) y)"
+      "((lambda (x) ((lambda (y) y) x)) 1)" None;
+    Alcotest.test_case "bare 0 stays the leaf literal (compat)" `Quick (fun () ->
+        let a = Tuna_compiler.Bracket.compile_source "0" in
+        Alcotest.(check string) "leaf" "0" a.ternary);
+    Alcotest.test_case "lambda param shadows let (reserved head only)" `Quick
+      (fun () ->
+        let a = Tuna_compiler.Bracket.compile_source "(let ((let 1)) let)" in
+        let b = Tuna_compiler.Bracket.compile_source "((lambda (let) let) 1)" in
+        Alcotest.(check string) "identical" b.ternary a.ternary);
+    compile_error "empty let binding list" "(let () 0)" "" "empty binding";
+    compile_error "let binding without a body" "(let ((x 1)))" ""
+      "unexpected ')'";
+  ]
+
+let int_codec_tests =
+  List.map
+    (fun (name, f) -> Alcotest.test_case name `Quick f)
+    [
+      ( "+42 is law 5",
+        fun () ->
+          Alcotest.(check string) "42" "202021020210202100"
+            (Tuna.Canon.encode
+               (Tuna.Int_enc.positive_of_decimal "42")) );
+        ( "-42 flips the sign bit",
+        fun () ->
+          Alcotest.(check string) "-42" "2102021020210202100"
+            (Tuna.Canon.encode
+               (Tuna.Int_enc.negative_of_decimal "42")) );
+      ( "zero is the one canonical form",
+        fun () ->
+          Alcotest.(check string) "0" "200"
+            (Tuna.Canon.encode
+               (Tuna.Int_enc.positive_of_decimal "0")) );
+      ( "bare 0 is not claimed (leaf preserved)",
+        fun () ->
+          Alcotest.(check bool) "none" true
+            (Tuna.Int_enc.of_decimal_atom "0" = None) );
+      ( "-0 canonicalizes to the one zero",
+        fun () ->
+          Alcotest.(check string) "200" "200"
+            (Tuna.Canon.encode
+               (Tuna.Int_enc.negative_of_decimal "0")) );
+      ( "leading zeros fold",
+        fun () ->
+          Alcotest.(check string) "123"
+            (Tuna.Canon.encode (Tuna.Int_enc.positive_of_decimal "123"))
+            (Tuna.Canon.encode (Tuna.Int_enc.positive_of_decimal "000123")) );
+      ( "arbitrary precision (no OCaml int)",
+        fun () ->
+          (* 2^100 has a 101-bit magnitude; the decoder cannot have used
+             an OCaml int to get here *)
+          let t = Tuna.Int_enc.of_decimal_atom
+              "1267650600228229401496703205376" in
+          Alcotest.(check bool) "decoded" true (t <> None) );
+    ]
+
 (* ---------- compile: SK elimination with eta; compile IS reduction ---------- *)
 
 let compile_tests =
@@ -133,7 +226,8 @@ let compile_tests =
       "(lambda (x) (y x))" "IR path 0.0" "unbound variable";
     compile_error "empty parameter list" "(lambda () 0)" "" "empty parameter";
     compile_error "missing body" "(lambda (x))" "" "unexpected ')'";
-    compile_error "bad token" "(lambda (x) 123)" "" "unexpected token";
+    compile_error "bad token" "(lambda (x) @nope)" "" "unexpected token";
+    (* 123 is now a valid literal; its desugar-equality twin is above. *)
     compile_error "bad tree literal" "%229" "" "bad tree literal";
   ]
 
@@ -278,6 +372,8 @@ let () =
     [
         ("reader", reader_tests);
         ("dialect", dialect_tests);
+        ("dialect sugar", sugar_tests);
+        ("int codec", int_codec_tests);
         ("compile", compile_tests);
       ("extensional", extensional_tests);
       ("provenance", provenance_tests);
