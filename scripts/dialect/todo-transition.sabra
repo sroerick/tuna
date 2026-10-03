@@ -1,0 +1,18 @@
+; todo-transition.sabra — the dialect chapter's todo dogfood, the WRITE
+; half (borg/dialect.borg, TODO BRIDGE / acceptance 12.5).
+;
+; Takes a granted item path, reads the record (tree/get), flips its
+; state (open <-> done) in-calculus, and writes the updated record back
+; (tree/put).  This is the pure invariant transition the chapter names:
+; state is only open|done, recomputed by replay, while the two boundary
+; effects stay journaled.
+;
+;   key 1 = state: %10 = open, %0 = done
+;   record = a list of [key value] two-lists (the L4 convention)
+;
+; (the open->done flip: if(THEN ELSE COND) with cond = "is open")
+
+(lambda (item-path)
+  (let ((rec (prim "tree/get" item-path)))
+    (let ((flipped (if %0 %10 (tree-eq (rec-val 1 rec) %10))))
+      (prim "tree/put" item-path (rec-upd 1 flipped rec)))))

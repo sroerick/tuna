@@ -1,0 +1,36 @@
+; todo-board.sabra — the dialect chapter's in-calculus dogfood
+; (borg/dialect.borg, TODO BRIDGE / acceptance 12.5).
+;
+; The todo item logic, in sabra, over a granted namespace.  An item is
+; a record (a list of [key value] two-lists, the L4 convention):
+;
+;   [1 <state>]   state: %10 = open, %0 = done
+;   [2 <title>]   title: a cstr string tree
+;   [3 <who>]     creator: a cstr string tree
+;   [4 <when>]    created: a law-5 int tree (an epoch second)
+;
+; The program takes a granted prefix (grants law 7: paths arrive as
+; arguments) and folds the board into a summary record:
+;
+;   [1 <open-count>] [2 <done-count>]
+;
+; Both effects ride the boundary: tree/list reads the prefix; math/add
+; increments the aggregate (F6: aggregates on the prim); the state
+; transition DONE->OPEN and title/who/when validation stay PURE
+; (invariant checks re-folded by replay).
+;
+; Dialect sugar in action: [ ] bracket construction, decimal number
+; literals, let, rec-* vocabulary.  This file IS the citation the
+; chapter's record convention was added on.
+
+(lambda (prefix)
+  (let ((items (prim "tree/list" prefix)))
+    (list-fold
+      (lambda (entry acc)
+        ; entry = [path [record version]]; record = first (second entry)
+        (if
+          (rec-upd 1 (prim "math/add" (rec-val 1 acc) 1) acc)   ; state open
+          (rec-upd 2 (prim "math/add" (rec-val 2 acc) 1) acc)   ; state done
+          (tree-eq (rec-val 1 (first (second entry))) %10)))
+      [[1 0] [2 0]]
+      items)))

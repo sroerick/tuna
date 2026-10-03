@@ -23,7 +23,7 @@
       stays the owner's leaning; every artifact here is named by
       function (grammar, codec, corpus rows), nothing depends on the
       word.")
- (status planned)
+ (status implemented)
  (* agent note (|2026-10-02 chapter authored on the operator's launch,
       after the rim-eio merge. Bookkeeping coordinated with the book:
       acceptance instrument is the next free script (12 ->
@@ -37,16 +37,29 @@
       Operator review of the finished port (read the sabra source) is
       expected at make time and its verdict lands in this chapter's
       note; it is input to a future vocabulary pass, deliberately not
-      an F14 trigger - triggers stay objective like the F9 gates.|) *)
+      an F14 trigger - triggers stay objective like the F9 gates.
+
+      LANDED 2026-10-02 (this make): all six acceptance items green
+      (scripts/verify-12-dialect.sh); F13 NOT triggered (the reader
+      fold held: 6/6 live desugar pairs identical tree+size, corpus
+      dialect_* rows agree three-engine); F14 OBSERVED at the 512-item
+      target - see the pre-registered-failures outcomes below.  A
+      FOURTH, unpre-registered substrate defect surfaced and was fixed
+      inline (tree/list used path validation where every other prefix
+      surface used prefix validation); it is recorded in FINDINGS.md
+      as a non-F note (the book's rule: an F-number is a
+      pre-registered failure, and this one was not).|) *)
  (convention ocaml-dune)
  (section dialect
   (doc "Construction sugar at the reader plus the record vocabulary it
        unlocks. Everything else honors the Forth law: syntax stays
        frozen elsewhere, the dictionary grows, and any syntax addition
-       must FOLD into what already exists or go FINDINGS.")
-  (status planned)
+       must FOLD into what already exists or go FINDINGS.  IMPLEMENTED
+       v0.1: brackets + number literals + let at the reader, records +
+       list-filter in the stdlib v1.1 rows, the todo bridge green.")
+  (status implemented)
   (subsection laws
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       L1 PARENS COMPUTE, BRACKETS CONSTRUCT. [...] is the data form:
@@ -90,7 +103,7 @@
          desugared output: sugar must not multiply compiled size
          against its hand-written twin. |))))
   (subsection forms
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       BRACKETS (pinned first move). [a b c] desugars at the reader
@@ -128,7 +141,7 @@
          belong to byte-values + the prim world per byte-values law
          4. |))))
   (subsection records
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       THE CONVENTION the stdlib deferred out of v1 ('record/assoc
@@ -137,7 +150,10 @@
       LIST of (key value) TWO-LISTS. The ONE list law carries it;
       no second list convention is introduced, ever. Constructors
       compose with the sugar: [k v] is (pair k (pair v 0)); a
-      record literal is a bracket list of those pairs.
+      record literal is a bracket list of those pairs.  An ENTRY's
+      value is `first (second kv)` (the `second` is the singleton
+      tail `[value]`) - the one shape worth pinning in prose because
+      the natural mistake, `second kv`, hands the tail list instead.
 
       KEY DOMAIN is decided at MAKE TIME by the fuel table (12.4),
       ties break to TAGS: law-4 small-nat keys (tags are what nats
@@ -146,6 +162,9 @@
       versus cstr string keys (greppable, but pure string ops price
       like unary bloat per byte-values law 4, so strings must EARN
       the row on measured numbers, not on readability taste).
+      LANDED: tags (small-nat keys) - the todo port keys state/title/
+      who/when by small nat; no string-keyed lookup was needed, so
+      the string rows never had to earn a place.
 
       VALUES stay open per the ordinary conventions (strings,
       ints, whole trees-as-programs all legal fields).
@@ -161,9 +180,15 @@
       additions, the manifest does not anticipate it. Every def
       property-pinned, manifest-rowed, corpus-entered: verify-8
       stays the referee and must stay green over 53+v1.1 rows.
+      LANDED (61 defs total, 53 v1 rows untouched): none, some,
+      rec-get, rec-has, rec-val (option unwrap for arithmetic
+      consumers), rec-replace, rec-upd (replace-or-append), and
+      list-filter (the port's one list reach).  none/some are the
+      law-3 option alias defs the record code reads - added because
+      the port spells `(some x)` rather than raw `(%0 x)`.
       |))))
   (subsection todo-bridge
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       THE DOGFOOD - the 2026-10-02 review's named product candidate,
@@ -171,7 +196,7 @@
       real boundary effects.
 
       SHAPE: a sabra program holding a granted namespace (default
-      todo-cal/, disjoint from the host page's todo/ flat ids, so
+      todo-cal, disjoint from the host page's todo/ flat ids, so
       the OCaml board and the sabra board coexist without artifact
       noise in each other's pages - the page code is untouched by
       this chapter; a UI swap is an owner product call outside the
@@ -186,15 +211,33 @@
       back. Every boundary call journaled; the transcript is a run
       row like any other.
 
+      LANDED: source scripts/dialect/todo-board.sabra (the fold /
+      read half) + scripts/dialect/todo-transition.sabra (the write
+      half: tree/get an item, flip state in-calculus, tree/put it
+      back), driver scripts/dialect/bridge_probe.py, checked by
+      acceptance 12.5.  Both halves journal tree/get, tree/put,
+      tree/list, math/add and replay-verify.
+      The granted prefix travels WITHOUT a trailing slash (`todo-cal`,
+      not `todo-cal/`): tree/list's prefix argument is a plain path
+      that still selects the `todo-cal/*` slice, and the grant's
+      path_prefix uses the same spelling. A trailing slash exposed a
+      substrate inconsistency (tree/list used path validation where
+      the HTTP surface used prefix validation); fixed inline and
+      recorded in FINDINGS.md. The board namespace is todo-cal-v12 in
+      the script so re-runs never collide with the host page.
+
       RECORD SHAPE is the port's first-class use of the new
       conventions: title (string), state (small nat or bool tag,
       make-time call), attribution (who as string, when as int via
       number literals). Exact field set pinned at make time by what
       the program writes - this paragraph is deliberately NOT the
-      schema; the bridge source is.
+      schema; the bridge source is.  LANDED schema: key 1 = state
+      (%10 open | %0 done), key 2 = title (cstr string), key 3 = who
+      (cstr string), key 4 = when (law-5 int, a number literal); the
+      summary record is key 1 = open count, key 2 = done count.
       |))))
   (subsection acceptance
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Instrument: scripts/verify-12-dialect.sh over a live dev
@@ -237,9 +280,32 @@
           grows by the dialect rows without losing a single old
           entry; borge lint + report clean; the F13/F14 statuses, if
           they move, move in the same commit as the evidence.
-      |))))
+
+      OUTCOMES 2026-10-02 - all six green (scripts/verify-12-dialect.sh
+      is the live instrument):
+      12.1 DESUGAR EQUALITY: 6/6 live pairs compile to identical
+         ternary + size (brackets, [], 42, -7, let, nested brackets);
+         corpus dialect_* rows add three-engine agreement (86/86).
+      12.2 COMPAT: bare 0 remains the leaf (0 1 0); the -<digits>
+         reservation audit is clean; corpus intact at 86 entries.
+      12.3 READER SEAM: compiler delta since the dialect baseline is
+         exactly compiler/lib/sexp.ml; interpreter/ byte-identical;
+         the common/ codec (Tuna.Int_enc) is the only other core-side
+         addition.  verify-8 [8.6] was widened to this law (the old
+         blanket interpreter+compiler+common byte-check could not
+         express a chapter whose whole point is a reader delta).
+      12.4 FUEL TABLE: bracket compile cost equals the hand pair-chain
+         (zero triage); rec-upd corpus 4,683 v0 steps; rec-get
+         2,158 (present) / 2,321 (absent); rec-has 2,162; rec-val
+         2,163; list-filter 276.
+      12.5 TODO BRIDGE: 2 open / 1 done, 7 journal rows (tree/list +
+         six math/add), replay verified.  Source:
+         scripts/dialect/todo-board.sabra; driver
+         scripts/dialect/bridge_probe.py.
+      12.6 BOOK HYGIENE: sabralib 61 defs; dialect corpus rows present;
+         borge lint/report clean. |))))
   (subsection pre-registered-failures
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       F13 SUGAR SEAM BREACH. TRIGGER: any v0.1 form cannot desugar
@@ -266,6 +332,30 @@
       plain read of the finished port ('could a stranger write
       this?') is recorded beside the verdict either way, as input
       to that pass - deliberately not a trigger, to keep F14 as
-      objective as the F9 gates. |))))
+      objective as the F9 gates.
+
+      OUTCOMES 2026-10-02 (full record: FINDINGS.md).  F13 NOT
+      triggered: the reader fold is total and checked (12.1).  F14
+      OBSERVED at the 512-item target.  Measured board bridge under
+      fuel 1e7 / size_cap 1e5:
+         items   steps      journal   status
+           4      71,833      9        normal
+          16     287,189     33        normal
+          64   1,148,613    129        normal
+         256         128      1        normal + tree/list error
+         512         128      1        normal + tree/list error
+      The 256+/512 runs fail at the EFFECT, not the calculus: the
+      prim `tree/list` caps its result at list_cap = 256 entries AND
+      Prims.payload_cap = 65,536 ternary bytes, answering a journaled
+      `Error' ('result exceeds the journal payload cap') that folds
+      to an empty board.  So the ceiling is a HOST pagination gap,
+      not a reader-sugar gap: package-scale boards need a windowed
+      read (or a board sized to the cap) - an evidence-named follow-
+      up, per the F14 THEN clause.  Step cost is also superlinear
+      (1.15M at 64 items; rec-get/rec-upd fold costs above), which
+      the same pass must price.  This is the correction of the
+      todo-probe's verdict: the language could carry the ITEM LOGIC
+      (12.5 green), it could not carry the WHOLE BOARD at unbounded
+      size.  A vocabulary pass, not a syntax pass.|))))
  )
 )

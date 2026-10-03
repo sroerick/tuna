@@ -319,12 +319,17 @@ this triggered; it did not, so the swap stands. No bridge, no flag.
 > Ir.ml, bracket.ml or interpreter/; or desugar multiplies compiled
 > size against its hand-written twin (law L6).
 
-**Status: pre-registered** (2026-10-02), make pending. THEN, if
-observed: the fold thesis fails for that form — DROP the form (never
-keep it by growing IR or the core), and route the true need, if real,
-to a linking/pretty-printer chapter. This is stdlib acceptance law 6
-("if any stdlib def requires a core change to work, that is a
-FINDING, not a patch") applied to the reader seam.
+**Status: not triggered** (2026-10-02, borg/dialect.borg make). The
+reader fold held on every shipped form: 6/6 live desugar pairs compile
+to identical ternary + compile steps, and the three-engine corpus
+(`scripts/diff-corpus/dialect_*`) agrees (86/86). The compiler delta
+since the dialect baseline is exactly `compiler/lib/sexp.ml`; the
+interpreter is byte-identical; the one core-side addition is
+`common/lib/int_enc.ml` (the law-5 codec the reader and tests share,
+beside `Tuna.Cstr`) — an additive codec, not a change to the existing
+grammar's semantics. No form needed an `Ir.ml`/`bracket.ml`/
+`interpreter/` change. `letrec` stayed GATED OFF: the port did not trip
+on the rec-fix idiom, so it never shipped.
 
 ---
 
@@ -341,14 +346,43 @@ FINDING, not a patch") applied to the reader seam.
 > programs); or the port cannot be completed without a prim family
 > outside the pinned set (tree/*, value/*, math/*).
 
-**Status: pre-registered** (2026-10-02), make pending. THEN, if
-observed: record with the port source and the 12.4 fuel-table rows as
-evidence; the consequence is an evidence-named vocabulary or linking
-pass, never more keywords adjudicated on taste. The operator's plain
-read of the finished port ("could a stranger write this?") is
-recorded beside the verdict either way, as input to that pass —
-deliberately not a trigger, so the F-class stays as objective as the
-F9 gates.
+**Status: OBSERVED** (2026-10-02, borg/dialect.borg make). The
+todo bridge (`scripts/dialect/todo-board.sabra`) closes at 4/16/64
+items under fuel 1e7 / size_cap 1e5, with step counts 71,833 /
+287,189 / 1,148,613 respectively — but at 256 and 512 items the prim
+`tree/list` hits `list_cap` = 256 entries and `Prims.payload_cap` =
+65,536 ternary bytes, answers the journaled error "result exceeds the
+journal payload cap", and the fold degenerates to an empty board
+(128 steps, 1 journal row, normal status). So the ceiling is a HOST
+pagination gap, not a reader-sugar gap: the ITEM LOGIC is written and
+verified (acceptance 12.5: 2 open / 1 done, journaled, replay
+verified), the WHOLE-BOARD read at unbounded size is not. The same run
+shows superlinear step cost (the record folds: rec-get 2,158/2,321,
+rec-upd 4,683 v0 steps per the 12.4 table). Per the THEN clause, this
+is an evidence-named follow-up: a windowed/paginated tree read (or a
+board sized to the cap) plus a record-fold cost pass — a VOCABULARY
+pass, not a syntax pass. The todo-probe verdict is thereby corrected:
+the language could carry the item logic all along; the missing piece
+was board-scale pagination.
+
+---
+
+## NON-F — tree/list PREFIX VALIDATION (dialect make, fixed inline)
+
+Not an F-class failure (an F-number is a PRE-REGISTERED failure; this
+was neither pre-registered nor left standing). Found while taking a
+granted namespace prefix into the todo bridge: the `tree/list` PRIM
+validated its `prefix` argument with `validate_path` (which rejects a
+trailing `/`), while every other prefix surface — the HTTP
+`/api/tree/list` handler and a grant's `path_prefix` — uses
+`validate_prefix` (which permits it). So `(prim "tree/list" "todo-cal\/")
+was a journaled error even though the same prefix is the natural
+grant shape and works over HTTP. Fixed in `server/lib/tree_prims.ml`
+(`validate_prefix`), so the prim now matches the surface. No schema,
+no contract bump: the accepted-input set widened, the answer shape is
+unchanged. Recorded here because it is the kind of cross-surface
+inconsistency the book wants named, not because it moved any
+pre-registered number.
 
 ---
 

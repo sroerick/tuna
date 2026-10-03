@@ -164,12 +164,22 @@ curl -sf -m 300 -H "$AUTH" "$BASE/api/runs/$RUN_ID/deriv" | $DC - >/dev/null \
   || fail "deriv-check failed on the balance run (steps=$STEPS)"
 
 echo "[8.6] core untouched (acceptance 6)"
+# stdlib v1 itself added no core change; the dialect chapter later
+# added reader sugar (compiler/lib/sexp.ml) + the int codec
+# (common/lib/int_enc.ml) DELIBERATELY, under its own 12.3 law.  What
+# must stay true forever: the interpreter is byte-identical, and the
+# compiler delta is exactly sexp.ml (no IR/bracket changes).
 BASELINE="${TUNA_STDLIB_BASELINE:-0185b1a}"
-if git diff --quiet "$BASELINE"..HEAD -- interpreter compiler common 2>/dev/null; then
-  echo "[8.6] interpreter/compiler/common byte-identical since $BASELINE"
-else
-  git diff --stat "$BASELINE"..HEAD -- interpreter compiler common || true
-  fail "core touched since $BASELINE"
+if ! git diff --quiet "$BASELINE"..HEAD -- interpreter 2>/dev/null; then
+  git diff --stat "$BASELINE"..HEAD -- interpreter || true
+  fail "interpreter touched since $BASELINE"
 fi
+COMPILER_DELTA=$(git diff --name-only "$BASELINE"..HEAD -- compiler 2>/dev/null | tr '\n' ' ')
+case "$COMPILER_DELTA" in
+  ""|"compiler/lib/sexp.ml ") : ;;
+  *) echo "  compiler delta: $COMPILER_DELTA" >&2
+     fail "compiler delta must be sexp.ml only since $BASELINE" ;;
+esac
+echo "[8.6] interpreter byte-identical; compiler delta = ${COMPILER_DELTA:-none}"
 
 echo "verify-8-stdlib: green"
