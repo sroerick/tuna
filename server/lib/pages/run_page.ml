@@ -143,7 +143,24 @@ let view pool user req =
                   | None -> {|<span class="muted">untraced</span>|})
                r.S.r_fuel r.S.r_size_cap
                (match r.S.r_result_ternary with
-                | Some t -> L.code_block t
+                | Some t ->
+                    let view_link =
+                      match r.S.r_result_hash with
+                      | Some h ->
+                          Printf.sprintf {| <a href="/view/%s">view tree</a>|}
+                            (L.esc h)
+                      | None -> ""
+                    in
+                    let tree_section =
+                      match Tuna.Canon.of_string t with
+                      | Ok tree ->
+                          Printf.sprintf
+                            {|<details class="treebox"><summary>tree (%s)</summary>%s%s</details>|}
+                            (L.esc (Tree_svg.summary tree))
+                            Tree_svg.legend (Tree_svg.svg tree)
+                      | Error _ -> ""
+                    in
+                    L.code_block t ^ view_link ^ tree_section
                 | None -> {|<span class="muted">no result yet</span>|})
                (L.verify_badge r.S.r_verify_status)
                (if r.S.r_verify_status = Some "failed" then verify_button r.S.r_id else "")

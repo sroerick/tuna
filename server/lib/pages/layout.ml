@@ -103,6 +103,16 @@ h3 { margin: .4rem 0; }
 .err { color: #e67172; }
 .okmsg { color: #a6d189; }
 code { color: #c9a; }
+svg.tsv { background: #161616; border: 1px solid #333; max-width: 100%%; height: auto; }
+.tsv-e { stroke: #4a5560; stroke-width: 1.6; }
+.tsv-leaf { fill: #161616; stroke: #9ccfd8; stroke-width: 1.4; }
+.tsv-stem { fill: #161616; stroke: #9ccfd8; stroke-width: 1.4; }
+.tsv-half { fill: #9ccfd8; }
+.tsv-fork { fill: #9ccfd8; }
+.tsv-box { fill: #1d2a33; stroke: #587d8c; stroke-width: 1.2; }
+.tsv-label { fill: #d8dee9; font: 13px monospace; text-anchor: middle; }
+.tsv-legend { background: none; }
+details.treebox summary { cursor: pointer; color: #7fb4ca; }
 </style>
 </head>
 <body>

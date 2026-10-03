@@ -39,12 +39,23 @@ let view pool user req =
   S.value_fetch pool hash
   >>= function
   | Some ternary ->
-      let kind_row =
-        Printf.sprintf {|<p>%s <code>%s</code> · %d chars</p>|}
-          (L.badge "ok" "tree") (L.esc hash) (String.length ternary)
+      let tree =
+        match Tuna.Canon.of_string ternary with
+        | Ok t -> Some t
+        | Error _ -> None
       in
-      let outline =
-        try L.tree_outline (Tuna.Canon.parse ternary) with _ -> "(unparseable)"
+      let decoded =
+        match tree with Some t -> Tree_svg.summary t | None -> "unparseable"
+      in
+      let kind_row =
+        Printf.sprintf {|<p>%s <code>%s</code> · %d chars · <b>%s</b></p>|}
+          (L.badge "ok" "tree") (L.esc hash) (String.length ternary)
+          (L.esc decoded)
+      in
+      let tree_section =
+        match tree with
+        | Some t -> "<h3>tree</h3>" ^ Tree_svg.legend ^ Tree_svg.svg t
+        | None -> ""
       in
       S.fetch_program pool hash
       >>= fun prog ->
@@ -58,8 +69,7 @@ let view pool user req =
       in
       let body =
         kind_row ^ plink ^ "<h3>canonical ternary</h3>"
-        ^ L.code_block ternary ^ "<h3>outline</h3>" ^ L.code_block outline
-        ^ api_note hash
+        ^ L.code_block ternary ^ tree_section ^ api_note hash
       in
       L.page ~user ~title body
   | None ->
@@ -90,12 +100,22 @@ let view pool user req =
                 | None -> " · ternary-only"
               in
               let kind_row =
-                Printf.sprintf {|<p>%s <code>%s</code>%s · <a href="/programs/%s">full program page</a></p>|}
+                Printf.sprintf
+                  {|<p>%s <code>%s</code>%s · <a href="/programs/%s">full program page</a></p>|}
                   (L.badge "ok" "program") (L.esc hash) ir (L.esc hash)
+              in
+              let tree_section =
+                match Tuna.Canon.of_string prog.S.p_ternary with
+                | Ok t ->
+                    Printf.sprintf
+                      {|<details class="treebox"><summary>tree (%s)</summary>%s%s</details>|}
+                      (L.esc (Tree_svg.summary t))
+                      Tree_svg.legend (Tree_svg.svg t)
+                | Error _ -> ""
               in
               let body =
                 kind_row ^ "<h3>canonical ternary</h3>"
-                ^ L.code_block prog.S.p_ternary
+                ^ L.code_block prog.S.p_ternary ^ tree_section
               in
               L.page ~user ~title:("program " ^ L.short_hash hash) body
           | None ->
