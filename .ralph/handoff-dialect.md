@@ -1,12 +1,25 @@
-# HANDOFF — sabra dialect v0.1 (borg/dialect.borg, all statuses PLANNED)
+# HANDOFF — sabra dialect v0.1 (borg/dialect.borg)
 
-Date: 2026-10-02. State: chapter authored and committed (`59569a3`),
-NOTHING implemented. Work tree clean. This note is the code-facing
-companion to the chapter — read `borg/dialect.borg` FIRST, it is the
-law; this file is orientation + pin facts + the order of work.
-`borge lint && borge report` green at handoff. NB: `borge fmt
---check` fails even on stdlib.borg — the repo is not fmt-canonical;
-do NOT run `borge normalize` here, lint is the gate per AGENTS.md.
+**CLOSED 2026-10-02.** Every item below landed (commits
+273f77a..bd173eb): reader sugar (brackets, number literals, let) + the
+int codec; stdlib v1.1 records/list-filter; the todo bridge (board fold
++ state transition + open-items filter query); `scripts/verify-12-dialect.sh`
+all six items green; borge lint/report clean. F13 NOT triggered; F14
+OBSERVED (tree/list's 256-entry/64KiB cap at 256+ items — a host
+pagination follow-up, not a reader-sugar gap); `tree/list` prefix
+validation fixed inline (FINDINGS non-F note). Original brief follows
+for the record.
+
+---
+
+Date: 2026-10-02. State: chapter authored (`59569a3`).
+This note is the code-facing companion to the chapter — read
+`borg/dialect.borg` FIRST, it is the law; this file is orientation +
+pin facts + the order of work. `borge lint && borge report` green. NB:
+`borge fmt --check` fails even on stdlib.borg — the repo is not
+fmt-canonical; do NOT run `borge normalize` here, lint is the gate.
+
+## 0. The mission
 
 ## 0. The mission
 
@@ -148,3 +161,4 @@ untouched by this chapter.
   user identity is legal and wins (resolution order: param >
   identity > sabralib > builtins). That's the whole design; test
   it, don't forbid it.
+

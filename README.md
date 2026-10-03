@@ -135,8 +135,21 @@ REPL command grammar (`eval`/`def`/`undef`/`get`/`patch`/`first-diff`/
 def rounds are first-class journaled runs, chained per identity via
 `parent_run_id`; structural commands are store queries. Name resolution
 at parse time (borg/stdlib.borg): lambda param > identity dictionary >
-sabralib dictionary (the seeded sabra stdlib v1, 53 defs) > reader
+sabralib dictionary (the seeded sabra stdlib v1, 61 defs: v1
+vocabulary + the dialect chapter's records; borg/stdlib.borg +
+borg/dialect.borg) > reader
 builtins — identity def shadow wins, `undef` reveals std.
+
+The surface reader (borg/dialect.borg v0.1) adds construction sugar
+that folds into the same grammar: `[a b c]` brackets build the cons
+chain (pair a (pair b (pair c 0))), decimal/negative atoms are
+canonical law-5 int literals, and `(let ((x a)) B)` is nested lambda
+application.  A sugar form and its hand-written twin compile to the
+identical tree; `letrec` stays gated (unused by the port).  Records are
+the v1.1 vocabulary: a record is a list of [key value] two-lists
+(`rec-get`, `rec-val`, `rec-has`, `rec-upd`).  The chapter's dogfood is
+the todo board in-calculus — read fold, state transition, filter query
+— in `scripts/dialect/` (acceptance `scripts/verify-12-dialect.sh`).
 
 ### Federation (M12, `borg/federation.borg`)
 
