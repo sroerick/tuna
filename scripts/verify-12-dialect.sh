@@ -47,10 +47,34 @@ check_desugar '(let ((x 1) (y 2)) x)' '((lambda (x) ((lambda (y) x) 2)) 1)'
 check_desugar '[[1 2] [3 4]]' '(pair (pair 1 (pair 2 0)) (pair (pair 3 (pair 4 0)) 0))'
 echo "  6/6 pairs: identical ternary + size"
 
+# v0.2 keyed literals need the dictionary (key-* resolve through it), so
+# this check goes through the server REPL, which assembles the sabralib
+# rows under the identity.  (No shell brace expansion: Python drives it.)
+python3 - "$BASE" "$TOKEN" <<'PY'
+import json, sys, urllib.request
+base, tok = sys.argv[1], sys.argv[2]
+def tern(cmd):
+    req = urllib.request.Request(base + "/api/repl",
+        data=json.dumps({"command": cmd}).encode(),
+        headers={"Authorization": "Bearer " + tok,
+                 "Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req))["round"]["ternary"]
+pairs = [
+  ('{:state %10 :title "x"}', '[[key-state %10] [key-title "x"]]'),
+  ('{:state %10 :title "x" :who "me" :when 7}',
+   '[[key-state %10] [key-title "x"] [key-who "me"] [key-when 7]]'),
+]
+for form, twin in pairs:
+    a, b = tern(form), tern(twin)
+    if a != b:
+        raise SystemExit("12.1(v0.2): keyed %r != twin %r" % (a, b))
+print("  8/8 pairs incl. %d keyed literals: identical ternary" % len(pairs))
+PY
+
 echo "[12.2] compat: bare 0 is the leaf; corpus intact"
 [ "$(compile_term '0')" = "0 1 0" ] || fail "12.2: bare 0 must stay the leaf literal"
 CORPUS=$(ls "$ROOT"/scripts/diff-corpus/*.corpus | wc -l)
-[ "$CORPUS" -ge 86 ] || fail "12.2: expected >=86 corpus entries, got $CORPUS"
+[ "$CORPUS" -ge 89 ] || fail "12.2: expected >=89 corpus entries, got $CORPUS"
 echo "  leaf preserved, corpus intact ($CORPUS entries)"
 
 echo "[12.3] reader seam: compiler diff touches sexp.ml only"
@@ -77,7 +101,7 @@ python3 "$ROOT/scripts/dialect/bridge_probe.py" --prefix "$PREFIX" || \
 
 echo "[12.6] manifest + corpus hygiene"
 MF=$(psql_q -tA -c "SELECT count(*) FROM repl_dict d JOIN identities i ON i.id=d.identity_id WHERE i.name='sabralib'")
-[ "$MF" -ge 61 ] || fail "12.6: sabralib must hold >=61 defs, got $MF"
+[ "$MF" -ge 76 ] || fail "12.6: sabralib must hold >=76 defs, got $MF"
 ls "$ROOT"/scripts/diff-corpus/dialect_*.corpus >/dev/null 2>&1 || \
   fail "12.6: dialect corpus rows missing"
 echo "  sabralib $MF defs; dialect corpus rows present"

@@ -22,7 +22,17 @@
       cannot so fold is a FINDING (F13), never a patch. Naming: sabra
       stays the owner's leaning; every artifact here is named by
       function (grammar, codec, corpus rows), nothing depends on the
-      word.")
+      word.
+
+      v0.2 (this section's follow-on): the KEYED LITERAL {:name value}
+      - a record form that reads like a product should, folding to the
+      same bracket pairs the v0.1 record vocabulary already reads - and
+      the TODO PRELUDE, the shipped vocabulary (key-* tags + todo-*
+      create/accessors/flip/count) that makes a product write call
+      sites instead of calculus. Same research question, one move
+      further: the language can carry a product if the RECORD is
+      writable and the SCHEMA is named. No new reader beyond the one
+      brace form; everything else is additive dictionary.")
  (status implemented)
  (* agent note (|2026-10-02 chapter authored on the operator's launch,
       after the rim-eio merge. Bookkeeping coordinated with the book:
@@ -48,7 +58,25 @@
       inline (tree/list used path validation where every other prefix
       surface used prefix validation); it is recorded in FINDINGS.md
       as a non-F note (the book's rule: an F-number is a
-      pre-registered failure, and this one was not).|) *)
+      pre-registered failure, and this one was not).
+
+      v0.2 LANDED 2026-10-02 (same day, follow-on): the keyed literal
+      {:name value} is a total reader fold to [key-name value] bracket
+      pairs (same 12.1-equality law: 5/5 compiler tests + 3 corpus rows
+      dialect_keyed_*/dialect_todo_flip agree three-engine); the todo
+      prelude (key-state/title/who/when + todo-open/done/item/state/
+      title/who/when/entry/created/flip/open-count, 15 additive defs,
+      MANIFEST 76 total, the 61 earlier rows untouched) seeds like any
+      other vocabulary.  Key-domain decision MEASURED (the fuel-table
+      law): small-nat tags 2,051 v0 steps per 4-field lookup vs int
+      keys 4,418 vs cstr strings 27,817 - tags win by 2x over ints and
+      13x over strings, so the shipped key-* defs are small nats.  The
+      CREATE call site is now
+      (prim "tree/put" path {:state todo-open :title title :who who
+      :when 1727000000}) - pure vocabulary, runs at 64 steps with one
+      journaled tree/put.  F13/F14 unchanged (no form needed IR; the
+      board-scale pagination gap from v0.1 remains the named F14
+      follow-up).|) *)
  (convention ocaml-dune)
  (section dialect
   (doc "Construction sugar at the reader plus the record vocabulary it
@@ -56,7 +84,8 @@
        frozen elsewhere, the dictionary grows, and any syntax addition
        must FOLD into what already exists or go FINDINGS.  IMPLEMENTED
        v0.1: brackets + number literals + let at the reader, records +
-       list-filter in the stdlib v1.1 rows, the todo bridge green.")
+       list-filter in the stdlib v1.1 rows, the todo bridge green.
+       v0.2: keyed literals {...} + the shipped todo prelude.")
   (status implemented)
   (subsection laws
    (status implemented)
@@ -139,7 +168,19 @@
       Strings need NO new form: string literals are already reader
          terms (Tuna.Cstr) and ride the one list law; text payloads
          belong to byte-values + the prim world per byte-values law
-         4. |))))
+         4.
+      KEYED LITERALS (v0.2). {:name value ...} desugars at the reader
+         to the bracket list of [key value] pairs the record
+         vocabulary already reads: {:state x :title y} becomes
+         [[key-state x] [key-title y]] (each pair is
+         (pair key (pair value 0))). A :name key resolves to the
+         dictionary name key-name exactly as a bare atom would
+         (scope > dictionary > builtin), so the SCHEMA stays data and
+         the reader knows no fields. Total fold, same 12.1 equality
+         law: the form and its hand-written [key-value value] twin
+         compile to the identical tree and steps. Reserved shape: { }
+         and the :key token join the reader grammar; a :key outside a
+         keyed literal is a normal (if usually unbound) atom. |))))
   (subsection records
    (status implemented)
    (details
@@ -169,6 +210,16 @@
       VALUES stay open per the ordinary conventions (strings,
       ints, whole trees-as-programs all legal fields).
 
+      V0.2 KEY DOMAIN MEASURED (the fuel-table decision this law
+      demanded, 4-field record, v0 runtime steps on a clean run):
+      small-nat tags 2,051; int-literal keys 4,418; cstr string keys
+      27,817.  Ties broke to tags and the numbers confirmed it:
+      tags are 2.2x cheaper than int keys and 13.6x cheaper than
+      strings.  So the shipped schema (below) keys every field by a
+      law-4 small nat.  (The spreadsheet's earlier '10x' line was a
+      hand-count; the measured ordering is tags < int < string, and
+      the win over ints is smaller than the win over strings.)
+
       DEFS land as stdlib v1.1 ADDITIVE rows through the seeded
       pipeline unchanged (gen_defs -> freeze -> manifest bump ->
       generated embed; seeding stays skip-if-exists additive; a
@@ -187,6 +238,49 @@
       law-3 option alias defs the record code reads - added because
       the port spells `(some x)` rather than raw `(%0 x)`.
       |))))
+  (subsection todo-prelude
+   (status implemented)
+   (details
+    (doc (|
+      THE SHIPPED SCHEMA (v0.2, 17 additive rows; MANIFEST 76).
+      The missing maturity the todo probe hit was a NAMING layer, so
+      the chapter ships one - ordinary defs, no new reader beyond the
+      keyed literal, no host change:
+
+        key-state key-title key-who key-when   small-nat field tags
+        todo-open todo-done                     the two states
+        todo-state todo-title todo-who todo-when   rec-val accessors
+        todo-entry                              record out of a
+                                                tree/list entry
+        todo-item                               the 4-field record
+        todo-created                            tree/put a fresh item
+        todo-flip                               open<->done in-calculus
+        todo-open-count                         fold open items
+
+      Zero-cost where it can be: an accessor like (todo-state r) is a
+      def whose body is (rec-val key-state r); it bracket-abstracts to
+      the SAME tree as the raw access (verified: identical hash, 2,051
+      v0 steps when the key is a small nat), so the vocabulary is
+      readability with no runtime tax.  todo-created is the whole
+      create call site; todo-flip is the pure state transition.  The
+      prelude is a CONVENTION, not a cage: an identity can shadow any
+      todo-* name (resolution order), and a product with a different
+      schema defines its own key-* tags - the reader never learns the
+      fields.
+
+      WHAT A PRODUCT NOW WRITES (the whole point):
+        (lambda (path title who)
+          (prim "tree/put" path
+            {:state todo-open :title title :who who :when 1727000000}))
+      - one effect, one readable record literal, 64 runtime steps,
+      one journaled tree/put, replay-verified.  The calculus is still
+      underneath; nobody writing this had to see it.
+
+      GATED, NOT SHIPPED (L5): a `:name` field-accessor head form
+      ((:state r) for (todo-state r)) was considered and DROPPED - the
+      accessor defs carry it with zero new grammar, and the port never
+      tripped; ship the keyword only on a measured citation.  Same for
+      operators and further literal domains. |))))
   (subsection todo-bridge
    (status implemented)
    (details
@@ -257,7 +351,8 @@
           step counts, all three engines agreeing. Rows join the
           diff corpus (dialect_*): each number literal against its
           %-pin twin, each bracket list against its pair-chain twin,
-          let against the lambda twin, letrec (if shipped) against
+          let against the lambda twin, each keyed literal against its
+          [key-value value] twin; letrec (if shipped) against
           the rec-fix twin. This is the law that makes sugar unable
           to smuggle semantics.
       12.2 COMPAT. (a) every existing corpus source re-compiles to
@@ -275,9 +370,9 @@
       12.4 FUEL TABLE (recorded at make time, both engines - the
           D-class instrument): bracket construction vs hand
           pair-chain (the zero-triage claim, measured); record
-          get/upd over the port's own records; tag-keys vs
-          string-keys (the key-domain decision row); bridge runs at
-          4/64/512 items under pinned fuel 1e7 - exact steps
+          get/upd over the port's own records; the KEY-DOMAIN rows
+          (small-nat tags vs int keys vs cstr strings); bridge runs
+          at 4/64/512 items under pinned fuel 1e7 - exact steps
           recorded beside the F-class cousins.
       12.5 TODO BRIDGE. The dogfood run: status normal; journal
           complete for every boundary call; replay identity green;
@@ -293,9 +388,12 @@
       is the live instrument):
       12.1 DESUGAR EQUALITY: 6/6 live pairs compile to identical
          ternary + size (brackets, [], 42, -7, let, nested brackets);
-         corpus dialect_* rows add three-engine agreement (86/86).
+         corpus dialect_* rows add three-engine agreement (89/89
+         including keyed_*/todo_flip).  v0.2: 5/5 compiler keyed tests
+         + 3 corpus rows (dialect_keyed_literal, dialect_keyed_
+         accessor, dialect_todo_flip) agree.
       12.2 COMPAT: bare 0 remains the leaf (0 1 0); the -<digits>
-         reservation audit is clean; corpus intact at 86 entries.
+         reservation audit is clean; corpus intact and grown (89).
       12.3 READER SEAM: compiler delta since the dialect baseline is
          exactly compiler/lib/sexp.ml; interpreter/ byte-identical;
          the common/ codec (Tuna.Int_enc) is the only other core-side
@@ -305,12 +403,17 @@
       12.4 FUEL TABLE: bracket compile cost equals the hand pair-chain
          (zero triage); rec-upd corpus 4,683 v0 steps; rec-get
          2,158 (present) / 2,321 (absent); rec-has 2,162; rec-val
-         2,163; list-filter 286.
+         2,163; list-filter 286.  KEY DOMAIN (4-field lookup):
+         small-nat tags 2,051 < int keys 4,418 < cstr strings 27,817.
       12.5 TODO BRIDGE: 2 open / 1 done, 7 journal rows (tree/list +
-         six math/add), replay verified.  Source:
-         scripts/dialect/todo-board.sabra; driver
-         scripts/dialect/bridge_probe.py.
-      12.6 BOOK HYGIENE: sabralib 61 defs; dialect corpus rows present;
+         six math/add), replay verified; transition (tree/get +
+         tree/put) and open-query (list-filter + list-map) also
+         replay-verified.  Source: scripts/dialect/todo-{board,
+         transition,open}.sabra; driver scripts/dialect/bridge_probe.py.
+         v0.2 CREATE call site (pure vocabulary): 64 steps, one
+         journaled tree/put.
+      12.6 BOOK HYGIENE: sabralib 76 defs (53 v1 + 8 v1.1 records +
+         15 v0.2 prelude); dialect corpus rows present;
          borge lint/report clean. |))))
   (subsection pre-registered-failures
    (status implemented)
