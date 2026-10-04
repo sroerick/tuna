@@ -31,7 +31,7 @@ let who p name = S.bootstrap_identity p ~name ~token:(name ^ "-token") ()
 
 let upsert p ~ternary =
   let hash = Tuna.Hash.hex_of_string ternary in
-  S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None
+  S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None ~source:None
   >>= fun _ -> return hash
 
 (* T-family unfolded at run time (the same shape sharing_tests uses):

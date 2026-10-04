@@ -200,8 +200,7 @@ let run_json (r : Store.run) : J.t =
 
 let journal_json (j : Store.journal) : J.t =
   `Assoc
-    [ ("run_id", `String j.j_run_id)
-    ; ("seq", `Int j.j_seq)
+    [ ("run_id", `String j.j_run_id)    ; ("seq", `Int j.j_seq)
     ; ("callsite_path", `String j.j_callsite_path)
     ; ("prim", `String j.j_prim)
     ; ("prim_contract", `String j.j_prim_contract)
@@ -215,6 +214,64 @@ let journal_json (j : Store.journal) : J.t =
     ; ("host_build", `String j.j_host_build)
     ; ("prev_hash", `String j.j_prev_hash)
     ; ("row_hash", `String j.j_row_hash) ]
+
+(* Observability (the v0.2-defect disposition pass, call-sites.
+   provenance + journal.row-schema): a journal row carries its
+   provenance INLINE — the source span from the program's retained
+   provenance map and, when the program's source text is retained
+   (0015), the snippet itself — so a row reads as a line of sabra,
+   never as bare ternary.  ?dec=1 adds Dec.views: the labeled
+   best-effort decode candidates beside the ternary (ternary stays
+   authoritative; the views are guesses, all of them). *)
+let journal_row_json ?(dec = false) ~(spans : (string * J.t) list)
+    ~(resolve : off:int -> len:int -> string option) (j : Store.journal) :
+    J.t =
+  let span =
+    if j.j_callsite_path = "" then None
+    else List.assoc_opt j.j_callsite_path spans
+  in
+  let snippet =
+    match (span, resolve) with
+    | Some (`Assoc kv), resolve -> (
+        match (List.assoc_opt "off" kv, List.assoc_opt "len" kv) with
+        | Some (`Int off), Some (`Int len) -> resolve ~off ~len
+        | _ -> None)
+    | _ -> None
+  in
+  let dec_field name = function
+    | Some t -> ( match Dec.views t with Some v -> Some (name, v) | None -> None)
+    | None -> None
+  in
+  match journal_json j with
+  | `Assoc kvs ->
+      `Assoc
+        (kvs
+        @ [ ("span", (match span with Some s -> s | None -> `Null))
+          ; ("source", (match snippet with Some s -> `String s | None -> `Null)) ]
+        @ (if dec then
+             List.filter_map Fun.id
+               [ dec_field "args_dec" j.j_args_ternary
+               ; dec_field "result_dec" j.j_result_ternary ]
+           else []))
+  | j -> j
+
+(* The provenance tables for a run's journal rows: the span map and a
+   span->text resolver over the retained source (0015), fetched once
+   per response.  A program with no retained source resolves nothing
+   and the row says so honestly. *)
+let journal_provenance pool (r : Store.run) :
+    (string * J.t) list * (off:int -> len:int -> string option) =
+  Store.fetch_program pool r.r_program_hash
+  >>= function
+  | None -> return ([], fun ~off:_ ~len:_ -> None)
+  | Some p -> (
+      match p.p_source with
+      | None -> return (Run.ir_spans p.p_ir, fun ~off:_ ~len:_ -> None)
+      | Some src ->
+          let toks = Run.token_spans src in
+          return
+            ( Run.ir_spans p.p_ir,
+              fun ~off ~len -> Run.span_text src toks ~off ~len ))
 
 (* ir column for compiled programs: provenance (tree path -> IR node
    id + IR path span) — the diagnostics join for journal rows and
@@ -234,6 +291,7 @@ let program_json (p : Store.program) : J.t =
     ; ("ternary", `String p.p_ternary)
     ; ("size", `Int size)
     ; ("ir", (match p.p_ir with Some s -> J.from_string s | None -> `Null))
+    ; ("source", opt_str p.p_source)
     ; ("created_by", opt_str p.p_created_by) ]
 
 (* -- /health (open) -------------------------------------------------- *)
@@ -263,6 +321,7 @@ let post_program pool auth req =
           | Ok _tree ->
               let hash = Tuna.Hash.hex_of_string t in
               Store.upsert_program pool ~hash ~ternary:t ~ir:None ~created_by
+                ~source:None
               >>= fun _row ->
                (j_ok ~code:201 (`Assoc [ ("hash", `String hash) ])))
       | None, Some src -> (
@@ -293,7 +352,7 @@ let post_program pool auth req =
               let ir = J.to_string (ir_json_of_artifact art) in
               let hash = art.B.hash_hex in
               Store.upsert_program pool ~hash ~ternary:art.B.ternary ~ir:(Some ir)
-                ~created_by
+                ~created_by ~source:(Some src)
               >>= fun _row ->
                (j_ok ~code:201 (`Assoc [ ("hash", `String hash) ])))
       | None, None ->
@@ -371,7 +430,7 @@ let patch_program pool auth req =
                       | P.Applied { ternary; hash } ->
                           let created_by = Some auth.auth_id in
                           Store.upsert_program pool ~hash ~ternary ~ir:None
-                            ~created_by
+                            ~created_by ~source:None
                           >>= fun _row ->
                           
                             (j_ok
@@ -513,11 +572,26 @@ let get_run pool _auth req =
       | None ->  (j_err ~code:500 "run row vanished")
       | Some r ->
           Store.fetch_journals pool id >>= fun js ->
-          
-            (j_ok
-               (`Assoc
-                 [ ("run", run_json r)
-                 ; ("journal", `List (List.map journal_json js)) ]))
+          journal_provenance pool r
+          >>= fun (spans, resolve) ->
+          let dec = Web.query req "dec" = Some "1" in
+          let result_dec =
+            if dec then
+              [ ( "result_dec"
+                , (match r.Store.r_result_ternary with
+                   | Some t -> (
+                       match Dec.views t with Some v -> v | None -> `Null)
+                   | None -> `Null) ) ]
+            else []
+          in
+          (j_ok
+             (`Assoc
+               ([ ("run", run_json r) ] @ result_dec
+               @ [ ( "journal"
+                   , `List
+                       (List.map
+                          (journal_row_json ~dec ~spans ~resolve)
+                          js) ) ])))
 
 
 (* -- derivation records (borg/deriv.borg) ----------------------------- *)
@@ -633,16 +707,23 @@ let list_runs pool _auth req =
 
 let get_journal pool _auth req =
   let run_id = Web.param req "run_id" in
+  let dec = Web.query req "dec" = Some "1" in
   Store.fetch_run_resolved pool run_id
   >>= function
   | None ->  (j_err ~code:404 "unknown run id")
-  | Some (run_id, _) ->
-      Store.fetch_journals pool run_id >>= fun js ->
-      
+  | Some (run_id, r) ->
+      Store.fetch_journals pool run_id
+      >>= fun js ->
+      journal_provenance pool r
+      >>= fun (spans, resolve) ->
         (j_ok
            (`Assoc
              [ ("run_id", `String run_id)
-             ; ("journal", `List (List.map journal_json js)) ]))
+             ; ( "journal"
+               , `List
+                   (List.map
+                      (journal_row_json ~dec ~spans ~resolve)
+                      js) ) ]))
 
 type edit = Set_result of Tuna.Tree.t | Set_error of string | Clear
 

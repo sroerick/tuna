@@ -65,6 +65,14 @@
          in the store operator's logs; verifying a run journal is a
          cheap chain walk plus replay.
 
+         SURFACE SHAPE (the v0.2-defect disposition pass): the JSON
+         row adds its provenance INLINE — span (token-grid,
+         call-sites.provenance) plus the source snippet when the
+         program's source is retained (0015) — and ?dec=1 adds the
+         labeled best-effort decode views beside the ternary (ternary
+         stays authoritative). Read the row as a line of sabra, never
+         as bare ternary.
+
          Open question: whether journal rows budget against the run's
          size cap (a run could journal gigantic payloads and DoS the
          store while the calculus stays in-bounds). Leaning: payload

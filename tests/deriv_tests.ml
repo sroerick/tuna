@@ -231,7 +231,7 @@ let seed_program p ~caller src =
   let art = C.compile_source src in
   let ir_json = Yojson.Basic.to_string (Api.ir_json_of_artifact art) in
   S.upsert_program p ~hash:art.C.hash_hex ~ternary:art.C.ternary
-    ~ir:(Some ir_json) ~created_by:caller
+    ~ir:(Some ir_json) ~created_by:caller ~source:None
   >>= fun _ -> return art
 
 let test_e2e_record_verifies_offline () =

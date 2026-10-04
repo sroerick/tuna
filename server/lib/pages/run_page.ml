@@ -12,17 +12,53 @@ module L = Layout
 
 let finished r = r.S.r_status <> S.Run_status.Running
 
-let journal_div run_id (js : S.journal list) running =
+(* Observability (the v0.2-defect disposition pass): journal rows
+   render as LINES OF SOURCE, never as bare ternary — the callsite
+   cell resolves to its span snippet (0015 retained source), and the
+   args/result cells show the best-effort decode hint with the full
+   ternary on hover (title).  Decoding is a guess, labeled; the
+   ternary stays authoritative. *)
+let src_column = true
+
+let journal_div run_id (js : S.journal list) running ~spans ~resolve =
+  let snippet_of (j : S.journal) =
+    if j.S.j_callsite_path = "" then None
+    else
+      match List.assoc_opt j.S.j_callsite_path spans with
+      | Some (`Assoc kv) -> (
+          match (List.assoc_opt "off" kv, List.assoc_opt "len" kv) with
+          | Some (`Int off), Some (`Int len) -> resolve ~off ~len
+          | _ -> None)
+      | _ -> None
+  in
+  let cell_hint = function
+    | Some t -> (
+        match Dec.hint_of_ternary t with
+        | Some h -> Printf.sprintf {|<span title="%s">%s</span>|} (L.esc t) (L.esc h)
+        | None -> L.esc t)
+    | None -> "—"
+  in
   let row (j : S.journal) =
+    let src_cell =
+      match snippet_of j with
+      | Some s ->
+          let short =
+            if String.length s > 60 then String.sub s 0 57 ^ "..." else s
+          in
+          Printf.sprintf {|<code class="src">%s</code>|} (L.esc short)
+      | None -> {|<span class="muted">—</span>|}
+    in
     Printf.sprintf
-      {|<tr><td>%d</td><td>/%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>|}
+      {|<tr><td>%d</td><td title="%s">/%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>|}
       j.S.j_seq
+      (L.esc (Option.value (snippet_of j) ~default:""))
       (L.esc j.S.j_callsite_path)
       (L.esc j.S.j_prim)
-      (L.esc (Option.value j.S.j_args_ternary ~default:"—"))
-      (L.esc (Option.value j.S.j_result_ternary ~default:"—"))
+      (cell_hint j.S.j_args_ternary)
+      (cell_hint j.S.j_result_ternary)
       (L.esc (Option.value j.S.j_error ~default:""))
       (match j.S.j_wall_ms with Some w -> Printf.sprintf "%dms" w | None -> "—")
+      (src_cell)
       (L.esc (L.short_hash j.S.j_row_hash))
   in
   let poll =
@@ -33,7 +69,7 @@ let journal_div run_id (js : S.journal list) running =
   Printf.sprintf
     {|<div id="journal-box"%s>
 <table>
-<tr><th>seq</th><th>callsite</th><th>prim</th><th>args</th><th>result</th><th>error</th><th>wall</th><th>row_hash</th></tr>
+<tr><th>seq</th><th>callsite</th><th>prim</th><th>args</th><th>result</th><th>error</th><th>wall</th><th>src</th><th>row_hash</th></tr>
 %s
 </table>
 </div>|}
@@ -108,6 +144,20 @@ let view pool user req =
             >>= fun js ->
             S.fetch_run_trace pool id
             >>= fun ts ->
+            S.fetch_program pool r.S.r_program_hash
+            >>= fun prog ->
+            let spans =
+              match prog with Some p -> Run.ir_spans p.S.p_ir | None -> []
+            in
+            let resolve ~off ~len =
+              match prog with
+              | Some p when p.S.p_source <> None ->
+                  Run.span_text
+                    (Option.value p.S.p_source ~default:"")
+                    (Run.token_spans (Option.value p.S.p_source ~default:""))
+                    ~off ~len
+              | _ -> None
+            in
             let running = not (finished r) in
           L.page ~user ~title:"tuna — run"
             (Printf.sprintf
@@ -117,6 +167,7 @@ let view pool user req =
 <tr><th>program</th><td>%s</td></tr>
 <tr><th>status</th><td>%s</td></tr>
 <tr><th>steps</th><td>%s</td></tr>
+<tr><th>denials</th><td>%s</td></tr>
 <tr><th>trace</th><td>%s</td></tr>
 <tr><th>fuel / cap</th><td>%d / %d</td></tr>
 <tr><th>result</th><td>%s</td></tr>
@@ -132,6 +183,11 @@ let view pool user req =
                (L.link_program r.S.r_program_hash)
                (S.Run_status.to_string r.S.r_status)
                  (match r.S.r_step_count with Some s -> string_of_int s | None -> "—")
+                 (if r.S.r_denial_count = 0 then
+                    {|<span class="muted">none</span>|}
+                  else
+                    Printf.sprintf {|<span class="err">%d journaled grant denial(s)</span>|}
+                      r.S.r_denial_count)
                  (match ts with
                   | Some s ->
                       Printf.sprintf
@@ -144,6 +200,11 @@ let view pool user req =
                r.S.r_fuel r.S.r_size_cap
                (match r.S.r_result_ternary with
                 | Some t ->
+                    let dec_hint =
+                      match Dec.hint_of_ternary t with
+                      | Some h -> Printf.sprintf {|<p class="muted">reads as: %s</p>|} (L.esc h)
+                      | None -> ""
+                    in
                     let view_link =
                       match r.S.r_result_hash with
                       | Some h ->
@@ -160,13 +221,13 @@ let view pool user req =
                             Tree_svg.legend (Tree_svg.svg tree)
                       | Error _ -> ""
                     in
-                    L.code_block t ^ view_link ^ tree_section
+                    L.code_block t ^ view_link ^ tree_section ^ dec_hint
                 | None -> {|<span class="muted">no result yet</span>|})
                (L.verify_badge r.S.r_verify_status)
                (if r.S.r_verify_status = Some "failed" then verify_button r.S.r_id else "")
                (match r.S.r_parent_run_id with Some p -> L.link_run p | None -> "—")
                (L.esc (Option.value r.S.r_created_at ~default:""))
-               (journal_div r.S.r_id js running)
+               (journal_div r.S.r_id js running ~spans ~resolve)
                r.S.r_id)))
 
 (* The journal tick fragment (no-JS fallback: a plain page with the table). *)
@@ -178,7 +239,21 @@ let journal_frag pool user req =
   | Some (id, r) -> (
       S.fetch_journals pool id
       >>= fun js ->
-      let html = journal_div r.S.r_id js (not (finished r)) in
+      S.fetch_program pool r.S.r_program_hash
+      >>= fun prog ->
+      let spans =
+        match prog with Some p -> Run.ir_spans p.S.p_ir | None -> []
+      in
+      let resolve ~off ~len =
+        match prog with
+        | Some p when p.S.p_source <> None ->
+            Run.span_text
+              (Option.value p.S.p_source ~default:"")
+              (Run.token_spans (Option.value p.S.p_source ~default:""))
+              ~off ~len
+        | _ -> None
+      in
+      let html = journal_div r.S.r_id js (not (finished r)) ~spans ~resolve in
       if L.is_htmx req then Web.html html
       else
         L.page ~user ~title:"tuna — journal"

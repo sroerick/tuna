@@ -38,9 +38,20 @@ let is_delim c =
 
 type token = LP | RP | LB | RB | LC | RC | Atom of int * string
 
-let lex (src : string) : token list =
+
+(* [lex_with_spans] is the ONE scanner (the F13 single-reader law): the
+   token stream the parser consumes, plus each token's char span
+   (start, length).  Provenance spans are TOKEN-GRID (off = token
+   index, len = token count -- the parser counts tokens, not chars), so
+   resolving a span to text re-lexes the retained source through this
+   table instead of keeping a second lexer that could drift. *)
+let lex_with_spans (src : string) : token list * (int * int) list =
   let toks = ref [] in
-  let push t = toks := t :: !toks in
+  let spans = ref [] in
+  let push ~start ~len t =
+    toks := t :: !toks;
+    spans := (start, len) :: !spans
+  in
   let n = String.length src in
   let i = ref 0 in
   while !i < n do
@@ -49,22 +60,22 @@ let lex (src : string) : token list =
     else if c = ';' then
       while !i < n && src.[!i] <> '\n' do incr i done
     else if c = '(' then (
-      push LP;
+      push ~start:!i ~len:1 LP;
       incr i)
     else if c = ')' then (
-      push RP;
+      push ~start:!i ~len:1 RP;
       incr i)
     else if c = '[' then (
-      push LB;
+      push ~start:!i ~len:1 LB;
       incr i)
     else if c = ']' then (
-      push RB;
+      push ~start:!i ~len:1 RB;
       incr i)
     else if c = '{' then (
-      push LC;
+      push ~start:!i ~len:1 LC;
       incr i)
     else if c = '}' then (
-      push RC;
+      push ~start:!i ~len:1 RC;
       incr i)
     else if c = ':' then begin
       (* a keyed-literal key: ":name" lexes as an atom spelled with the
@@ -80,7 +91,7 @@ let lex (src : string) : token list =
         && not (src.[!j] = ' ' || src.[!j] = '\t' || src.[!j] = '\n' || src.[!j] = '\r')
       do incr j done;
       if !j = !i then raise (Lex_error (start, "empty key after ':'"));
-      push (Atom (start, String.sub src start (!j - start)));
+      push ~start ~len:(!j - start) (Atom (start, String.sub src start (!j - start)));
       i := !j
     end
     else if c = '%' then begin
@@ -91,24 +102,26 @@ let lex (src : string) : token list =
         incr j
       done;
       if !j = !i then raise (Lex_error (start, "empty tree literal after %"));
-      push (Atom (start, String.sub src start (!j - start)));
+      push ~start ~len:(!j - start) (Atom (start, String.sub src start (!j - start)));
       i := !j
     end
-      else begin
-        let start = !i in
-        if src.[start] = '"' then begin
-          (* quoted string literal: consume to the closing quote, allow
-             spaces (unlike identifiers).  Unterminated -> lex error. *)
-          incr i;
-          while !i < n && src.[!i] <> '"' do incr i done;
-          if !i >= n then raise (Lex_error (start, "unterminated string literal"));
-          incr i  (* closing quote *)
-        end else
-          while !i < n && not (is_delim src.[!i]) do incr i done;
-        push (Atom (start, String.sub src start (!i - start)))
-      end
+    else begin
+      let start = !i in
+      if src.[start] = '"' then begin
+        (* quoted string literal: consume to the closing quote, allow
+           spaces (unlike identifiers).  Unterminated -> lex error. *)
+        incr i;
+        while !i < n && src.[!i] <> '"' do incr i done;
+        if !i >= n then raise (Lex_error (start, "unterminated string literal"));
+        incr i  (* closing quote *)
+      end else
+        while !i < n && not (is_delim src.[!i]) do incr i done;
+      push ~start ~len:(!i - start) (Atom (start, String.sub src start (!i - start)))
+    end
   done;
-  List.rev !toks
+  (List.rev !toks, List.rev !spans)
+
+let lex (src : string) : token list = fst (lex_with_spans src)
 
 (* ---------- parser: tokens -> IR with spans + scope checking ---------- *)
 

@@ -44,7 +44,7 @@ let seed_program p ~caller src =
   let ternary = art.C.ternary in
   let hash = art.C.hash_hex in
   let ir_json = Yojson.Basic.to_string (Api.ir_json_of_artifact art) in
-  S.upsert_program p ~hash ~ternary ~ir:(Some ir_json) ~created_by:caller
+  S.upsert_program p ~hash ~ternary ~ir:(Some ir_json) ~created_by:caller ~source:None
   >>= fun _ -> return (hash, art)
 
 (* -- index basics ------------------------------------------------------ *)

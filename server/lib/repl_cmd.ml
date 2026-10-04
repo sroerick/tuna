@@ -175,11 +175,11 @@ let compile_with_dict ?(fuel = B.default_compile_fuel)
 
 (* Compile the artifact, upsert it, run it through the run boundary,
    and chain the run row to the identity's previous round. *)
-let journaled_round pool ~caller ~artifact ~input_trees ~grant_ids ~fuel
-    ~size_cap () =
+let journaled_round pool ~caller ~artifact ~source ~input_trees ~grant_ids
+    ~fuel ~size_cap () =
   let ir = J.to_string (ir_json_of_artifact artifact) in
   S.upsert_program pool ~hash:artifact.B.hash_hex ~ternary:artifact.B.ternary
-    ~ir:(Some ir) ~created_by:(Some caller)
+    ~ir:(Some ir) ~created_by:(Some caller) ~source
   >>= fun _ ->
   S.repl_state_get pool ~identity_id:caller
   >>= fun parent ->
@@ -212,8 +212,8 @@ let do_eval pool ~caller ~grant_ids ~dictionary ~input_trees ~fuel ~size_cap
         err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
     | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
     | artifact -> (
-        journaled_round pool ~caller ~artifact ~input_trees ~grant_ids ~fuel
-          ~size_cap ()
+        journaled_round pool ~caller ~artifact ~source:(Some src) ~input_trees
+          ~grant_ids ~fuel ~size_cap ()
         >>= (function
               | Error (code, msg) -> return (Error (code, msg))
               | Ok (row, _js, phash) ->
@@ -233,8 +233,8 @@ let do_def pool ~caller ~dictionary
   | artifact -> (
       S.dict_set pool ~identity_id:caller ~name ~ternary:artifact.B.ternary
       >>= fun () ->
-      journaled_round pool ~caller ~artifact ~input_trees:[] ~grant_ids:[]
-        ~fuel:1_000_000 ~size_cap:1_000_000 ()
+      journaled_round pool ~caller ~artifact ~source:(Some src) ~input_trees:[]
+        ~grant_ids:[] ~fuel:1_000_000 ~size_cap:1_000_000 ()
       >>= (function
             | Error (code, msg) -> return (Error (code, msg))
             | Ok (row, _js, phash) ->
@@ -346,7 +346,7 @@ let do_patch pool ~caller path new_ternary hash_opt =
                       err_ "patch conflict: store changed under us"
                   | P.Applied { ternary; hash } ->
                       S.upsert_program pool ~hash ~ternary ~ir:None
-                        ~created_by:(Some caller)
+                        ~created_by:(Some caller) ~source:None
                       >>= fun _ ->
                       return
                         (Ok

@@ -56,6 +56,7 @@ type program = {
   p_hash : string
 ; p_ternary : string
 ; p_ir : string option  (* yojson text *)
+; p_source : string option  (* 0015: what was compiled, when known *)
 ; p_created_by : string option
 }
 
@@ -63,10 +64,12 @@ let program_of_row r what =
   { p_hash = text r 0 what
   ; p_ternary = text r 1 what
   ; p_ir = opt_text r 2
-  ; p_created_by = opt_text r 3 }
+  ; p_source = opt_text r 3
+  ; p_created_by = opt_text r 4 }
 
 let select_program =
-  "SELECT hash, ternary, ir::text, created_by::text FROM programs WHERE hash = $1"
+  "SELECT hash, ternary, ir::text, source, created_by::text FROM programs \
+   WHERE hash = $1"
 
 let fetch_program p hash =
   Db.q ~params:[ p_str hash ] p select_program
@@ -83,17 +86,19 @@ let fetch_program p hash =
    (compiler span fixes must reach already-existing rows — caught by
    acceptance criterion 2, where a pre-fix row's spans were None
    forever).  A ternary-only re-upsert (ir=null) keeps the old ir. *)
-let upsert_program p ~hash ~ternary ~ir ~created_by =
+let upsert_program p ~hash ~ternary ~source ~ir ~created_by =
   Db.q_unit
     ~params:[ p_str hash
             ; p_str ternary
             ; (match ir with Some s -> V.of_string s | None -> V.null)
+            ; p_opt source
             ; p_opt created_by ]
     p
-    "INSERT INTO programs (hash, ternary, ir, created_by) \
-     VALUES ($1, $2, $3::jsonb, $4::uuid) \
+    "INSERT INTO programs (hash, ternary, ir, source, created_by) \
+     VALUES ($1, $2, $3::jsonb, $4, $5::uuid) \
      ON CONFLICT (hash) DO UPDATE \
-       SET ir = COALESCE(EXCLUDED.ir, programs.ir)"
+       SET ir = COALESCE(EXCLUDED.ir, programs.ir), \
+           source = COALESCE(EXCLUDED.source, programs.source)"
   >>= fun () ->
   Db.q ~params:[ p_str hash ] p select_program
   >>= fun rows ->
@@ -106,7 +111,7 @@ let upsert_program p ~hash ~ternary ~ir ~created_by =
    addressed, so created_by may be NULL for pre-identity rows) *)
 let list_programs p ?(limit = 200) () =
   Db.q ~params:[ p_int limit ] p
-    "SELECT hash, ternary, ir::text, created_by::text FROM programs \
+    "SELECT hash, ternary, ir::text, source, created_by::text FROM programs \
      ORDER BY created_at DESC LIMIT $1"
   >>= fun rows ->
   Direct.return (List.map (fun r -> program_of_row r "programs") rows)

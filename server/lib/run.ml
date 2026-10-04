@@ -101,6 +101,29 @@ let ir_spans (ir_json : string option) : (string * J.t) list =
 
 let ir_span ir_json path = List.assoc_opt path (ir_spans ir_json)
 
+(* Provenance spans are TOKEN-GRID (off = token index, len = token
+   count -- the reader counts tokens, not chars).  Resolving a span to
+   source text re-lexes the retained source (0015) through the
+   reader's own scanner (Sexp.lex_with_spans): one lexer, no mirrored
+   second scanner to drift (the F13 seam law). *)
+let token_spans (src : string) : (int * int) list =
+  try Tuna_compiler.Sexp.lex_with_spans src |> snd with _ -> []
+
+let span_text (src : string) (toks : (int * int) list) ~(off : int)
+    ~(len : int) : string option =
+  let n = List.length toks in
+  if off < 0 || len < 1 || off + len > n then None
+  else
+    let rec nth_sp k = function
+      | [] -> None
+      | (s, l) :: rest -> if k = 0 then Some (s, l) else nth_sp (k - 1) rest
+    in
+    match (nth_sp off toks, nth_sp (off + len - 1) toks) with
+    | Some (s0, _), Some (s1, l1)
+      when s1 + l1 <= String.length src && s0 <= s1 + l1 ->
+        Some (String.sub src s0 ((s1 + l1) - s0))
+    | _ -> None
+
 (* -- grants by prim -------------------------------------------------- *)
 
 (* Grant rows for the run: prim name -> (grant id, attenuation json
@@ -226,7 +249,8 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
     | t :: rest ->
         let ternary = Tuna.Canon.encode t in
         let hash = Tuna.Hash.hex_of_string ternary in
-        S.upsert_program pool ~hash ~ternary ~ir:None ~created_by:(Some caller)
+        S.upsert_program pool ~hash ~ternary ~ir:None
+          ~created_by:(Some caller) ~source:None
         >>= fun _ -> store_inputs rest
   in
   store_inputs inputs

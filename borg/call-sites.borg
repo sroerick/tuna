@@ -101,7 +101,22 @@
          step-count ruling. This subsection is the spec location of the
          "debugging the compiled tree by hand = v1 failed the UX bar"
          failure definition (acceptance.failure-definitions).
-    |))
+
+         SOURCE RETENTION + SPAN RESOLUTION (0015, the v0.2-defect
+         disposition pass): spans are TOKEN-GRID — off = token index,
+         len = token count, the reader's own token grid (the parser
+         counts tokens, not chars) — so a span alone never named text.
+         0015 retains the compiled source text on the program row
+         (post_source, REPL def/eval; bare-ternary and patch-derived
+         programs have none and say so), and resolution re-lexes that
+         text through the reader's ONE scanner (Sexp.lex_with_spans) —
+         no mirrored second lexer to drift (the F13 seam law).
+         Journal rows carry their span AND the snippet inline; the run
+         page renders rows as lines of sabra with best-effort decoded
+         args/result (Dec views: bool/nat/int/cstr/list, every
+         candidate beside each other, never authoritative — the
+         one-form law means only a REPL twin or a corpus row pins
+         meaning).|))
    )
   )
  )

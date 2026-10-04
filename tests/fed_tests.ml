@@ -99,7 +99,7 @@ let test_fed_program_hash () =
   admin p >>= fun me ->
   let ternary = "221010210" in
   let hash = Tuna.Hash.hex_of_string ternary in
-  S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None >>= fun _ ->
+  S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None ~source:None >>= fun _ ->
   Api.fed_value_core p ~auth:(auth_of me) ~hash >>= fun (code, body) ->
   let j = J.from_string body in
   Alcotest.(check int) "program: fed get 200" 200 code;

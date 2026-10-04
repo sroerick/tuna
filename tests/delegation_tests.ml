@@ -55,7 +55,7 @@ let echo_program p =
   let call = Tuna.Cprim.call_tree ~name:"echo" ~site:0 in
   let ternary = Tuna.Canon.encode call in
   let hash = Tuna.Hash.hex_of_string ternary in
-  S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None
+  S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None ~source:None
   >>= fun _ -> return hash
 
 let run_echo p ~caller ~grants ~input =

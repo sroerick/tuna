@@ -61,13 +61,13 @@ let test_programs () =
   Db.init (Db.config_from_env ()) >>= fun p ->
   let not_hash = Tuna.Hash.hex_of_tree (Tuna.Canon.parse "22102000") in
   S.upsert_program p ~hash:not_hash ~ternary:"22102000"
-    ~ir:(Some "{\"kind\":\"test\"}") ~created_by:None
+    ~ir:(Some "{\"kind\":\"test\"}") ~created_by:None ~source:None
   >>= fun prog ->
   Alcotest.(check string) "ternary" "22102000" prog.S.p_ternary;
   (* jsonb text spacing is server-defined; compare parsed JSON *)
   Alcotest.(check bool) "ir" true (json_equal "{\"kind\":\"test\"}" (Option.value prog.S.p_ir ~default:"null"));
   (* upsert is get-or-create: second call with different ir does not clobber *)
-  S.upsert_program p ~hash:not_hash ~ternary:"22102000" ~ir:None ~created_by:None
+  S.upsert_program p ~hash:not_hash ~ternary:"22102000" ~ir:None ~created_by:None ~source:None
   >>= fun prog2 ->
   Alcotest.(check string) "same hash" prog.S.p_hash prog2.S.p_hash;
   Alcotest.(check bool) "ir kept" true (json_equal_opt prog.S.p_ir prog2.S.p_ir);
@@ -78,7 +78,7 @@ let test_programs () =
 let test_runs () =
   Db.init (Db.config_from_env ()) >>= fun p ->
   let not_hash = Tuna.Hash.hex_of_tree (Tuna.Canon.parse "22102000") in
-  S.upsert_program p ~hash:not_hash ~ternary:"22102000" ~ir:None ~created_by:None
+  S.upsert_program p ~hash:not_hash ~ternary:"22102000" ~ir:None ~created_by:None ~source:None
   >>= fun _ ->
   S.insert_run p ~program_hash:not_hash ~inputs:[ "0"; "10" ] ~caller:None
     ~parent_run_id:None ~fuel:500 ~size_cap:100 ()
@@ -103,7 +103,7 @@ let test_runs () =
 
 let test_journals () =
   Db.init (Db.config_from_env ()) >>= fun p ->
-  S.upsert_program p ~hash:leaf_hash ~ternary:"0" ~ir:None ~created_by:None
+  S.upsert_program p ~hash:leaf_hash ~ternary:"0" ~ir:None ~created_by:None ~source:None
   >>= fun _ ->
   S.insert_run p ~program_hash:leaf_hash ~caller:None ~parent_run_id:None
     ~fuel:1000 ~size_cap:1000 ()
@@ -184,7 +184,7 @@ let seed_program p ~caller src =
   let ternary = art.C.ternary in
   let hash = art.C.hash_hex in
   let ir_json = Yojson.Basic.to_string (Api.ir_json_of_artifact art) in
-  S.upsert_program p ~hash ~ternary ~ir:(Some ir_json) ~created_by:caller
+  S.upsert_program p ~hash ~ternary ~ir:(Some ir_json) ~created_by:caller ~source:None
   >>= fun _ -> return (hash, art)
 
 let expect_verified _run_id = function
@@ -685,7 +685,7 @@ let test_redaction_breaks_chain () =
    never a raw store error) *)
 let test_run_id_resolve () =
   Db.init (Db.config_from_env ()) >>= fun p ->
-  S.upsert_program p ~hash:leaf_hash ~ternary:"0" ~ir:None ~created_by:None
+  S.upsert_program p ~hash:leaf_hash ~ternary:"0" ~ir:None ~created_by:None ~source:None
   >>= fun _ ->
   S.insert_run p ~program_hash:leaf_hash ~inputs:[ "0"; "10" ] ~caller:None
     ~parent_run_id:None ~fuel:500 ~size_cap:100 ()
