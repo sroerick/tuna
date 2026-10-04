@@ -1,0 +1,243 @@
+(project tuna-board
+ (doc "Tuna book chapter: the BOARD SWAP - tuna's first member page
+      in-calculus, opening the PRODUCT LANE chartered by the
+      2026-10-04 OPERATOR GOAL SEAL in tuna.borg (become
+      pricklypear with pure tree calc: boards first, then
+      workstreams, growing back onto tuna with the app logic as
+      sabra programs over journaled, grant-gated prims and the
+      host shrunk to the rim). The swap executes the clause
+      dialect 12.5 sealed off (a UI swap is an owner product
+      call outside the research frame - the owner made the
+      call) and closes the evidence-named F14 follow-up the
+      dialect left open (a windowed/paginated tree read - a
+      VOCABULARY pass, not a syntax pass). Target: the /todo
+      page. Today its logic is host OCaml over JSON byte
+      records (server/lib/pages/todo.ml); after the swap the
+      page keeps only rim work - session auth, form parse,
+      per-request grant mint, run execute, render - and every
+      board read and write happens inside a sabra program
+      against the tree store through prims. Research question,
+      stated so it can be refuted: a product page can be a
+      THIN rim over in-calculus programs with nothing
+      product-y left in host OCaml and no lost observable -
+      journal attribution, denial surfacing, canonical op
+      kinds, no-silent-drop, replay identity all still pin
+      every board interaction; any logic that must crawl back
+      into the host to ship is a FINDING, never a patch.")
+ (status planned)
+ (convention ocaml-dune)
+ (section board
+  (doc "Scope: ONE page end to end - the record format, the
+       namespace, the two additive vocabulary rows the port
+       cites, the one-time legacy migration, the page rim
+       covenant, and the acceptance instrument. F15/F16 are
+       pre-registered below so the chapter cannot half-swap.")
+  (status planned)
+  (subsection laws
+   (status planned)
+   (details
+    (doc (|
+      L1 FORMAT. Board item values are the dialect 12.4 keyed
+         record, verbatim: key 1 = state (%10 open | %0 done),
+         key 2 = title (cstr), key 3 = who (cstr), key 4 = when
+         (law-5 int); the summary record is key 1 = open,
+         key 2 = done. Titles carry ARBITRARY member text -
+         cstr strings need no new form (12.2) - and round-trip
+         verbatim. No board value is ever emitted as host JSON
+         bytes: byte-values law 4 (TERNARY STAYS CODE-ONLY) is
+         why - the byte layer is not a board medium, it is the
+         coat the old page wore. The JSON-bytes era ends with
+         the migration in L7.
+      L2 NAMESPACE. The board keeps its public route /todo and
+         its namespace todo/; ids stay <epoch>-<hex>, minted at
+         the rim, OPAQUE to programs. The granted prefix is
+         "todo/" spelled WITH the slash: the C-string range law
+         FINDINGS pinned (path >= prefix AND path <
+         prefix || chr(255)) is what excludes the todo-cal
+         probe namespaces below it in collation (a granted
+         bare "todo" would swallow them); the v0.2
+         dirty-namespace lesson is now the spelling law's own
+         citation. Board paths arrive as run INPUTS bound to
+         lambda parameters, never resolved (grants law 7;
+         AGENTS 7).
+      L3 RIM. Post-swap pages/todo.ml contains session auth,
+         form parse, per-request grant mint, Run.execute calls,
+         and rendering ONLY. No store path or value accessor
+         appears in the module - acceptance greps the
+         S.path_* and S.byte_value_* family absent
+         (render-side cstr DECODE of run results is allowed:
+         decoding to draw is not deciding). The route's auth
+         posture is unchanged: require_auth per routes.borg
+         law 1 - the grant gate is the prim boundary, not the
+         host surface (todo.borg:10-13 rationale survives the
+         swap that removes its code).
+      L4 GRANTS. The page mints a per-request grant row per
+         the serve_program precedent (routes.borg) but
+         NARROW: prim set exactly { tree/get, tree/put,
+         tree/cas, tree/list, tree/del, math/add },
+         path_prefix "todo/", caller the signed-in member,
+         lifetime the request. Denials surface per the 0014
+         law: a forged form path fails at the prim boundary,
+         denies nothing silently, shows denial_count >= 1 on
+         the run row and an error on the page - the
+         capability demo IS the user-facing behavior, not a
+         console log.
+      L5 WRITES. add = one run, one journaled tree/put, value
+         an L1 record, via the todo-add row (below). flip =
+         tree/get then tree/cas: LOST-UPDATE-SAFE - a raced
+         flip ends as a journaled error run, never a silent
+         overwrite (the host page's read-then-write-put was
+         racy; the swap is the fix, not the regression). del =
+         the tree/del prim so the ops chain finally records
+         the canonical DELETE op for board deletions (the
+         host page's nonstandard "del" op kind retires with
+         it). Every mutation run: status normal,
+         denial_count 0, journal attributed to the member,
+         replay verify verified - the F5 wire, carried from
+         defs to programs.
+      L6 READS. tree/list grows a WINDOW: additive cursor +
+         limit args, byte-identical behavior when absent; op
+         kind stays "list" and the args journal with the
+         window. The board view program walks windows in path
+         order and answers (entry, record)-shaped rows plus a
+         per-WINDOW summary record (L1). Page-triggered runs
+         ride measured running room - fuel 1e7 / size_cap
+         1e5, the F14 bridge budget - and windows keep every
+         read under it. Whole-board totals are NOT shipped at
+         v0.3: counts are per-window, recorded here so they
+         cannot masquerade as totals.
+      L7 MIGRATION. One-time, journaled, idempotent, rerun as
+         a no-op: legacy JSON byte records under todo/
+         re-encode as L1 records IN PLACE (path untouched,
+         ops chained, actor a system identity); ISO created_at
+         becomes law-5 epoch; created_by becomes who; a
+         legacy row that cannot parse keeps its EXACT bytes
+         verbatim as title - no path is ever silently
+         dropped. Migration is tooling, not page code: the
+         L3 grep never sees it.
+      L8 OBSERVABILITY. The page surfaces its own runs: run
+         hash, denial_count, verify badge, journal as source
+         lines (0629 observability) - a member toggling a
+         card can READ the effect the way the
+         differentiator pitch says they can. |))))
+  (subsection vocabulary
+   (status planned)
+   (details
+    (doc (|
+      A VOCABULARY pass, not a syntax pass - the citation F14
+      named and dialect L5 demands (a form exists only on a
+      CITATION from the port). Exactly two additive rows:
+
+      1. PRELUDE ROW todo-add (stdlib manifest, additive;
+         todo-created stays): the 4-argument read of the same
+         body - (path (title (who (when over tree/put path
+         (todo-item todo-open title who when))))) - cited
+         because todo-created's when is a hardcoded literal in
+         its def, and a member's card needs a real clock value
+         riding the run's inputs. The row ships with its
+         exercised corpus row per verify-8 law 2.
+
+      2. PRIM BUMP: tree/list cursor/limit (L6) - same op kind
+         "list", args journaled with the window, arity
+         additive, replay untouched: prim answers are journal
+         data, so every pre-bump run replays unchanged (the
+         journal-is-the-recorded-environment law).
+
+      NO new reader form rides this port - letrec and the rest
+      stay GATED (F13 discipline); NO string prim (cstr
+      strings are already terms; the page renders host-side);
+      NO new codec (Tuna.Cstr is total). Anything beyond these
+      two rows discovered mid-port is a FINDING, not a patch. |))))
+  (subsection programs
+   (status planned)
+   (details
+    (doc (|
+      Four sabra programs at scripts/dialect/, one per member
+      op, all compiled through the same window the v0.2 probes
+      use and held as programs rows the page runs:
+      board-view.sabra (windowed walk, (entry, record) rows +
+      per-window summary), board-add.sabra (todo-add over
+      passed path/title/who/when), board-flip.sabra (get,
+      rec-upd flip per todo-flip's form, cas), board-del.sabra.
+      Driver scripts/dialect/board_probe.py (the prelude_probe
+      pattern: run-checked, denial_count 0 asserted, exact
+      twins REPL-pinned, replay verified) over a FRESH
+      namespace per run so probes never collide with the live
+      todo/ board. Acceptance instrument:
+      scripts/verify-13-board.sh. |))))
+  (subsection acceptance
+   (status planned)
+   (details
+    (doc (|
+      Instrument: scripts/verify-13-board.sh over a live dev
+      instance (shared verify-lib preamble, TUNA_HTTP_PORT
+      discipline; probes live where the other chapters keep
+      theirs). Green means ALL hold:
+
+      13.1 FORMAT: post-migration every todo/ value is a tree;
+         items added via the L1 keyed form read their fields
+         back with rec-val twins; hostile titles (quotes,
+         unicode, embedded slashes, length) round-trip
+         verbatim; the board page renders them all.
+      13.2 WINDOW: on a synthetic >= 300-item fresh namespace
+         (past the old list_cap), windowed pages cover the
+         whole set exactly once in path order under the L6
+         budget with denial_count 0; a zero-window tree/list
+         (today's shape) on the same namespace is the
+         journaled caps error F14 recorded - the bump did not
+         loosen the default; sibling probe namespaces do not
+         leak through a granted "todo/" prefix.
+      13.3 WRITES: on the real board over HTTP forms: add ->
+         visible row; toggle -> flips exactly once (get + cas
+         ops journaled, denial 0); del -> canonical delete op;
+         each mutation exactly one run attributed to the
+         probe member, replay verify verified; a raced double
+         toggle ends with one green flip and one journaled
+         error run, store value unchanged.
+      13.4 RIM: the page module greps clean of the S.path_* /
+         S.byte_value_* family; the rim identifiers it does
+         call are listed in the law text; route auth posture
+         and nav unchanged.
+      13.5 FORGED PATH: a forged edit form targeting a
+         non-todo path ends denial_count >= 1 with zero store
+         mutation, surfaced on the page - the verify-1 denial
+         classes extended onto the board surface.
+      13.6 MIGRATION: seeded legacy rows (one hostile title,
+         one unparseable) survive with fields intact; the
+         second migration pass writes zero ops; the
+         migration runs replay green.
+      13.7 HYGIENE: manifest additive rows present with an
+         exercised corpus row each (verify-8 law 2);
+         three-engine corpus agreement on the new rows;
+         dialect.borg's 12.5 sealed clause and F14 follow-up
+         flip in the same commit as this chapter's make; borge
+         lint/report clean; differential and the smoke
+         batteries green. |))))
+  (subsection pre-registered-failures
+   (status planned)
+   (details
+    (doc (|
+      F15 READ-WINDOW SEAM BREACH. TRIGGER: (a) any
+         board-scale read cannot be served inside the L6
+         budget by windowed calls and the page falls back to
+         host reads, or host code must join/fold/union windows
+         to render (logic leak); or (b) the cursor/limit bump
+         changes any no-arg tree/list answer byte-wise
+         (compat breach of the default); or (c) replay of a
+         pre-bump run diverges post-bump. THEN: the swap is a
+         cosmetic reorganization; record in FINDINGS.md with
+         evidence; the differentiator claim (reads inside the
+         calculus, windows included) is falsified.
+      F16 LOGIC LEAK / PRODUCT REGRESSION. TRIGGER: the
+         post-swap page module retains any forbidden store
+         accessor (13.4 grep), or host code decides board
+         state (counting, filtering, munging fields for
+         rendering), or a host-era observable is lost: ops
+         attribution, denial surfacing, canonical delete, id
+         mint shape, no-silent-drop, replay identity. THEN:
+         acceptance stays red; fix lands in-calculus or the
+         swap reverts; record in FINDINGS.md. The chapter's
+         own thesis is the whitelist: the host only ever
+         auths, parses, mints, executes, renders. |))))
+ )
+)
