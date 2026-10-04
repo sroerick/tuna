@@ -439,7 +439,8 @@ monad-shaped `Prim_eval.Make` still exists as the reference engine, so
 public path (eval.ml -> flat_drive), with the recursive reference kept
 intentionally.
 
-## NON-F — v0.2 TODO PRELUDE PROBE: three standing v1 defects (found 2026-10-02, NOT fixed)
+## NON-F — v0.2 TODO PRELUDE PROBE: three standing v1 defects (found
+## 2026-10-02; dispositioned 2026-10-04 — see DISPOSITION below)
 
 Not F-class (neither pre-registered nor fixed in this batch). The v0.2
 todo retry (`scripts/dialect/prelude_probe.py` + `todo-v02-*.sabra`)
@@ -483,5 +484,65 @@ its def applications direct, and the probe grants `math/add` wherever
 a prelude fold runs. All five probe stages green: create (one journaled
 tree/put), keyed-literal board, named flip + read-back, exact open
 query, live board re-run - every run replay-verified.
+
+DISPOSITION 2026-10-04 (re-driven on the current build, all three
+repros re-executed; evidence inline):
+
+1. GRANT DENIAL - FIXED (0014 run-denial surfacing). Reproduced
+   exactly: `math/add 1+1` with no grant returned status normal,
+   verify verified, and the error tree as the result; the denial lived
+   only in the journal. The LAW is unchanged - denial is data, the run
+   continues per program semantics, acceptance 1 still pins status
+   normal - what was missing was observability: the run row now
+   carries `denial_count` (migration 0014, counted at the boundary
+   where each denial is answered, persisted at finalize, surfaced in
+   every run JSON). verify-1 extended (granted run must show 0; both
+   denial shapes must show >= 1); prelude_probe asserts
+   denial_count = 0 on every green stage. A denied prim now DENIES
+   THE RUN in the only sense the book allows: on the record, not
+   silently. Replay untouched (the denial count is a live-host fact,
+   not a calculus fact).
+
+2. LIST-MAP DEF-SPLICED ARGS - NOT REPRODUCING; the recorded repro was
+   a mis-shaped input. `(list-map todo-title xs)` yielding "a list of
+   leaves" is the CORRECT answer when xs is a FLAT KV LIST: a flat
+   kv-list IS ONE multi-field record, so mapping the accessor over it
+   reads a nonexistent key per element and answers leaf - and the same
+   flat list applied DIRECTLY answers the first matching field (the
+   "same todo-title works directly" half of the repro). With PROPER
+   record lists (r = [kv], xs = [r1 r2]) the current build answers the
+   titles on every engine: fresh-compiled stdprobe (`210200` = the
+   titles, 0 run steps - compile-time reduction agrees), the live REPL
+   (same ternary), and `eval-compiled` over the FROZEN trees (same).
+   The frozen tree equals the fresh compile (list-map 340 bytes, hash
+   b0bd1e19... = manifest = DB row). Inline-lambda and eta-blocked
+   variants agree too. The engine pair (compile-time to_tagged, run
+   Flat) was diffed arm-by-arm against the normative apply during the
+   hunt: identical. Closing the gap that let the mis-read happen:
+   corpus rows exercising a def-spliced lambda argument under list-map
+   (verify-8 law 2) land with this disposition.
+
+3. LIST-APPEND - NOT REPRODUCING; the recorded repros are foldr
+   semantics on non-list arguments. `append 0 x = x` is foldr over the
+   EMPTY list returning ys verbatim (the caller passed a bare element
+   where a list was required); `[1 2] ++ 3` = `pair 1 (pair 2 3)` is
+   ORDER-PRESERVING (the tail is the bare element, malformed as a list
+   by the caller's own hand). With proper list arguments the current
+   build appends in order: live REPL `[t f] ++ [t] -> 210202100`
+   ([t f t]); stdprobe and frozen-tree eval agree. The def is the
+   correct foldr-append; rec-upd's assoc-list caller is unaffected.
+
+4. Pinned while re-driving the probe: the BOARD stage mis-verifies on
+   a DIRTY namespace, and that is tree/list working as documented.
+   Prefix selection is a path RANGE (`path >= prefix AND path <
+   prefix || chr(255)`), so `tree/list "todo-cal-v02"` also returns
+   the sibling namespaces `todo-cal-v02b/c/d/e` left in the dev DB by
+   earlier probe runs - 20 entries, 11 open - and the fold answers 11
+   and 20, CORRECTLY for what the prim returned (journal shows every
+   math/add exact). The chapter's own note ("a plain path that still
+   selects the todo-cal/* slice") is this behavior. Probe re-run on a
+   fresh namespace (todo-cal-v02f): all five stages green, replay
+   verified. A namespace-hygiene or exact-child list mode remains an
+   evidence-named follow-up, not a defect.
 
 ---

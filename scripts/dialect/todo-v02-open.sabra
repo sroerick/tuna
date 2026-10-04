@@ -5,14 +5,17 @@
 ; Same reach, no calculus: filter the entry list by state, collect the
 ; titles in board order.
 ;
-; SHAPE NOTE (probe-found, 2026-10-02): the composition must keep its
-; lambdas INLINE and its def applications DIRECT.  list-map applied to
-; a def-spliced lambda argument misapplies (machine AND CL reference
-; agree on the wrong answer - FINDINGS non-F note), and list-append is
-; a broken v1 def (append xs ys = reverse(xs) ++ ys; append 0 x = x -
-; FINDINGS non-F note).  The collection therefore rides an inline
+; SHAPE NOTE (probe-found, 2026-10-02; DISPOSITIONED 2026-10-04, see
+; FINDINGS.md non-F): the original note dodged two defects that did not
+; reproduce on re-drive - the recorded repros were mis-shaped inputs (a
+; flat kv list is one multi-field record, not a list of records;
+; list-append's second argument was a bare element).  The composition
+; below keeps its lambdas INLINE and its def applications DIRECT, which
+; remains correct and harmless; the three-engine corpus rows
+; dialect_list-map-defarg / -flat / dialect_list-append-order now pin
+; both shapes as known answers.  The collection still rides an inline
 ; pair-prepend list-fold: list-fold traverses right-to-left, so the
-; prepend preserves board order.
+; prepend preserves board order (pinned, not a defect).
 
 (lambda (prefix)
   (let ((open-items

@@ -76,7 +76,29 @@
       :when 1727000000}) - pure vocabulary, runs at 64 steps with one
       journaled tree/put.  F13/F14 unchanged (no form needed IR; the
       board-scale pagination gap from v0.1 remains the named F14
-      follow-up).|) *)
+      follow-up).
+
+      DISPOSITIONED 2026-10-04 (full evidence: FINDINGS.md non-F
+      note).  The three standing v1 defect notes from the probe were
+      re-driven on the current build.  Defect 1 (silent grant denial)
+      FIXED: migration 0014 adds runs.denial_count, counted at the
+      boundary where each denial is answered and surfaced in every
+      run JSON - the law is unchanged (denial is data, status stays
+      normal per acceptance 1), what changed is that a run now SHOWS
+      its denials instead of burying them in the journal; verify-1
+      asserts it and the probe asserts denial_count = 0 per green
+      stage.  Defects 2 (list-map def-spliced args) and 3 (list-append
+      order) DO NOT REPRODUCE: the recorded repro shapes were
+      mis-shaped inputs (a flat kv list is ONE multi-field record, not
+      a list of records; append's second argument was a bare element,
+      not a list) and both engines answer those correctly; on proper
+      shapes the answers are exact on all three engines.  The corpus
+      rows the mis-diagnosis lacked (verify-8 law 2) landed with the
+      disposition: dialect_list-map-defarg, dialect_list-map-defarg-
+      flat (the mis-read shape pinned as a known answer),
+      dialect_list-append-order - 92 rows, all three-engine.
+      todo-v02-open.sabra keeps its inline-lambda shape (the dodge is
+      harmless); its SHAPE NOTE now points at the disposition.|) *)
  (convention ocaml-dune)
  (section dialect
   (doc "Construction sugar at the reader plus the record vocabulary it
@@ -388,12 +410,12 @@
       is the live instrument):
       12.1 DESUGAR EQUALITY: 6/6 live pairs compile to identical
          ternary + size (brackets, [], 42, -7, let, nested brackets);
-         corpus dialect_* rows add three-engine agreement (89/89
+         corpus dialect_* rows add three-engine agreement (92/92
          including keyed_*/todo_flip).  v0.2: 5/5 compiler keyed tests
          + 3 corpus rows (dialect_keyed_literal, dialect_keyed_
          accessor, dialect_todo_flip) agree.
       12.2 COMPAT: bare 0 remains the leaf (0 1 0); the -<digits>
-         reservation audit is clean; corpus intact and grown (89).
+         reservation audit is clean; corpus intact and grown (92).
       12.3 READER SEAM: compiler delta since the dialect baseline is
          exactly compiler/lib/sexp.ml; interpreter/ byte-identical;
          the common/ codec (Tuna.Int_enc) is the only other core-side

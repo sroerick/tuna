@@ -90,6 +90,22 @@ let cases =
       ("(todo-state {:state todo-open :title w})", "%10") )
   ; ( "dialect_todo_flip",
       ("(todo-state (todo-flip {:state todo-open :title w}))", "%10") )
+  (* v1-defect dispositions 2026-10-04 (FINDINGS.md non-F): the rows
+     the original mis-diagnosis lacked.  defarg: list-map over a
+     DEF-SPLICED lambda argument (todo-title) on a proper record list
+     - the verify-8 law-2 gap.  defarg-flat: the mis-read shape itself
+     (a FLAT kv list is ONE multi-field record; mapping an accessor
+     over it answers leaf per element) pinned as a known answer so the
+     correct-for-that-shape result can never be re-read as a defect.
+     append-order: list-append order preservation over multi-element
+     proper lists. *)
+  ; ( "dialect_list-map-defarg",
+      ("(list-map todo-title w)",
+       "%2221102100022211020000") )
+  ; ( "dialect_list-map-defarg-flat",
+      ("(list-map todo-title w)", "%221102100221102000") )
+  ; ( "dialect_list-append-order",
+      ("(list-append w (pair %10 %0))", "%210200") )
   ]
 
 let () =
