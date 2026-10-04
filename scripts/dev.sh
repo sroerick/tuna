@@ -132,7 +132,10 @@ start_pg() {
   echo "[dev] starting PG on port $DB_PORT (socket $SOCKET_DIR)"
   pg_ctl -D "$DATA_DIR" -o "-k $SOCKET_DIR -p $DB_PORT" -l "$DEV_DIR/pg.log" start
   sleep 1
-  until db_up; do sleep 0.5; done
+  # a fresh initdb has no $DB_NAME yet (only postgres/template1): probe
+  # the cluster, then let ensure_db create the app db; probing db_up
+  # here used to spin forever on first boot
+  until psql -h "$SOCKET_DIR" -p "$DB_PORT" -U "$DB_USER" -d postgres -tAc "SELECT 1" >/dev/null 2>&1; do sleep 0.5; done
   ensure_db
   apply_migrations
   echo "[dev] pg ready (db=$DB_NAME on :$DB_PORT)"
@@ -171,12 +174,27 @@ start_server() {
     grep '^TUNA_BOOTSTRAP_TOKEN=' "$DEV_DIR/server.log" | tail -1 > "$DEV_DIR/bootstrap.token"
   fi
   echo $! > "$sr_pidfile"
-  sleep 1
-  if curl -sS -m 3 "http://127.0.0.1:$HTTP_PORT/health" >/dev/null 2>&1; then
-    echo "[dev] server ready (http://127.0.0.1:$HTTP_PORT)"
-  else
-    echo "[dev] server not answering yet — check $DEV_DIR/server.log" >&2
-  fi
+  # readiness poll: first boot runs identity bootstrap + sabralib
+  # seeding, which outran the old one-shot check (the 10-04 CI smoke
+  # died exactly this way: start returned 0 while the server was still
+  # booting, smoke-api raced a half-born server and failed at [1]).
+  # A server that never comes up must fail start, loudly, with the log.
+  boot_wait="${TUNA_BOOT_WAIT:-60}"
+  deadline=$(( $(date +%s) + boot_wait ))
+  until curl -sf -m 2 "http://127.0.0.1:$HTTP_PORT/health" >/dev/null 2>&1; do
+    if ! kill -0 "$(cat "$sr_pidfile")" 2>/dev/null; then
+      echo "[dev] server died during boot (tail of $DEV_DIR/server.log):" >&2
+      tail -n 20 "$DEV_DIR/server.log" >&2 || true
+      exit 1
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "[dev] server not healthy after ${boot_wait}s (tail of $DEV_DIR/server.log):" >&2
+      tail -n 20 "$DEV_DIR/server.log" >&2 || true
+      exit 1
+    fi
+    sleep 0.5
+  done
+  echo "[dev] server ready (http://127.0.0.1:$HTTP_PORT)"
 }
 
 stop_server() {
