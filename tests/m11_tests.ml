@@ -450,6 +450,44 @@ let test_program_route () =
               me.S.i_id (Option.value row.S.r_caller ~default:"");
             return ())
 
+(* grant_prefix routes (the per-request scoped mint at serve_program):
+   FOUND 2026-10-04 (board make, FINDINGS non-F): execute_run's upfront
+   grant check answered Prefix_denied for path-scoped grants (no paths
+   exist at submission), so every route with a grant_prefix 500'd
+   before its run began.  Fixed inline (submission vouches only for
+   existence, liveness, ownership); this is the pin. *)
+let test_program_route_scoped () =
+  setup () >>= fun p ->
+  admin p >>= fun me ->
+  (* the route writes an effect inside its granted prefix and answers a
+     value hash (law 4); the scoped mint must survive submission and run *)
+  let body = "{\"scoped\":true}" in
+  Api.value_put_core p ~auth:(auth_of me) ~bytes:body >>= fun (_, bj) ->
+  let bhash = Option.value (json_string bj "hash") ~default:"?" in
+  let lit = Tuna.Canon.encode (Tuna.Cstr.encode bhash) in
+  seed_program p ~caller:(Some me.S.i_id)
+    ("(lambda (ctx) (let ((r (prim \"tree/put\" \"m11-scoped/x\" ctx))) %"
+    ^ lit ^ "))")
+  >>= fun art ->
+  Rt.publish p ~caller_id:me.S.i_id ~caller_admin:true ~site_path:"scoped"
+    ~record:
+      (record ~meth:"ANY" ~program:(Some art.C.hash_hex)
+         ~grant_prefix:(Some "m11-scoped") "application/json")
+    ~expected_version:None
+  >>= fun (pcode, _) ->
+  Alcotest.(check int) "scoped program route published" 201 pcode;
+  let invoker = me.S.i_id in
+  Rt.dispatch p ~service:me.S.i_id ~meth:"GET" ~site_path:"scoped" ~query:None
+    ~body:"" ~actor:(Some invoker)
+  >>= fun r ->
+  Alcotest.(check int) "scoped program route 200 (pre-fix: 500)" 200 r.Rt.code;
+  Alcotest.(check string) "law-4 finish: value bytes served" body r.Rt.body;
+  (* the program's effect landed inside the granted prefix *)
+  S.path_get p ~path:"m11-scoped/x"
+  >>= (function
+       | None -> Alcotest.fail "scoped route effect missing"
+       | Some _ -> return ())
+
 let test_route_capability_and_lifecycle () =
   setup () >>= fun p ->
   admin p >>= fun me ->
@@ -735,6 +773,8 @@ let () =
            , [ lwt "template route serves anonymous" test_template_route
              ; lwt "reserved shadow denied + static wins" test_reserved_shadow
              ; lwt "program route journaled + law-4 finish" test_program_route
+             ; lwt "grant_prefix route runs its per-request scoped mint"
+                 test_program_route_scoped
              ; lwt "capability checks + delete lifecycle"
                  test_route_capability_and_lifecycle
              ; lwt "rewind restores the prior route table" test_route_rewind ] )

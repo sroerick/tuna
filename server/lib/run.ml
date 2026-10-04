@@ -508,10 +508,17 @@ let execute_run pool ~caller ~program_hash ~input_trees ~grant_ids ~fuel
                   (Some (Printf.sprintf "grant %s does not belong to caller" gid))
             | `Unknown -> return (Some (Printf.sprintf "grant %s not found" gid))
             | `Prefix_denied ->
-                return
-                  (Some
-                     (Printf.sprintf
-                        "grant %s does not cover this call's paths" gid)))
+                (* FOUND + FIXED 2026-10-04 (board make, FINDINGS non-F):
+                   a PATH-SCOPED grant has no paths to check at
+                   SUBMISSION time - check_grant's empty-paths arm answers
+                   Prefix_denied and every scoped grant 403'd before the
+                   run began, breaking route records with grant_prefix
+                   (the per-request mint at routes.serve_program) and any
+                   member-garden run.  The live per-prim check at the
+                   boundary (this module, grant_paths) is where paths
+                   exist; submission only vouches for existence, liveness,
+                   and ownership. *)
+                check rest)
     in
     check grant_ids
     >>= (function

@@ -571,4 +571,33 @@ is real. Confinement rule, recorded: prim-carrying defs exercise in
 the corpus only via SPLICED-BUT-UNAPPLIED terms, never via firing
 terms.
 
+## NON-F — SCOPED GRANTS COULD NOT RIDE RUN SUBMISSION (found
+## 2026-10-04, board make; fixed inline)
+
+Found while driving board 13.5 (the forged-path denial): a route
+record WITH grant_prefix 500s on every hit ("program did not run:
+grant ... does not cover this call's paths"). REPRO: publish a route
+whose program fires tree/put inside its own prefix, minted grant is
+prim "*" + path_prefix (serve_program's per-request mint, M11 law);
+hit it -> 500. CAUSE: execute_run's submission check calls
+S.check_grant with NO paths (default []), and check_grant's
+empty-paths arm answers Prefix_denied for ANY path-scoped grant -
+liveness/ownership validated fine, but the scoped rows could never
+pass an argument-free check. BLAST RADIUS: every grant_prefix route
+record (never exercised green - the M11 suite's program-route test
+uses an unscoped record), AND any member-garden run submitted with
+scoped grants via /api/runs - the platform's own garden model was
+un-runnable through the public run surface. FIX (run.ml:510): at
+submission, Prefix_denied is ACCEPTED - the empty-path shape simply
+has nothing to check there; the per-prim live check at the boundary
+(grant_paths) remains the sole path-scoping authority, exactly as
+grants law 7 pins ("the row is checked live"). Pinned by
+tests/m11_tests.ml test_program_route_scoped (pre-fix: the 500;
+post-fix: 200 + the effect inside the prefix + law-4 finish). The
+board chapter's forged-path acceptance (13.5) rides the same fix:
+a scoped grant on a run whose input path escapes the prefix now
+proceeds to the prim boundary and is denied THERE, as a journaled
+error answer with denial_count >= 1 - never a silent pass and never
+a submission refusal either.
+
 ---
