@@ -21,6 +21,7 @@ OK_ID=$(echo "$OK_RUN" | jget "d['run']['id']")
 echo "$OK_RUN" | grep -q '"status":"normal"' || fail "granted run must be normal"
 echo "$OK_RUN" | grep -q '"prim":"echo"' || fail "prim must be journaled"
 echo "$OK_RUN" | grep -q "\"grant_id\":\"$G\"" || fail "grant must be journaled"
+echo "$OK_RUN" | grep -q '"denial_count":0' || fail "granted run must have denial_count 0"
 
 echo "[1.2] mid-run revocation: denial journaled as an ERROR ANSWER, run continues"
 # 120 nested prim calls: each journal append is a SQL round-trip, so
@@ -74,6 +75,8 @@ echo "$D_RUN" | grep -q '"status":"normal"' \
   || fail "denied run must still be normal (denial is data, not an exception)"
 echo "$D_RUN" | grep -q '"error":"grant denial (revoked) for prim echo"' \
   || fail "denial reason must be journaled"
+echo "$D_RUN" | grep -q '"denial_count":0' \
+  && fail "denied run must surface its denial (0014 denial_count >= 1)"
 D_J=$(echo "$D_RUN" | jget "d['journal'][0]['callsite_path']")
 [ -n "$D_J" ] || fail "denial row must carry the callsite path"
 # the granted prefix still ran: some rows before the denial carry results
@@ -95,6 +98,8 @@ A_RUN=$(do_run "$H" '["10"]' "[\"$G3\"]")
 echo "$A_RUN" | grep -q '"status":"normal"' || fail "attenuated run must continue"
 echo "$A_RUN" | grep -q '"error":"grant denial: prim echo args exceed attenuation"' \
   || fail "attenuation denial must be journaled"
+echo "$A_RUN" | grep -q '"denial_count":1' \
+  || fail "attenuation denial must surface as denial_count 1"
 A_ID=$(echo "$A_RUN" | jget "d['run']['id']")
 
 echo "[1.4] fuel accounting unchanged: denied run is a normal boundary event"

@@ -160,12 +160,14 @@ type run = {
 ; r_semantics : string  (* 'v0' canonical | 'v1' distinct-work (0009) *)
 ; r_demand_sharing : bool  (* 0011: did this run consult the demand-memo *)
 ; r_demand_hits : int  (* 0011: firings answered from the shared table *)
+; r_denial_count : int  (* 0014: journaled grant denials (grants.invocation) *)
 }
 
 let select_run =
   "SELECT id::text, program_hash, input_hashes, fuel, size_cap, result_hash, \
    result_ternary, step_count, status, caller::text, parent_run_id::text, \
-   verify_status, created_at::text, semantics, demand_sharing, demand_hits \
+   verify_status, created_at::text, semantics, demand_sharing, demand_hits, \
+   denial_count \
    FROM runs WHERE id = $1::uuid"
 
 let run_of_row r =
@@ -184,7 +186,8 @@ let run_of_row r =
   ; r_created_at = opt_text r 12
   ; r_semantics = text r 13 "run.semantics"
   ; r_demand_sharing = bool r 14 "run.demand_sharing"
-  ; r_demand_hits = int r 15 "run.demand_hits" }
+  ; r_demand_hits = int r 15 "run.demand_hits"
+  ; r_denial_count = int r 16 "run.denial_count" }
 
 let insert_run p ~program_hash ?(inputs = []) ?(caller = None) ?(parent_run_id = None)
     ?(semantics = "v0") ~fuel ~size_cap () =
@@ -205,17 +208,19 @@ let insert_run p ~program_hash ?(inputs = []) ?(caller = None) ?(parent_run_id =
   | [ r ] -> Direct.return (text r 0 "run.id")
   | n -> store_error "insert_run: RETURNING gave %d rows" (List.length n) )
 
-let update_run_result p ~id ~status ?result_ternary ?step_count () =
+let update_run_result p ~id ~status ?result_ternary ?step_count
+    ?(denial_count = 0) () =
   let result_hash = Option.map Tuna.Hash.hex_of_string result_ternary in
   Db.q_unit
     ~params:[ p_str (Run_status.to_string status)
             ; p_opt result_hash
             ; p_opt result_ternary
             ; (match step_count with Some s -> p_int s | None -> None)
+            ; p_int denial_count
             ; p_str id ]
     p
     "UPDATE runs SET status = $1, result_hash = $2, result_ternary = $3, \
-     step_count = $4 WHERE id = $5::uuid"
+     step_count = $4, denial_count = $5 WHERE id = $6::uuid"
 
 (* verify_status update (replay engine writes verified|failed; M7) *)
 let update_verify_status p ~id ~verify_status () =
@@ -275,7 +280,8 @@ let list_runs p ?(caller = None) ?(program = None) ?(limit = 50) () =
     p
      "SELECT id::text, program_hash, input_hashes, fuel, size_cap, result_hash, \
      result_ternary, step_count, status, caller::text, parent_run_id::text, \
-     verify_status, created_at::text, semantics, demand_sharing, demand_hits \
+     verify_status, created_at::text, semantics, demand_sharing, demand_hits, \
+     denial_count \
      FROM runs \
      WHERE ($1::uuid IS NULL OR caller = $1::uuid) \
        AND ($2::text IS NULL OR program_hash = $2) \

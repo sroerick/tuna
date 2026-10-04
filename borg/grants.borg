@@ -83,6 +83,16 @@
          calculus. Fuel accounting is unaffected: a denied call is a
          normal boundary event.
 
+         RUN-DENIAL SURFACING (0014, the v0.2 todo-probe defect): the
+         run row carries denial_count — the number of journaled grant
+         denials this run answered, counted at the boundary where each
+         denial is answered and persisted at finalize. The law above is
+         unchanged (status stays normal; the program decides what a
+         journaled denial means); what changed is that a run's outcome
+         SHOWS its denials, so a poisoned-but-normal result can never
+         pass as an unqualified success. A live-host fact, not a
+         calculus fact: replay and the verify verdict are untouched.
+
          Grant check results are NOT journaled as replay inputs — during
          faithful replay the journal answers prim calls (replay.faithful)
          and no live check runs. Revocation therefore cannot retroactively

@@ -85,6 +85,13 @@ def run_checked(name, program_hash, inputs, grants, fuel=1_000_000):
     if run["verify_status"] != "verified":
         raise SystemExit(f"prelude_probe: {name} replay "
                          f"{run['verify_status']} != verified")
+    # 0014 run-denial surfacing: a green probe run must show ZERO grant
+    # denials on the run row (the v1-defect-1 law: a denied prim denies
+    # the run — surfaced as denial_count, never silent).
+    if run.get("denial_count") != 0:
+        raise SystemExit(f"prelude_probe: {name} denial_count "
+                         f"{run.get('denial_count')} != 0 "
+                         "(a prim denial poisoned this run)")
     return run, [e["prim"] for e in full.get("journal", [])]
 
 

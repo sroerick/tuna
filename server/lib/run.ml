@@ -243,6 +243,15 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
   let kv = kv_of_pool pool in
   let allowlist = Prims.allowlist_from_env () in
   let deadline = deadline_now () in
+  (* 0014 run-denial surfacing (grants.invocation addendum): the denial
+     law is unchanged — denial is data, the run continues per program
+     semantics — but the run row must SHOW its denials, not bury them
+     in the journal (the v0.2 todo-probe defect: a denied fold returned
+     status normal + verified with a poisoned accumulator).  Counted
+     at the boundary where the denial is answered, persisted at
+     finalize; the calculus, fuel accounting and replay are untouched. *)
+  let denials = ref 0 in
+  let note_denial () = incr denials in
   let host ~site ~name ~args =
     let t0 = Unix.gettimeofday () in
     let args_ternary = Tuna.Canon.encode args in
@@ -297,6 +306,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
          | false ->
            match grant_for gmap name with
          | None ->
+             note_denial ();
              return
                ( `Error
                    (Printf.sprintf "grant denial: no live grant for prim %s" name)
@@ -314,13 +324,15 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
                     else Prims.dispatch ~name ~args ~kv ~allowlist)
                    >>= fun a -> return (a, Some gid, Some args_ternary)
                else
-                 return
-                   ( `Error
-                       (Printf.sprintf
-                          "grant denial: prim %s args exceed attenuation" name)
-                   , Some gid
-                   , Some args_ternary )
+                 (note_denial ();
+                  return
+                    ( `Error
+                        (Printf.sprintf
+                           "grant denial: prim %s args exceed attenuation" name)
+                    , Some gid
+                    , Some args_ternary ))
                | (`Revoked | `Wrong_caller | `Unknown | `Prefix_denied) as denial ->
+                note_denial ();
                 return
                   ( `Error
                       (Printf.sprintf "grant denial (%s) for prim %s"
@@ -398,7 +410,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
       | Eng.Deadline_exceeded s -> (S.Run_status.Deadline_exceeded, None, s)
   in
   S.update_run_result pool ~id:run_id ~status ?result_ternary:result_ternary
-    ?step_count:(Some steps) ()
+    ?step_count:(Some steps) ~denial_count:!denials ()
     >>= fun () ->
     (if use_demand then
        S.update_run_demand pool ~id:run_id

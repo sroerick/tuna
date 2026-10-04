@@ -195,7 +195,8 @@ let run_json (r : Store.run) : J.t =
     ; ("created_at", opt_str r.r_created_at)
     ; ("semantics", `String r.r_semantics)
     ; ("demand_sharing", `Bool r.r_demand_sharing)
-    ; ("demand_hits", `Int r.r_demand_hits) ]
+    ; ("demand_hits", `Int r.r_demand_hits)
+    ; ("denial_count", `Int r.r_denial_count) ]
 
 let journal_json (j : Store.journal) : J.t =
   `Assoc
