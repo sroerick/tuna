@@ -1,0 +1,16 @@
+; board-add.sabra — the board chapter's create call site (board.borg L5).
+;
+; Pure vocabulary over the v0.3 prelude row todo-add: the page hands
+; path/title/who/when as run inputs (rim-encoded cstr/cstr/cstr/int),
+; the program does the one journaled tree/put.  Eta-wrapped because the
+; diff-corpus twin pins DIRECT def applications: the def itself is
+; todo-add; this program is the BOARD's callsite over it.
+;
+; Every mutation run must come back status normal, denial_count 0,
+; replay-verify verified - the F5 wire carried from defs to programs.
+
+(lambda (path)
+  (lambda (title)
+    (lambda (who)
+      (lambda (when)
+        (todo-add path title who when)))))

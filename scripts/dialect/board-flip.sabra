@@ -1,0 +1,15 @@
+; board-flip.sabra — the lost-update-safe state toggle (board.borg L5).
+;
+; The host-era page did read-then-write-put: racy.  The swap is the
+; fix, not the regression: one ONE-WINDOW tree/list fetches the entry
+; (value rides tree/get, version rides the entry tail), then tree/cas
+; writes only if the version still matches - a raced flip ends as a
+; journaled cas conflict, never a silent overwrite.
+;
+; Journal shape: one list, one get, one cas row.  No reference re-fires
+; (let-free on purpose: each prim answer is consumed exactly once).
+
+(lambda (path)
+  (prim "tree/cas" path
+    (second (second (first (prim "tree/list" path "" "1"))))
+    (todo-flip (prim "tree/get" path))))

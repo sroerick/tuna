@@ -1,0 +1,9 @@
+; board-del.sabra — the canonical board delete (board.borg L5).
+;
+; The prim's op kind is the canonical "delete", retiring the host
+; page's nonstandard "del" op kind with the swap.  Deleted items are
+; interesting to rewind-as-fold: the op chain records the version so
+; the fold replays the tombstone.
+
+(lambda (path)
+  (prim "tree/del" path))

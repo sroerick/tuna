@@ -1,0 +1,35 @@
+; board-view.sabra — the windowed board read (board.borg L6).
+;
+; Inputs: the granted prefix ("todo/", WITH the slash - collation
+; excludes sibling probe namespaces) and the cursor (EXCLUSIVE lower
+; bound, "" = first window).  Window size 24 keeps a window of
+; real-sized records (cstr titles are bit-lists: ~2KB ternary per
+; entry) inside the journal payload cap; the payloads' loud caps are
+; the protection, never a silent truncation.
+;
+; Result: (pair <window entries> <summary>) where the entries are the
+; tree/list answer verbatim (path, value, version each) and the
+; summary is the dialect 12.4 keyed record: key 1 = open count,
+; key 2 = done count - per-window counts only, recorded so they
+; cannot masquerade as totals.
+;
+; The count folds use the todo-open-count idiom verbatim (math/add
+; fires EVERY element, so a denied prim denies the count, never
+; silently - the 0014 law); let-aliasing does not re-fire the prim
+; (probe-pinned: one tree/list row per window however many refs).
+; tree-eq is pure; no other prims ride this read.
+
+(lambda (pfx)
+  (lambda (cursor)
+    (let ((items (prim "tree/list" pfx cursor "24")))
+      (let ((opens (todo-open-count items)))
+        (pair items
+          (pair
+            (pair key-state (pair opens %0))
+            (pair (pair key-title (pair
+              (list-fold
+                (lambda (e) (lambda (acc)
+                  (if (prim "math/add" acc 1) acc
+                    (tree-eq (todo-state (todo-entry e)) todo-done))))
+                0 items)
+              %0)) %0)))))))
