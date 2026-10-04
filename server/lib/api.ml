@@ -2160,6 +2160,21 @@ let serve ~env ~sw ~port ~bootstrap_token =
       | Ok _ -> Ok ()
       | Error (code, msg) -> Error (Printf.sprintf "%d: %s" code msg))
     ();
+  (* board chapter (borg/board.borg): seed the four member programs as
+     ordinary def rounds under the board identity - after the stdlib so
+     dictionary resolution sees the v0.1/v0.2/v0.3 vocabulary.  Same
+     execute callback, so each program lands journaled + attributed;
+     re-defs only when the embedded source changed. *)
+  Board_seed.boot pool
+    ~execute:(fun ~caller ~command ->
+      match
+        Repl_cmd.execute pool ~caller ~command ~inputs:[] ~grant_ids:[]
+          ~fuel:1_000_000 ~size_cap:1_000_000
+          ~compile_deadline:(Run.compile_deadline_now ()) ()
+      with
+      | Ok _ -> Ok ()
+      | Error (code, msg) -> Error (Printf.sprintf "%d: %s" code msg))
+    ();
   Web.log "boot: identity bootstrap ok";
   Web.serve ~env ~sw ~interface:"127.0.0.1" ~port
     (Web.logger

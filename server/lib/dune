@@ -14,3 +14,18 @@
   (with-stdout-to %{target}
    (run python3 %{workspace_root}/tools/stdprobe/embed.py
      %{workspace_root}/stdlib/v1/core.defs))))
+
+; board chapter (borg/board.borg): embed the four .sabra program
+; sources - the files are the book's artifacts, the module is generated
+(rule
+ (target board_embed.ml)
+ (deps
+  ../../scripts/dialect/board-add.sabra
+  ../../scripts/dialect/board-view.sabra
+  ../../scripts/dialect/board-flip.sabra
+  ../../scripts/dialect/board-del.sabra
+  ../../tools/stdprobe/embed_board.py)
+ (action
+  (with-stdout-to %{target}
+   (run python3 %{workspace_root}/tools/stdprobe/embed_board.py
+     %{workspace_root}))))
