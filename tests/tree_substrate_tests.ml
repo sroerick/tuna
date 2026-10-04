@@ -124,6 +124,20 @@ let test_prefix_list () =
   Alcotest.(check (list string)) "prefix range, byte-wise ordered"
     [ "t3/c/1"; "t3/c/2"; "t3/c/3" ]
     (List.map (fun e -> e.S.tp_path) entries);
+  (* windowed reads (board.borg L6): [after] is an exclusive lower
+     bound; the empty default keeps the historical result identical. *)
+  S.path_list p ~prefix:"t3/c" ~limit:2 ()
+  >>= fun w ->
+  Alcotest.(check (list string)) "limit window from the range head"
+    [ "t3/c/1"; "t3/c/2" ] (List.map (fun e -> e.S.tp_path) w);
+  S.path_list p ~prefix:"t3/c" ~after:"t3/c/1" ~limit:10 ()
+  >>= fun w2 ->
+  Alcotest.(check (list string)) "cursor window is exclusive"
+    [ "t3/c/2"; "t3/c/3" ] (List.map (fun e -> e.S.tp_path) w2);
+  S.path_list p ~prefix:"t3/c" ~after:"t3/d/9" ~limit:10 ()
+  >>= fun w3 ->
+  Alcotest.(check (list string)) "cursor past the range is empty" []
+    (List.map (fun e -> e.S.tp_path) w3);
   return ()
 
 (* -- grant prefix at the prim boundary --------------------------------- *)

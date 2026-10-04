@@ -223,40 +223,79 @@ let entry_tree (e : S.path_entry) value =
     , Tuna.Tree.Fork (value, Prims.str (Int64.to_string e.S.tp_version)) )
 
 let tree_list p ~actor args =
+  (* the shared tail: fetch entry values, cap the encoded result, journal
+     the list op.  [after] is the exclusive cursor bound ("" = from the
+     range start), [limit] the entry count. *)
+  let list_after prefix ~after ~limit =
+    S.path_list p ~prefix ~limit ~after ()
+    >>= fun entries ->
+    let rec go acc = function
+      | [] -> return (Ok (List.rev acc))
+      | e :: rest -> (
+          fetch_value_tree p e.S.tp_value_hash
+          >>= (function
+                | Ok t -> go (entry_tree e t :: acc) rest
+                | Error msg -> return (Error msg)))
+    in
+    go [] entries
+    >>= (function
+          | Error msg -> return (`Error msg)
+          | Ok trees -> (
+              let result = Prims.tree_of_list trees in
+              if String.length (Tuna.Canon.encode result) > Prims.payload_cap
+              then return (`Error "tree/list: result exceeds the journal payload cap")
+              else
+                S.op_append p ~op:"list" ~path:prefix ~value_hash:None
+                  ~prev_version:None ~version:None ~actor
+                >>= fun _ -> return (`Ok result)))
+  in
   match Prims.list_of_tree args with
   | [ prefix_t ] -> (
+      (* the 1-arg shape is byte-identical to the pre-window contract
+         (board.borg L6 / F15(b)): uncapped-by-caller, list_cap bound,
+         journaled "list" op on the prefix. *)
       match Prims.unstr prefix_t with
       | None -> return (`Error "tree/list: prefix must be a string tree")
       | Some prefix -> (
           match validate_prefix "tree/list" prefix with
           | Some e -> return (`Error e)
-          | None -> (
-              S.path_list p ~prefix ~limit:list_cap ()
-              >>= fun entries ->
-              let rec go acc = function
-                | [] -> return (Ok (List.rev acc))
-                | e :: rest -> (
-                    fetch_value_tree p e.S.tp_value_hash
-                    >>= (function
-                          | Ok t -> go (entry_tree e t :: acc) rest
-                          | Error msg -> return (Error msg)))
-              in
-              go [] entries
-              >>= (function
-                    | Error msg -> return (`Error msg)
-                    | Ok trees -> (
-                        let result = Prims.tree_of_list trees in
-                        if
-                          String.length (Tuna.Canon.encode result)
-                          > Prims.payload_cap
-                        then
-                          return
-                            (`Error
-                               "tree/list: result exceeds the journal payload cap")
+          | None -> list_after prefix ~after:"" ~limit:list_cap))
+  | [ prefix_t; cursor_t; limit_t ] -> (
+      (* windowed read (board.borg L6): [prefix cursor limit].  The cursor
+         is an EXCLUSIVE lower bound within the prefix range - "" starts
+         at the range head, so a page walk feeds each window the last
+         path of the previous one.  The limit is a decimal string
+         (same convention as the cas expected-version arg). *)
+      match Prims.unstr prefix_t with
+      | None -> return (`Error "tree/list: prefix must be a string tree")
+      | Some prefix -> (
+          match Prims.unstr cursor_t with
+          | None -> return (`Error "tree/list: cursor must be a string tree")
+          | Some cursor -> (
+              match Prims.unstr limit_t with
+              | None -> return (`Error "tree/list: limit must be a string tree")
+              | Some limit_s -> (
+                  match validate_prefix "tree/list" prefix with
+                  | Some e -> return (`Error e)
+                  | None -> (
+                      let digits =
+                        limit_s <> ""
+                        && String.for_all
+                             (fun c -> c >= '0' && c <= '9') limit_s
+                      in
+                      if not digits then
+                        return (`Error "tree/list: limit must be a decimal number")
+                      else
+                        let limit = int_of_string limit_s in
+                        if limit < 1 then
+                          return (`Error "tree/list: limit must be >= 1")
                         else
-                          S.op_append p ~op:"list" ~path:prefix ~value_hash:None
-                            ~prev_version:None ~version:None ~actor
-                          >>= fun _ -> return (`Ok result))))))
+                          let cursor_valid =
+                            if cursor = "" then None else validate_prefix "tree/list" cursor
+                          in
+                          match cursor_valid with
+                          | Some e -> return (`Error e)
+                          | None -> list_after prefix ~after:cursor ~limit)))))
   | _ -> return (`Error "tree/list: args must be [prefix]")
 
 (* -- ns/fork: [src dst] -> "copied:N" ---------------------------------- *)

@@ -1575,14 +1575,19 @@ let path_delete p ~path ~expected_version =
 
 (* prefix range scan: every path starting with [prefix], byte-wise
    ordered.  [prefix] must be non-empty (the whole-namespace read is an
-   API concern, not a store invariant). *)
-let path_list p ?(limit = 1000) ~prefix () =
+   API concern, not a store invariant).  [after] is an optional
+   EXCLUSIVE lower bound for windowed reads (board.borg L6): only rows
+   with path > after are returned; its default ("" sorts below every
+   stored path) makes the predicate always-true, so unwindowed callers
+   see the same rows as before the parameter existed. *)
+let path_list p ?(limit = 1000) ?(after = "") ~prefix () =
   Db.q
-    ~params:[ p_str prefix; p_int limit ]
+    ~params:[ p_str prefix; p_int limit; p_str after ]
     p
     "SELECT path, value_hash, version, owner, updated_at::text FROM tree_paths \
      WHERE path >= ($1 COLLATE \"C\") \
        AND path < (($1 || chr(255)) COLLATE \"C\") \
+       AND path > ($3 COLLATE \"C\") \
      ORDER BY path COLLATE \"C\" LIMIT $2"
   >>= fun rows -> Direct.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
 
