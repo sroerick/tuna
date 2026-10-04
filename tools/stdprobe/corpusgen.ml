@@ -106,6 +106,14 @@ let cases =
       ("(list-map todo-title w)", "%221102100221102000") )
   ; ( "dialect_list-append-order",
       ("(list-append w (pair %10 %0))", "%210200") )
+  (* board.borg vocabulary row 1 (todo-add, 4-arg): verify-8 law 2
+     requires an exercised row.  The def is spliced UNAPPLIED (data
+     position): a gate application never fires, so all three engines
+     treat the embedded prim carrier as inert data - a gate-FIRING
+     row cannot ride this harness (the pure twins reduce the carrier
+     as data while the tuna lane substitutes a host error answer).*)
+  ; ( "stdlib_todo-add",
+      ("(pair todo-add w)", "%10") )
   ]
 
 let () =

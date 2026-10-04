@@ -533,7 +533,7 @@ repros re-executed; evidence inline):
    correct foldr-append; rec-upd's assoc-list caller is unaffected.
 
 4. Pinned while re-driving the probe: the BOARD stage mis-verifies on
-   a DIRTY namespace, and that is tree/list working as documented.
+   a DIRTY namespace, and that tree/list working as documented.
    Prefix selection is a path RANGE (`path >= prefix AND path <
    prefix || chr(255)`), so `tree/list "todo-cal-v02"` also returns
    the sibling namespaces `todo-cal-v02b/c/d/e` left in the dev DB by
@@ -544,5 +544,31 @@ repros re-executed; evidence inline):
    fresh namespace (todo-cal-v02f): all five stages green, replay
    verified. A namespace-hygiene or exact-child list mode remains an
    evidence-named follow-up, not a defect.
+
+## NON-F — a gate-FIRING corpus row cannot ride the differential
+## harness (found 2026-10-04, board make; dispositioned inline)
+
+The first draft of the stdlib_todo-add exercised row (board.borg
+vocabulary row 1) applied the def - `(pair (todo-add w "hello board"
+"sabralib" 1727000000) w)` - which places a PRIM GATE in the APPLYING
+term. Observed on regen 2026-10-04: refeval and the CL twin AGREE with
+each other (status normal, 139 steps, the gate reduces as plain data
+under the verbatim rules), while the tuna CLI lane answers the prim
+through its default host (`Error "no prim host at this boundary"`),
+substitutes the canonical error tree, and finalizes differently (123
+steps). NOT an engine defect - the flat machine and the recursive
+referee step-count-identically; the disagreement is the HARNESS
+boundary: refeval and the CL twin have no prim interception at all
+(a gate carrier is just a reducible tree to them), while every tuna
+engine parks on `Tuna.Cprim.shape` and demands a host. A corpus row
+that FIRES a gate therefore has no single expected answer - the
+"expected" line pins one host's fiction over another. Disposition:
+the row was re-authored inert (data position: `(pair todo-add w)` -
+the gate is embedded but never applied) and 93/93 agree; the
+journaled RUNTIME proof of todo-add (steps, exact result twin,
+replay) lives on the board acceptance (13.1/13.3) where the host
+is real. Confinement rule, recorded: prim-carrying defs exercise in
+the corpus only via SPLICED-BUT-UNAPPLIED terms, never via firing
+terms.
 
 ---

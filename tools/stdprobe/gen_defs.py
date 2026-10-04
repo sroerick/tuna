@@ -457,6 +457,12 @@ d("todo-item", lam("s", lam("t", lam("w", lam("n",
         L("pair", L("pair", "key-when", L("pair", "n", "%0")), "%0")))))))))
 d("todo-created", lam("path", lam("title", lam("who",
   L("prim", "\"tree/put\"", "path", L("todo-item", "todo-open", "title", "who", "1727000000"))))))
+# board.borg L5/vocabulary row 1: the 4-argument read of todo-created.
+# todo-created's when is a hardcoded literal; a member's card needs a
+# real clock value riding the run's inputs, so todo-add takes when as
+# an argument. todo-created stays (additive-only law).
+d("todo-add", lam("path", lam("title", lam("who", lam("when",
+  L("prim", "\"tree/put\"", "path", L("todo-item", "todo-open", "title", "who", "when")))))))
 d("todo-flip", lam("r",
   L("rec-upd", "key-state",
     L("if", "%0", "%10", L("tree-eq", L("todo-state", "r"), "todo-open")), "r")))

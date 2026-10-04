@@ -74,6 +74,7 @@ let all = [
   ("todo-entry", "(lambda (e) (first (second e)))");
   ("todo-item", "(lambda (s) (lambda (t) (lambda (w) (lambda (n) (pair (pair key-state (pair s %0)) (pair (pair key-title (pair t %0)) (pair (pair key-who (pair w %0)) (pair (pair key-when (pair n %0)) %0))))))))");
   ("todo-created", "(lambda (path) (lambda (title) (lambda (who) (prim \"tree/put\" path (todo-item todo-open title who 1727000000)))))");
+  ("todo-add", "(lambda (path) (lambda (title) (lambda (who) (lambda (when) (prim \"tree/put\" path (todo-item todo-open title who when))))))");
   ("todo-flip", "(lambda (r) (rec-upd key-state (if %0 %10 (tree-eq (todo-state r) todo-open)) r))");
   ("todo-open-count", "(lambda (items) (list-fold (lambda (e) (lambda (acc) (if (prim \"math/add\" acc 1) acc (tree-eq (todo-state (todo-entry e)) todo-open)))) 0 items))");
 ]
