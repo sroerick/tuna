@@ -1,6 +1,6 @@
 (project tuna-federation
  (doc "Tuna book chapter: federation - two tuna instances speak trees. Pre-registered as a sketch so the substrate never grows a feature that forecloses it. Thesis: the ops chain (genesis-anchored, hash-linked, prefix-folded, tamper-verified) is the replicable unit; peers exchange values by hash and converge by shipping verified ops windows, not by inventing a second protocol.")
- (* agent note (|2026-09-18, M12 opens with F1 implemented: GET
+ (* agent note (|2026-09-18, M12 opens with FED1 implemented: GET
     /api/fed/value/:hash answers {hash, kind, payload} for tree
     (canonical ternary; a program hash resolves as its own ternary -
     one address law) and bytes (base64).  Reads stay hash-gated
@@ -16,7 +16,7 @@
     rejects are never absorbed.  Acceptance: tests/fed_tests.ml (6
     green, own scratch db) + dev-instance e2e (bytes fetch by a peer
     token, ops row carries the peer actor).|) *)
- (* agent note (|2026-10-01, F2 implemented: GET /api/fed/ops?
+ (* agent note (|2026-10-01, FED2 implemented: GET /api/fed/ops?
     prefix=&after_seq=&limit= returns a contiguous op window
     {ops[], head, after_seq, last_seq, limit, more, verified}; each op
     row carries its TRUE global predecessor hash (prev_hash, computed
@@ -50,29 +50,29 @@
     slice is self-contained.|) *)
  (status in-progress)
  (convention ocaml-dune)
- (* agent note (|2026-10-02 F3 DISPOSITION (remainder pass): F1/F2 are
-    implemented and refereed; F3 is NOT shippable from this repo alone.
-    F3's first named prerequisite — PP attribution (acted_by) — has
+ (* agent note (|2026-10-02 FED3 DISPOSITION (remainder pass): FED1/FED2 are
+    implemented and refereed; FED3 is NOT shippable from this repo alone.
+    FED3's first named prerequisite — PP attribution (acted_by) — has
     never shipped (grep of /home/roerick/dev/wyo.tech/pricklypear: no
     acted_by anywhere), and the second — bearer parity — is a PP-side
     change (PP delegated Bearer == tuna identity token), not a tuna
-    edit. The tuna side F3 needs is ALREADY present and verified: the
+    edit. The tuna side FED3 needs is ALREADY present and verified: the
     /api/tree/* surface (get/put/cas/list/log/state) is the client
     surface a PP prims library would call, and /api/fed/* is the peer
-    surface; both are bearer-gated and journaled. So F3 stays
+    surface; both are bearer-gated and journaled. So FED3 stays
     in-progress as a cross-repo handoff, blocked on PP acting_by
     landing first — recorded here rather than left ambiguous. No
     dummy bridge, no forged attribution: pre-registered failure 3 (a
     bridge write attributed to the wrong actor) forbids the shortcut.
     Re-open when PP ships acted_by; the tuna half is a thin client.)|) *)
  (section federation
-  (doc "Three phases, each independently shippable, each with pre-registered failure. F1 implemented 2026-09-18; F2 implemented 2026-10-01; F3 still out of scope.")
+  (doc "Three phases, each independently shippable, each with pre-registered failure. FED1 implemented 2026-09-18; FED2 implemented 2026-10-01; FED3 still out of scope.")
   (status in-progress)
   (subsection phases
    (status in-progress)
    (details
     (doc (|
-      F1 VALUE EXCHANGE (read-only, IMPLEMENTED 2026-09-18). GET
+      FED1 VALUE EXCHANGE (read-only, IMPLEMENTED 2026-09-18). GET
          /api/fed/value/:hash returns {hash, kind, payload} for either
          kind (tree ternary, bytes base64; a program hash resolves as
          its own ternary); the peer rehashes on receipt and trusts
@@ -80,7 +80,7 @@
          identities via TUNA_FED_PEERS; hash-gated reads (byte-values
          law 2) mean no new authz model; fetches journal as op
          "fed-value" attributed to the calling identity.
-      F2 OPS-CHAIN SYNC (IMPLEMENTED 2026-10-01). Pull: GET
+      FED2 OPS-CHAIN SYNC (IMPLEMENTED 2026-10-01). Pull: GET
          /api/fed/ops?prefix=&after_seq= returns a contiguous op window;
          each row carries its true global predecessor hash so
          prefix-filtered (non-contiguous) windows verify per row
@@ -92,7 +92,7 @@
          atomically. Append-only, no merge: a re-apply shadows under a
          fresh version; divergence is two namespaces, never silently
          reconciled.
-      F3 PRICKLYPEAR BRIDGE. Align attribution first (PP acted_by,
+      FED3 PRICKLYPEAR BRIDGE. Align attribution first (PP acted_by,
          still unshipped), then bearer parity (PP delegated Bearer ==
          tuna identity token), then a PP prims library calling
          /api/tree/* and /api/fed/* so PP rows and tuna paths cite each
@@ -105,16 +105,16 @@
     (doc (|
       1. Two peers diverge on the same path and no check notices ->
          failure; divergence must surface as distinct namespaces or a
-         verified rejection.  F2 holds: ns/<peer>/ scoping keeps
+         verified rejection.  FED2 holds: ns/<peer>/ scoping keeps
          namespaces distinct, and a re-apply of an existing path
          SHADOWS under a fresh version (reported in the apply answer's
          "shadowed" list), never a silent merge.
       2. An applied op that fails rehash or chain-linkage verification
-         -> failure; rejects are journaled, never absorbed.  F2 holds:
+         -> failure; rejects are journaled, never absorbed.  FED2 holds:
          every pulled row carries its true prev_hash and apply
          re-verifies each row (tampered = 400, journaled fed-apply); a
          value-citing effect whose value is not held locally is also
          refused (400), value-pull-before-ops is the caller's law.
       3. A bridge write attributed to any identity other than the true
-         actor (or its delegated identity) -> failure.  (F3, not yet
+         actor (or its delegated identity) -> failure.  (FED3, not yet
          exercised.) |))))))

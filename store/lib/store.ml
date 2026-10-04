@@ -1774,7 +1774,7 @@ let ns_fork p ~src_prefix ~dst_prefix ~actor =
       in
       log_copies copies)
 
-(* -- federation F2: ops-chain sync (borg/federation.borg) ------------- *)
+(* -- federation FED2: ops-chain sync (borg/federation.borg) ------------- *)
 
 (* head seq of the whole log (0L for an empty log).  Used by the pull
    surface and, inside a transaction, to assert "this apply's window
@@ -1851,7 +1851,7 @@ let fed_apply_effect_conn c ~dst_prefix ~suffix ~value_hash ~owner =
 (* does any of the three value homes hold [hash]?  apply refuses a
    window whose effect rows cite values this peer has not pulled (fetch
    values first, then ops); a dangling index entry is a broken
-   substrate.  The probe mirrors F1's address law: tree_values,
+   substrate.  The probe mirrors FED1's address law: tree_values,
    byte_values, or a compiled program (a program hash resolves as its
    own ternary). *)
 let value_present p hash =

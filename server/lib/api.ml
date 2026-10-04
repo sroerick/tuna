@@ -16,18 +16,18 @@
                                             caller's identity dictionary; eval
                                             + def rounds are journaled runs
                                             chained via repl_state)
-     GET  /api/fed/value/:hash              federation F1 value exchange:
+     GET  /api/fed/value/:hash              federation FED1 value exchange:
                                             {hash, kind, payload} for bytes
                                             (base64), tree (canonical ternary;
                                             a program hash resolves as its
                                             ternary) - the peer rehashes on
                                             receipt and trusts nothing but
                                             the hash
-     GET  /api/fed/ops                      federation F2 ops-chain sync (pull):
+     GET  /api/fed/ops                      federation FED2 ops-chain sync (pull):
                                             a verifiable op window
                                             {ops[], head, last_seq, verified}
                                             with op_hash linkage checked
-     POST /api/fed/ops/apply                federation F2 ops-chain sync (push):
+     POST /api/fed/ops/apply                federation FED2 ops-chain sync (push):
                                             fold a verified window into a
                                             peer namespace ns/<peer>/...
      POST /api/repl                         the REPL round (M9: eval/def/get/
@@ -1535,7 +1535,7 @@ let get_value pool auth req =
   >>= fun (code, content_type, body, hdrs) ->
   Web.respond ~code ~headers:(("Content-Type", content_type) :: hdrs) body
 
-(* -- federation F1 (borg/federation.borg): value exchange --------------
+(* -- federation FED1 (borg/federation.borg): value exchange --------------
 
    GET /api/fed/value/:hash -> {"hash", "kind", "payload"}; kind bytes
    carries a base64 payload, tree carries the canonical ternary text (a
@@ -1590,11 +1590,11 @@ let get_fed_value pool auth req =
   >>= fun (code, body) ->
   Web.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
 
-(* per-peer bearer identities (federation F1): TUNA_FED_PEERS lists
+(* per-peer bearer identities (federation FED1): TUNA_FED_PEERS lists
    comma-separated peer names; each ABSENT name gets a generated token
    printed ONCE (the root bootstrap pattern - only a fresh credential
    prints).  Peer identities attribute fed traffic in the ops chain
-   today and gate ns/<peer>/ prefixes in F2.  Names are lowercase
+   today and gate ns/<peer>/ prefixes in FED2.  Names are lowercase
    alnum + dashes, 1..64 chars; anything else is a hard boot error. *)
 
 let fed_peer_name_ok name =
@@ -1663,7 +1663,7 @@ let boot_fed_peers pool =
   in
   go names
 
-(* -- federation F2 (borg/federation.borg): ops-chain sync --------------
+(* -- federation FED2 (borg/federation.borg): ops-chain sync --------------
 
    Pull: GET /api/fed/ops?prefix=&after_seq=&limit= returns op windows
    with their op_hash linkage verified (internal-linkage only for windows

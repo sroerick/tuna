@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fed-sync.sh - sync a namespace from a peer tuna instance (M12 F2
+# fed-sync.sh - sync a namespace from a peer tuna instance (M12 FED2
 # ops-chain sync, borg/federation.borg): pull the verifiable op window,
 # pull every value its effects cite (rehash-verified), and apply the
 # window into a local destination namespace with those values inline.
@@ -44,7 +44,7 @@ last=$(python3 -c "import json;print(json.load(open('$tmp/window.json'))['last_s
 
 # 2. pull every value cited by an effect row under <src> and rehash it
 #    locally (the apply re-verifies inline, but a client-side rehash is
-#    the F1 contract: trust nothing but the hash).  Values are bundled
+#    the FED1 contract: trust nothing but the hash).  Values are bundled
 #    into the apply body, so no separate local write is needed.
 python3 - "$tmp/window.json" "$src" <<'PY' > "$tmp/hashes.txt"
 import json, sys

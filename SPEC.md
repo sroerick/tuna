@@ -1,6 +1,6 @@
 # Tuna - a standalone tree evaluator
 
-**Status:** spec v0, implementation handoff. **Author:** Gregor (design conversation with roerick, 2026-09-14). **Implementer:** TBD. Name: Tuna (the fruit of the pricklypear). Sabra is the runner-up - roerick's call between the two; rename is trivial.
+**Status:** v0 handoff spec, implemented and live (club since 09-15, M10 gates green). Kept for the record; the living source of truth is the book (tuna.borg + borg/*.borg), and code converges to it. **Author:** Gregor (design conversation with roerick, 2026-09-14). **Implementers:** roerick + gregor, via the book (09-14 onward). Name: Tuna (the fruit of the pricklypear); Sabra was the runner-up.
 
 ## 1. Purpose
 

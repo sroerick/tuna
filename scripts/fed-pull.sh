@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fed-pull.sh - pull one value from a peer tuna instance (M12 F1 value
+# fed-pull.sh - pull one value from a peer tuna instance (M12 FED1 value
 # exchange, borg/federation.borg) and verify the rehash contract: the
 # peer trusts nothing but the hash, so the payload must rehash to the
 # address it was fetched under.

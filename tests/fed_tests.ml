@@ -1,4 +1,4 @@
-(* M12 federation F1 acceptance tests (borg/federation.borg, value
+(* M12 federation FED1 acceptance tests (borg/federation.borg, value
    exchange).  Integration tests require Postgres (scripts/test-store.sh
    gate, TUNA_TEST_PG=1); skipped silently otherwise.  Runs on its OWN
    scratch db (tuna_test_fed) so the PG suites never share one.
@@ -168,7 +168,7 @@ let test_fed_peer_names () =
     "TUNA_FED_PEER_TOKEN_TOWN_2" (Api.fed_peer_token_env "town-2");
   return ()
 
-(* -- F2: ops-chain sync (borg/federation.borg) --------------------------
+(* -- FED2: ops-chain sync (borg/federation.borg) --------------------------
 
    Pull a verifiable op window, apply it into ns/<peer>/..., re-derive
    the index by fold.  Rejects are values (journaled), never absorbed:
@@ -394,7 +394,7 @@ let test_f2_apply_rejects () =
           scan 0)
    | _ -> Alcotest.fail "refusal had no error string");
   (* 4. a value cited inline that does NOT rehash to its claimed hash is
-     refused (the F1 trust-nothing-but-the-hash contract) *)
+     refused (the FED1 trust-nothing-but-the-hash contract) *)
   let wrong_value =
     `Assoc
       [ ("src_prefix", `String src)

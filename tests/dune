@@ -139,7 +139,7 @@
     (bash
      "bash %{workspace_root}/scripts/test-store.sh %{exe:m11_tests.exe} ../migrations tuna_test_m11")))
 
-; M12 federation F1 acceptance tests (value exchange): same PG gate, its
+; M12 federation FED1 acceptance tests (value exchange): same PG gate, its
 ; own scratch database so the PG suites never share one.
  (executable
  (name fed_tests)
