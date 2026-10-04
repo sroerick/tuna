@@ -8,10 +8,11 @@ converge to it.
 ## Stack (fixed; do not swap)
 
 - OCaml 5 + dune, opam switch **poohstack** (`eval $(opam env --switch=poohstack --set-switch)`)
-- HTTP: **Dream** (Lwt); pages are server-rendered **htmx** fragments
+- HTTP: **httpun_eio/gluten-eio over Eio** (direct-style; Dream and Lwt
+  departed — borg/rim-eio.borg); pages are server-rendered **htmx** fragments
   (`server/static/htmx.min.js` is vendored)
-- Postgres: **pgx/pgx_lwt** (pure OCaml client, same line as pricklypear)
-  — socket dir `/tmp`, see `scripts/dev.sh`
+- Postgres: **pure pgx over Eio.Net** (`store/lib/pgx_eio.ml`, driven under
+  the identity monad `store/lib/direct.ml`) — socket dir `/tmp`, see `scripts/dev.sh`
 - JSON: **yojson**; hashing: **digestif** (sha256); tests: **alcotest**
 
 ## Build / test / run

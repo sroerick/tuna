@@ -53,8 +53,15 @@
       scheduler state back into the core), record it in FINDINGS.md
       under the acceptance.borg failure regime with evidence.
     |))
- (status planned)
- (* agent note (|2026-09-15 chapter created. Provenance: pp-eval against pricklypear.rocks pulled note "Tuna: standalone tree evaluator - spec v0" (slug spec_tuna) into SPEC.md. Design discussion before authoring settled: (1) seam-of-structure vs seam-of-text is the honest frame — PP's /api/eval parses hostile strings, tuna's eval path has no parser; (2) "everything else becomes a side effect" inverts into "the journal is the recorded environment = replay sandbox, replay needs nothing live"; (3) the debugging surface target is DIFFABLE not readable — agents grep structure; first-divergence paths and per-program-path subtree hashes beat human-prose logs; (4) counterfactual replay (edit the journal, re-run: the mock IS the recorded answer) falls out of journal-as-data and is priced as a headline demo; (5) caveats priced up front: journal growth/GC tombstones, PII capture, prim contract versioning. v1 chapters: grants, journal, replay, call-sites, acceptance.|) *)
+ (status partial)
+ (* agent note (|2026-10-04 ROOT STATUS FLIP: 'planned' was stale the day
+      the first chapter made - every inline below is implemented and
+      refereed (borge report 2026-10-04: 111 implemented / 3 in-progress
+      federation F3 cross-repo / 1 deprecated-free). Root stays partial
+      PP-root-style WHILE OPEN WORK REMAINS: F3 (federation.borg,
+      blocked on PP acted_by) and the product lane the 2026-10-04 goal
+      seal opens below. Not planned: nothing on this page is authored
+      but unmade.)|) *) Design discussion before authoring settled: (1) seam-of-structure vs seam-of-text is the honest frame — PP's /api/eval parses hostile strings, tuna's eval path has no parser; (2) "everything else becomes a side effect" inverts into "the journal is the recorded environment = replay sandbox, replay needs nothing live"; (3) the debugging surface target is DIFFABLE not readable — agents grep structure; first-divergence paths and per-program-path subtree hashes beat human-prose logs; (4) counterfactual replay (edit the journal, re-run: the mock IS the recorded answer) falls out of journal-as-data and is priced as a headline demo; (5) caveats priced up front: journal growth/GC tombstones, PII capture, prim contract versioning. v1 chapters: grants, journal, replay, call-sites, acceptance.|) *)
  (convention ocaml-dune)
  (no-inline)
  (untracked "SPEC.md" "v0 handoff spec (pulled from pricklypear note spec_tuna); superseded by chapters as code lands")
@@ -198,6 +205,28 @@
       Sequencing stands: stdlib v1 -> forensics -> F3 bridge;
       product candidates (ledger first) ride the stdlib mole
       scenario acceptance. |) *)
+ (* agent note (|2026-10-04 OPERATOR GOAL SEAL (relayed live by roerick,
+      this date; pinned so the next loop and the next ten conversation
+      partners do not relitigate): TUNA'S ENDGAME IS TO BECOME
+      PRICKLYPEAR WITH PURE TREE CALC - re-grow the PP product layer
+      (the surfaces members actually do work in: boards, workstreams,
+      cards) ON tuna, where the app logic runs as sabra programs over
+      journaled, grant-gated prims and the host shrinks to the rim
+      (auth, routes, prim implementations). The seam thesis is made and
+      refereed; what is missing is product: everything a member touches
+      today is host OCaml (the /todo page is OCaml over JSON byte
+      records) while the sabra board lives in a probe namespace nobody
+      browses. THIS SEAL UPDATES ONE CLAUSE: dialect 12.5 called a UI
+      swap 'an owner product call outside the research frame' - the
+      owner now MAKES that call, as record: the product lane opens
+      with a BOARD chapter (the /todo page swap riding dialect v0.3
+      vocabulary), then workstreams after the board measures. Standing
+      law carries unchanged: vocabulary-first gate (no in-calculus
+      product logic before its vocabulary and acceptance exist - else
+      dogfood false-negatives the language, borg/stdlib.borg), the
+      operator vocabulary seal ('tuna is the Haskell to Nopales'
+      OCaml'), and the 2026-10-02 economics seal (parked; receipts only
+      when a stranger asks).|) *)
  (inline
   "borg/accounts.borg"
  )
