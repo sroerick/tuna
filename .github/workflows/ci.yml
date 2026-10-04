@@ -55,7 +55,7 @@ jobs:
       # (hence libffi-dev above).
       - name: opam deps
         run: |
-          pkgs="dune alcotest alcotest-lwt base64 digestif dream lwt pgx pgx_lwt yojson"
+          pkgs="dune alcotest base64 bigstringaf cstruct digestif eio eio_main gluten-eio httpun httpun-eio pgx yojson"
           for attempt in 1 2 3; do
             if opam install -y --no-depexts $pkgs; then exit 0; fi
             echo "opam install attempt $attempt failed; retrying in 20s"
