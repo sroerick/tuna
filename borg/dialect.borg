@@ -76,7 +76,8 @@
       :when 1727000000}) - pure vocabulary, runs at 64 steps with one
       journaled tree/put.  F13/F14 unchanged (no form needed IR; the
       board-scale pagination gap from v0.1 remains the named F14
-      follow-up).
+      follow-up). [F14 dispositioned 2026-10-04 by borg/board.borg:
+      the windowed tree/list is the follow-up, landed + pinned.]
 
       DISPOSITIONED 2026-10-04 (full evidence: FINDINGS.md non-F
       note).  The three standing v1 defect notes from the probe were
@@ -316,8 +317,13 @@
       the OCaml board and the sabra board coexist without artifact
       noise in each other's pages - the page code is untouched by
       this chapter; a UI swap is an owner product call outside the
-      research frame). Effects per grants law 7: paths arrive as
-      granted arguments, never resolved. The program tree/lists its
+      research frame). [SEALED + EXECUTED 2026-10-04: tuna.borg's
+      OPERATOR GOAL SEAL made that call and borg/board.borg is
+      the swap - the host page's todo/ namespace is now
+      format-compatible with this subsection's records (L1 =
+      12.4), so the OCaml/sabra coexistence above describes the
+      PRE-SWAP era. Effects per grants law 7: paths arrive as
+      granted arguments, never resolved] The program tree/lists its
       prefix; tree/gets each item (a record tree per the records
       subsection) and decodes fields; answers board queries (open
       and done counts via MATH PRIMS - aggregates ride the prim per
@@ -489,6 +495,12 @@
       the same pass must price.  This is the correction of the
       todo-probe's verdict: the language could carry the ITEM LOGIC
       (12.5 green), it could not carry the WHOLE BOARD at unbounded
-      size.  A vocabulary pass, not a syntax pass.|))))
+      size.  A vocabulary pass, not a syntax pass.
+      [DISPOSITION 2026-10-04, borg/board.borg: the follow-up LANDED
+      as the board chapter's tree/list WINDOW (cursor + limit,
+      additive, byte-identical default) - 13.2 walks 300 items
+      exact-cover in 14 windows and pins the zero-window caps
+      error on the very namespace the windows serve, superlinear
+      step costs back under fuel 1e7/size 1e5 per window.]|))))
  )
 )

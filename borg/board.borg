@@ -24,7 +24,7 @@
       kinds, no-silent-drop, replay identity all still pin
       every board interaction; any logic that must crawl back
       into the host to ship is a FINDING, never a patch.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section board
   (doc "Scope: ONE page end to end - the record format, the
@@ -32,9 +32,9 @@
        cites, the one-time legacy migration, the page rim
        covenant, and the acceptance instrument. F15/F16 are
        pre-registered below so the chapter cannot half-swap.")
-  (status planned)
+  (status implemented)
   (subsection laws
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       L1 FORMAT. Board item values are the dialect 12.4 keyed
@@ -73,19 +73,25 @@
          swap that removes its code).
       L4 GRANTS. The page mints a per-request grant row per
          the serve_program precedent (routes.borg) but
-         NARROW: prim set exactly { tree/get, tree/put,
-         tree/cas, tree/list, tree/del, math/add },
-         path_prefix "todo/", caller the signed-in member,
-         lifetime the request. Denials surface per the 0014
-         law: a forged form path fails at the prim boundary,
-         denies nothing silently, shows denial_count >= 1 on
-         the run row and an error on the page - the
-         capability demo IS the user-facing behavior, not a
-         console log.
+         NARROW: the prim set never exceeds { tree/get,
+         tree/put, tree/cas, tree/list, tree/del, math/add },
+         and each request mints EXACTLY the handler's
+         program calls (view: list + math/add; add: put;
+         flip: list + get + cas; del: del), path_prefix
+         "todo/" for the tree prims, caller the signed-in
+         member, lifetime the request - REVOKED when the
+         run finalizes (tighter than serve_program, which
+         mints prim "*" and never revokes). Denials surface
+         per the 0014 law: a forged form path fails at the
+         prim boundary, denies nothing silently, shows
+         denial_count >= 1 on the run row and an error on
+         the page - the capability demo IS the user-facing
+         behavior, not a console log.
       L5 WRITES. add = one run, one journaled tree/put, value
          an L1 record, via the todo-add row (below). flip =
-         tree/get then tree/cas: LOST-UPDATE-SAFE - a raced
-         flip ends as a journaled error run, never a silent
+         tree/list (one-window version fetch) + tree/get
+         (value) + tree/cas: LOST-UPDATE-SAFE - a raced flip
+         ends as a journaled error run, never a silent
          overwrite (the host page's read-then-write-put was
          racy; the swap is the fix, not the regression). del =
          the tree/del prim so the ops chain finally records
@@ -98,8 +104,12 @@
       L6 READS. tree/list grows a WINDOW: additive cursor +
          limit args, byte-identical behavior when absent; op
          kind stays "list" and the args journal with the
-         window. The board view program walks windows in path
-         order and answers (entry, record)-shaped rows plus a
+         window (cursor = EXCLUSIVE lower bound, "" = the
+         range head; limit = decimal string, the cas
+         expected-version convention, >= 1; window size 24
+         lives in the program source). The board view program
+         walks windows in path order and answers the window's
+         entries verbatim (path, record, version) plus a
          per-WINDOW summary record (L1). Page-triggered runs
          ride measured running room - fuel 1e7 / size_cap
          1e5, the F14 bridge budget - and windows keep every
@@ -121,7 +131,7 @@
          card can READ the effect the way the
          differentiator pitch says they can. |))))
   (subsection vocabulary
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       A VOCABULARY pass, not a syntax pass - the citation F14
@@ -149,7 +159,7 @@
       NO new codec (Tuna.Cstr is total). Anything beyond these
       two rows discovered mid-port is a FINDING, not a patch. |))))
   (subsection programs
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Four sabra programs at scripts/dialect/, one per member
@@ -164,9 +174,24 @@
       twins REPL-pinned, replay verified) over a FRESH
       namespace per run so probes never collide with the live
       todo/ board. Acceptance instrument:
-      scripts/verify-13-board.sh. |))))
+      scripts/verify-13-board.sh.
+      LANDED 2026-10-04 landing notes: the form of board-flip
+      is lambda-free on purpose (each prim answer consumed
+      exactly once - let-aliasing was probed and does NOT
+      re-fire prims, but the explicit form is the one pinned).
+      The page tier resolves programs BY NAME: the sources are
+      embedded at build (server/lib board_embed target,
+      generated from these same .sabra files - they stay the
+      artifacts) and seeded as ordinary def rounds under a
+      dedicated non-admin identity (server/lib/board_seed.ml;
+      TUNA_BOARD_TOKEN), re-defing only when a source CHANGED -
+      so a re-published program flips the live page on the
+      next request with no page-code delta. Support tier:
+      scripts/dialect/pytwin.py (the python twin of the cstr +
+      law-5 int + record codecs, parity-checked by 13.0) and
+      scripts/dialect/board_migrate.py (the L7 tool). |))))
   (subsection acceptance
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Instrument: scripts/verify-13-board.sh over a live dev
@@ -212,9 +237,59 @@
          dialect.borg's 12.5 sealed clause and F14 follow-up
          flip in the same commit as this chapter's make; borge
          lint/report clean; differential and the smoke
-         batteries green. |))))
+         batteries green.
+
+      OUTCOMES 2026-10-04 (all green, driven by
+         scripts/verify-13-board.sh over the live dev instance;
+         the full board belongs to
+         scripts/dialect/board_probe.py over fresh namespaces): 13.1
+         hostile titles (slashes, backslash, newline, UTF-8)
+         round-trip through exact view twins; the reader's string
+         literals carry NO escapes (REPL-literal channel is raw;
+         quote-bearing titles ride the rim's Cstr.encode and the
+         pytwin codec twin, 25 parity rows vs the REPL). 13.2 a
+         300-item walk exact-covers in 14 windows under fuel
+         1e7/size 1e5 (14,988 steps for a 3-item view window,
+         14988/6 math-adds pinned); the zero-window call pins the
+         F14 caps error; sibling namespaces excluded by the
+         trailing-slash collation law. 13.3 flip journals exactly
+         [tree/list, tree/get, tree/cas]; stale-cas conflicts as a
+         journaled error answer with the board intact; del runs
+         the canonical delete; the page flow (HTTP forms, member
+         session) adds, flips, deletes - every mutation a
+         journaled run attributed to the member, zero denials.
+         13.4 the grep is clean and the rim whitelist (mint,
+         revoke, resolve, execute) is what remains.
+         13.5 (widened at make from the authored form-member
+         ids cannot escape the rim-minted namespace, and
+         tree/del carries the admin exemption): a NON-ADMIN
+         member's scoped grant, submitted through the run
+         surface, is denied AT THE PRIM BOUNDARY for an
+         out-of-prefix path - denial_count 1, sentinel intact,
+         journaled answer. 13.6 legacy fixtures (incl. a
+         quote-bearing title and an unparseable tail) migrate
+         field-for-field; the second pass writes zero ops.
+         13.7 manifest 77 == seeded rows; stdlib_todo-add
+         exercised inert (the confinement: see FINDINGS - a
+         gate-FIRING row cannot ride the differential harness);
+         differential 93/93 agree.
+
+      MAKE-BORN PLATFORM FINDS, recorded in FINDINGS.md as
+         non-F, both fixed inline with pins: (1) execute_run's
+         upfront grant check answered Prefix_denied for
+         path-scoped grants at submission - EVERY grant_prefix
+         route record 500'd before its run began (and the
+         member-garden run model was un-submittable); the fix
+         vouches existence/liveness/ownership at submission
+         and leaves paths to the live boundary check, exactly
+         grants law 7. m11 tests pin it
+         (test_program_route_scoped). (2) The differential
+         harness cannot host gate-FIRING corpus rows (the pure
+         twins reduce the carrier as data while the tuna lane
+         substitutes a host answer) - prim-carrying defs now
+         exercise via SPLICED-BUT-UNAPPLIED terms. |))))
   (subsection pre-registered-failures
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       F15 READ-WINDOW SEAM BREACH. TRIGGER: (a) any
@@ -238,6 +313,16 @@
          acceptance stays red; fix lands in-calculus or the
          swap reverts; record in FINDINGS.md. The chapter's
          own thesis is the whitelist: the host only ever
-         auths, parses, mints, executes, renders. |))))
+         auths, parses, mints, executes, renders.
+         OUTCOME 2026-10-04: NOT TRIGGERED. The grep is part
+         of the acceptance itself (13.4); rendering decodes
+         cstr strings and law-5 ints to DRAW (the summaries
+         and field shapes were decided in-calculus); every
+         observable holds - ops attribution (mut runs name
+         the member), canonical delete (del op kind),
+         id mint shape unchanged, no-silent-drop (the
+         migration's raw tail), replay identity (each
+         mutation run verify green inside board_probe and
+         the page flow). |))))
  )
 )

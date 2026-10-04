@@ -34,7 +34,12 @@ def token():
     if os.environ.get("TUNA_SMOKE_TOKEN"):
         return os.environ["TUNA_SMOKE_TOKEN"]
     with open("/tmp/tuna-dev/bootstrap.token") as f:
-        return f.read().strip()
+        tok = f.read().strip()
+    # the dev harness stores the line prefixed (TUNA_BOOTSTRAP_TOKEN=...);
+    # a bare read only worked in the pre-pp-slice era.  Strip once.
+    if tok.startswith("TUNA_BOOTSTRAP_TOKEN="):
+        tok = tok.split("=", 1)[1]
+    return tok
 
 
 TOKEN = token()
