@@ -396,6 +396,11 @@ let safe_respond (reqd : Httpun.Reqd.t) (r : resp) : unit =
   let resp = Httpun.Response.create ~headers status in
   try Httpun.Reqd.respond_with_string reqd resp r.body
   with exn when is_closed_writer_exn exn -> ()
+  | exn ->
+    (* error-path races ("invalid state, currently handling error") used to
+       escape into a top-switch fiber and kill the process; log, stay
+       contained *)
+    Printf.eprintf "[tuna] respond failed: %s\n%!" (Printexc.to_string exn)
 
 (* [serve] runs the accept loop; blocks the calling fiber forever. *)
 let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
@@ -413,51 +418,99 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
       listen_addr
   in
   Printf.eprintf "[tuna] serving htmx (httpun-eio) on %s:%d\n%!" interface port;
-  let error_handler (_sa : Eio.Net.Sockaddr.stream)
-      : Httpun.Server_connection.error_handler =
-    fun ?request:_ _e _respond -> ()
-  in
-  let request_handler (sa : Eio.Net.Sockaddr.stream)
-      (g : Httpun.Reqd.t Gluten.reqd) : unit =
-    ignore sa;
-    (* The handler MUST NOT block the connection's read fiber: body reads
-       are serviced by that fiber, so a synchronous handler that awaits
-       the body deadlocks.  Fork a child fiber and return immediately
-       (PP's http.ml launch pattern). *)
-    Eio.Fiber.fork ~sw (fun () ->
-        let reqd = g.Gluten.reqd in
-        let request = Httpun.Reqd.request reqd in
-        let body = try read_body reqd with Body_too_large -> "" in
-        let headers =
-          Httpun.Headers.to_list request.Httpun.Request.headers
-        in
-        let req =
-          { meth = Httpun.Method.to_string request.Httpun.Request.meth
-          ; target = request.Httpun.Request.target
-          ; headers
-          ; body
-          ; captures = [] }
-        in
-        let resp =
-          try handler req
-          with exn ->
-            Printf.eprintf "[tuna] handler error: %s\n%!"
-              (Printexc.to_string exn);
-            { status = 500
-            ; headers = [ ("Content-Type", "application/json") ]
-            ; body = "{\"error\":\"internal server error\"}" }
-        in
-        safe_respond reqd resp)
-  in
-  let conn_handler =
-    Httpun_eio.Server.create_connection_handler
-      ~request_handler ~error_handler ~sw
-  in
-  let on_error ex =
-    Printf.eprintf "[tuna] connection handler failed: %s\n%!"
-      (Printexc.to_string ex)
-  in
-  while true do
-    Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
-        try conn_handler client_addr client_sock with exn -> on_error exn)
-  done
+    let error_handler (_sa : Eio.Net.Sockaddr.stream)
+        : Httpun.Server_connection.error_handler =
+      fun ?request error respond ->
+      (* httpun's report_error waits for this handler to start the error
+         response.  A no-op left the Reqd dangling in the error state, so the
+         next report_exn hit the "report_exn: NYI" failwith and an in-flight
+         respond_with_string raised "invalid state, currently handling
+         error" in a fiber that cancelled the whole process (10-04 outage).
+         Always answer, and never raise from the error path itself. *)
+      (try
+         let where =
+           match request with
+           | Some r ->
+             Printf.sprintf "%s %s"
+               (Httpun.Method.to_string r.Httpun.Request.meth)
+               r.Httpun.Request.target
+           | None -> "connection"
+         in
+         let what =
+           match error with
+           | `Exn exn -> Printexc.to_string exn
+           | `Bad_request -> "bad request"
+           | `Bad_gateway -> "bad gateway"
+           | `Internal_server_error -> "internal server error"
+         in
+         Printf.eprintf "[tuna] request error (%s): %s\n%!" where what;
+         (* httpun picks the status: `Exn -> 500, standard errors keep their
+            own code (e.g. 400). *)
+         let body = respond (Httpun.Headers.of_list []) in
+         Httpun.Body.Writer.write_string body "request failed";
+         Httpun.Body.Writer.close body
+       with _ -> ())
+    in
+    let request_handler conn_sw (sa : Eio.Net.Sockaddr.stream)
+        (g : Httpun.Reqd.t Gluten.reqd) : unit =
+      ignore sa;
+      (* The handler MUST NOT block the connection's read fiber: body reads
+         are serviced by that fiber, so a synchronous handler that awaits
+         the body deadlocks.  Fork a child fiber on the CONNECTION switch
+         and return immediately (PP's http.ml launch pattern). *)
+      Eio.Fiber.fork ~sw:conn_sw (fun () ->
+          let reqd = g.Gluten.reqd in
+          let request = Httpun.Reqd.request reqd in
+          let body = try read_body reqd with Body_too_large -> "" in
+          let headers =
+            Httpun.Headers.to_list request.Httpun.Request.headers
+          in
+          let req =
+            { meth = Httpun.Method.to_string request.Httpun.Request.meth
+            ; target = request.Httpun.Request.target
+            ; headers
+            ; body
+            ; captures = [] }
+          in
+          let resp =
+            try handler req
+            with exn ->
+              Printf.eprintf "[tuna] handler error: %s\n%!"
+                (Printexc.to_string exn);
+              { status = 500
+              ; headers = [ ("Content-Type", "application/json") ]
+              ; body = "{\"error\":\"internal server error\"}" }
+          in
+          safe_respond reqd resp)
+    in
+    let on_error ex =
+      Printf.eprintf "[tuna] connection handler failed: %s\n%!"
+        (Printexc.to_string ex)
+    in
+    (* One Eio.Switch per connection: anything fatal inside httpun, gluten,
+       or a request fiber cancels that connection's switch only, so the
+       accept loop and the process survive (10-04 outage containment). *)
+    let accept_failures = ref 0 in
+    while true do
+      try
+        Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
+            try
+              Eio.Switch.run (fun conn_sw ->
+                  let conn_handler =
+                    Httpun_eio.Server.create_connection_handler
+                      ~request_handler:(request_handler conn_sw)
+                      ~error_handler ~sw:conn_sw
+                  in
+                  conn_handler client_addr client_sock)
+            with exn -> on_error exn);
+        accept_failures := 0
+      with
+      | (Eio.Cancel.Cancelled _ as ex) -> raise ex
+      | exn ->
+        (* accept itself failed (e.g. transient EMFILE during a scanner
+           burst): ride out bursts, but give up loudly instead of spinning
+           forever if the listener is truly broken. *)
+        incr accept_failures;
+        if !accept_failures >= 16 then raise exn;
+        on_error exn
+    done
