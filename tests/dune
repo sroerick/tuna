@@ -214,3 +214,16 @@
  (deps math_prim_tests.exe (source_tree ../stdlib))
  (action
   (run %{exe:math_prim_tests.exe})))
+
+; httpun error-path regression (10-04 outage class, fix 3430f9b):
+; real in-process Tuna_server.Web.serve + raw socket clients; no PG.
+(executable
+ (name web_errorpath_tests)
+ (modules web_errorpath_tests)
+ (libraries tuna_server alcotest eio eio.unix eio_main unix))
+
+(rule
+ (alias runtest)
+ (deps web_errorpath_tests.exe)
+ (action
+  (run %{exe:web_errorpath_tests.exe})))
