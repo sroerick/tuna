@@ -458,30 +458,54 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
          are serviced by that fiber, so a synchronous handler that awaits
          the body deadlocks.  Fork a child fiber on the CONNECTION switch
          and return immediately (PP's http.ml launch pattern). *)
-      Eio.Fiber.fork ~sw:conn_sw (fun () ->
-          let reqd = g.Gluten.reqd in
-          let request = Httpun.Reqd.request reqd in
-          let body = try read_body reqd with Body_too_large -> "" in
-          let headers =
-            Httpun.Headers.to_list request.Httpun.Request.headers
-          in
-          let req =
-            { meth = Httpun.Method.to_string request.Httpun.Request.meth
-            ; target = request.Httpun.Request.target
-            ; headers
-            ; body
-            ; captures = [] }
-          in
-          let resp =
-            try handler req
-            with exn ->
-              Printf.eprintf "[tuna] handler error: %s\n%!"
-                (Printexc.to_string exn);
-              { status = 500
-              ; headers = [ ("Content-Type", "application/json") ]
-              ; body = "{\"error\":\"internal server error\"}" }
-          in
-          safe_respond reqd resp)
+        Eio.Fiber.fork ~sw:conn_sw (fun () ->
+            let reqd = g.Gluten.reqd in
+            let request = Httpun.Reqd.request reqd in
+            let headers =
+              Httpun.Headers.to_list request.Httpun.Request.headers
+            in
+            (* Body cap (S1): a declared Content-Length past
+               [max_body_bytes], or bytes actually read past it, answers
+               413 and closes instead of silently handing the handler an
+               empty body.  RFC 9110 allows closing on 413; the
+               Connection: close header keeps httpun from waiting on the
+               unread remainder. *)
+            let declared_too_large =
+              match header_ci headers "content-length" with
+              | Some cl -> (
+                  match int_of_string_opt (String.trim cl) with
+                  | Some n -> n > max_body_bytes
+                  | None -> false)
+              | None -> false
+            in
+            let respond_413 () =
+              safe_respond reqd
+                { status = 413
+                ; headers = [ ("Connection", "close") ]
+                ; body = "payload too large" }
+            in
+            if declared_too_large then respond_413 ()
+            else
+              match read_body reqd with
+              | body ->
+                let req =
+                  { meth = Httpun.Method.to_string request.Httpun.Request.meth
+                  ; target = request.Httpun.Request.target
+                  ; headers
+                  ; body
+                  ; captures = [] }
+                in
+                let resp =
+                  try handler req
+                  with exn ->
+                    Printf.eprintf "[tuna] handler error: %s\n%!"
+                      (Printexc.to_string exn);
+                    { status = 500
+                    ; headers = [ ("Content-Type", "application/json") ]
+                    ; body = "{\"error\":\"internal server error\"}" }
+                in
+                safe_respond reqd resp
+              | exception Body_too_large -> respond_413 ())
     in
     let on_error ex =
       Printf.eprintf "[tuna] connection handler failed: %s\n%!"

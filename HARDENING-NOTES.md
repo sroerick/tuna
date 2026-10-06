@@ -20,8 +20,13 @@ minute 40 no matter what.
   accept_fork socket-close semantics, Flow.copy_string, Time.sleep.
 
 ## Slices (small loops; one per session)
-- S1 request-body size cap -> 413 during body reads (plain constant or tiny
-  Limits module in web.ml; no run.ml refactor, no grand redesign).
+  - S1 DONE 10-06 on this branch: declared Content-Length past max_body_bytes
+    OR bytes actually read past it -> 413 + Connection: close (web.ml request
+    handler; read_body's Body_too_large no longer swallowed into an empty
+    body). Cap = the existing 1 MiB max_body_bytes (+TUNA_MAX_BODY_BYTES).
+    Suite 7/7: new cases = declared CL past cap + chunked stream past cap
+    (CL framing never delivers more than it declares; chunked is the read
+    path).
 - S2 body-read timeout (slowloris) -> 408 or close.
 - S3 connection cap -> 503 refusal when saturated.
 - S4 per-connection lifetime cap.

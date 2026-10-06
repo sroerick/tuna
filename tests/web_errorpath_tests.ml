@@ -226,6 +226,14 @@ let get_request (target : string) : string =
   "GET " ^ target
   ^ " HTTP/1.1\r\nHost: web-errorpath-test\r\nConnection: close\r\n\r\n"
 
+(* oversized bodies answer 413 and the server closes mid-send; once
+   that close lands, further client writes and reads are expected
+   noise, not failures *)
+let send_lossy (s : Unix.file_descr) (data : string) : unit =
+  try send_all s data with Unix.Unix_error _ -> ()
+
+let read_tolerant (s : Unix.file_descr) : string =
+  try read_response s with Unix.Unix_error _ -> ""
 (* -- assertions ------------------------------------------------------- *)
 
 let first_line (resp : string) : string =
@@ -350,6 +358,63 @@ let test_rst_burst () =
           check_status_line "accept loop healthy after 5x RST"
             "HTTP/1.1 200 OK" resp))
 
+(* 6. body cap, declared: a Content-Length past the cap answers 413
+   and closes without reading the body (only a small prefix is ever
+   sent).  Pre-S1 the overflow was swallowed into an empty body and a
+   declared-but-unsent body just hung until the client gave up. *)
+let test_oversize_body_declared () =
+  with_server handler (fun port ->
+      drive port (fun s ->
+          send_lossy s
+            ( "POST /big HTTP/1.1\r\nHost: t\r\nContent-Type: text/plain\r\n"
+            ^ "Content-Length: 1073741824\r\n\r\n"
+            ^ String.make 65536 'x' );
+          let resp = read_tolerant s in
+          trace "oversize-declared" resp;
+          check_contains "oversize declared body answered 413"
+            "HTTP/1.1 413" resp);
+      drive port (fun s ->
+          send_all s (get_request "/");
+          let resp = read_response s in
+          trace "after-oversize-declared" resp;
+          check_status_line "valid request served after 413"
+            "HTTP/1.1 200 OK" resp))
+
+(* 7. body cap, actually-read: a CHUNKED body with no declared length,
+   streamed past the cap.  Content-Length framing never delivers more
+   than it declares, so chunked is the real read-path vector;
+   read_body answers 413 once the read crosses it.  The server's close
+   cuts the sender off mid-body, so client-side write errors are
+   expected noise, not failures. *)
+let test_oversize_body_read () =
+  with_server handler (fun port ->
+      drive port (fun s ->
+          let chunk = String.make 65536 'y' in
+          let head =
+            "POST /big HTTP/1.1\r\nHost: t\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n"
+          in
+          send_lossy s head;
+          let rec blast left =
+            if left <= 0 then ()
+            else
+              try
+                send_all s ("10000\r\n" ^ chunk ^ "\r\n");
+                blast (left - String.length chunk)
+              with Unix.Unix_error _ -> ()
+          in
+          blast (1024 * 1024 + 65536);
+          (try half_close s with Unix.Unix_error _ -> ());
+          let resp = read_tolerant s in
+          trace "oversize-read" resp;
+          check_contains "oversize read body answered 413"
+            "HTTP/1.1 413" resp);
+      drive port (fun s ->
+          send_all s (get_request "/");
+          let resp = read_response s in
+          trace "after-oversize-read" resp;
+          check_status_line "valid request served after 413"
+            "HTTP/1.1 200 OK" resp))
+
 let () =
   let tc name f = Alcotest.test_case name `Quick f in
   run "web-errorpath"
@@ -360,7 +425,11 @@ let () =
             test_lying_content_length
         ; tc "truncated pipelined POST -> contained, next request served"
             test_truncated_pipelined_post
-        ; tc "raising handler -> 500 contained to that request, server serves on"
-            test_raising_handler
-        ; tc "5x consecutive RST closes -> accept loop still healthy"
-            test_rst_burst ] ) ]
+          ; tc "raising handler -> 500 contained to that request, server serves on"
+              test_raising_handler
+          ; tc "5x consecutive RST closes -> accept loop still healthy"
+              test_rst_burst
+          ; tc "oversize body (declared) -> 413, server serves on"
+              test_oversize_body_declared
+          ; tc "oversize body (actually read) -> 413, server serves on"
+              test_oversize_body_read ] ) ]
