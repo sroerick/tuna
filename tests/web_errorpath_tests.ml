@@ -89,7 +89,8 @@ let wait_for_listener (port : int) : unit =
    case end never joins against httpun's error-state machinery; a
    serve that dies early (bind race) is logged and the case fails
    loudly via wait_for_listener *)
-let with_server (handler : Tuna_server.Web.handler) (f : int -> unit) : unit =
+let with_server ?(body_timeout = Tuna_server.Web.default_body_timeout)
+    (handler : Tuna_server.Web.handler) (f : int -> unit) : unit =
   let env =
     match !env_ref with Some env -> env | None -> failwith "eio env missing"
   in
@@ -99,7 +100,8 @@ let with_server (handler : Tuna_server.Web.handler) (f : int -> unit) : unit =
   let port = free_port () in
   Eio.Fiber.fork ~sw (fun () ->
       try
-        Tuna_server.Web.serve ~env ~sw ~interface:"127.0.0.1" ~port handler
+        Tuna_server.Web.serve ~env ~sw ~interface:"127.0.0.1" ~port
+          ~body_timeout handler
       with exn ->
         Printf.eprintf "[t] serve exited: %s\n%!" (Printexc.to_string exn));
   wait_for_listener port;
@@ -415,6 +417,45 @@ let test_oversize_body_read () =
           check_status_line "valid request served after 413"
             "HTTP/1.1 200 OK" resp))
 
+(* 8. body-read timeout (S2): a body that stalls mid-read gets a 408 +
+   Connection: close within the deadline; pre-S2 the connection just hung
+   until the client gave up (the slowloris shape). *)
+let test_body_read_timeout () =
+  with_server ~body_timeout:1.0 handler (fun port ->
+      drive port (fun s ->
+          send_all s
+            ( "POST /stall HTTP/1.1\r\nHost: t\r\nContent-Length: 64\r\n\r\n"
+            ^ "only-a-prefix" );
+          let resp = read_response ~timeout:4.0 s in
+          trace "body-timeout" resp;
+          check_contains "stalled body answered 408 within deadline"
+            "HTTP/1.1 408" resp;
+          check_contains "408 closes the connection" "Connection: close" resp);
+      drive port (fun s ->
+          send_all s (get_request "/");
+          let resp = read_response s in
+          trace "after-body-timeout" resp;
+          check_status_line "valid request served after 408"
+            "HTTP/1.1 200 OK" resp))
+
+(* 9. slow-but-moving body: chunks arriving inside the deadline still
+   succeed - the deadline only fires on genuine stalls. *)
+let test_slow_body_within_deadline () =
+  with_server ~body_timeout:3.0 handler (fun port ->
+      drive port (fun s ->
+          send_all s
+            ( "POST /slow HTTP/1.1\r\nHost: t\r\nContent-Length: 16\r\n\r\n"
+            ^ "half-of-the-" );
+            (* already on a systhread inside drive: a plain blocking sleep
+               is the right tool here *)
+            Unix.sleepf 0.5;
+          send_all s "body";
+          let resp = read_response ~timeout:4.0 s in
+          trace "slow-body" resp;
+          check_status_line "slow body within deadline served 200"
+            "HTTP/1.1 200 OK" resp;
+          check_contains "slow body content delivered" "alive:POST /slow" resp))
+
 let () =
   let tc name f = Alcotest.test_case name `Quick f in
   run "web-errorpath"
@@ -432,4 +473,8 @@ let () =
           ; tc "oversize body (declared) -> 413, server serves on"
               test_oversize_body_declared
           ; tc "oversize body (actually read) -> 413, server serves on"
-              test_oversize_body_read ] ) ]
+              test_oversize_body_read
+          ; tc "body stall mid-read -> 408 within deadline, server serves on"
+              test_body_read_timeout
+          ; tc "slow body within deadline -> still served"
+              test_slow_body_within_deadline ] ) ]

@@ -8,8 +8,8 @@
    http_kit / http_core family (same owner, ISC); the Dream surface this
    replaces was already enumerated and small.
 
-   The htmx pages render byte-equivalently: this is plumbing, not a
-   redesign.  Body reads are capped (the PP max_body_bytes stance). *)
+    redesign.  Body reads are capped and deadline-bounded (the PP
+    max_body_bytes stance + the S2 slowloris guard). *)
 
 (* -- leaf text helpers (ported from PP http_kit.ml) ------------------ *)
 
@@ -361,6 +361,12 @@ let max_body_bytes =
   | Some s -> (
       match int_of_string_opt s with Some n when n > 0 -> n | _ -> 1024 * 1024)
   | None -> 1024 * 1024
+(* S2 (slowloris): a request body that stalls mid-read must not hold the
+   connection open forever.  The whole body has this many seconds from the
+   handler's first read; slow-but-moving clients pass, stalled ones get a
+   408 + close.  Per-deployment override is [serve]'s optional
+   [~body_timeout] (S5 wires the knob into run.ml). *)
+let default_body_timeout = 30.0
 
 let read_body ?(max_bytes = max_body_bytes) (reqd : Httpun.Reqd.t) : string =
   let body = Httpun.Reqd.request_body reqd in
@@ -404,8 +410,10 @@ let safe_respond (reqd : Httpun.Reqd.t) (r : resp) : unit =
 
 (* [serve] runs the accept loop; blocks the calling fiber forever. *)
 let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
-    ~(interface : string) ~(port : int) (handler : handler) : unit =
+    ~(interface : string) ~(port : int) ?(body_timeout = default_body_timeout)
+    (handler : handler) : unit =
   let net = Eio.Stdenv.net env in
+  let clock = Eio.Stdenv.clock env in
   let listen_addr =
     if interface = "" || interface = "0.0.0.0" then
       `Tcp (Eio.Net.Ipaddr.V4.any, port)
@@ -478,15 +486,29 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
                   | None -> false)
               | None -> false
             in
-            let respond_413 () =
-              safe_respond reqd
-                { status = 413
-                ; headers = [ ("Connection", "close") ]
-                ; body = "payload too large" }
-            in
-            if declared_too_large then respond_413 ()
-            else
-              match read_body reqd with
+              let respond_413 () =
+                safe_respond reqd
+                  { status = 413
+                  ; headers = [ ("Connection", "close") ]
+                  ; body = "payload too large" }
+              in
+              (* S2: a stalled body gets the same containment as the 413
+                 close - answer 408 + Connection: close and stop waiting on
+                 the unread remainder.  with_timeout_exn races read_body
+                 against the deadline; on expiry the awaiting fiber is
+                 cancelled and the reader is dropped with the connection. *)
+              let respond_408 () =
+                safe_respond reqd
+                  { status = 408
+                  ; headers = [ ("Connection", "close") ]
+                  ; body = "request timeout" }
+              in
+              if declared_too_large then respond_413 ()
+              else
+                match
+                  Eio.Time.with_timeout_exn clock body_timeout (fun () ->
+                      read_body reqd)
+                with
               | body ->
                 let req =
                   { meth = Httpun.Method.to_string request.Httpun.Request.meth
@@ -505,7 +527,8 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
                     ; body = "{\"error\":\"internal server error\"}" }
                 in
                 safe_respond reqd resp
-              | exception Body_too_large -> respond_413 ())
+                | exception Body_too_large -> respond_413 ()
+                | exception Eio.Time.Timeout -> respond_408 ())
     in
     let on_error ex =
       Printf.eprintf "[tuna] connection handler failed: %s\n%!"

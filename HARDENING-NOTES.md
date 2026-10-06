@@ -16,8 +16,12 @@ minute 40 no matter what.
   (opam switch poohstack); clean-master `dune build` exit 0.
 - httpun supports 413/431 status codes natively; Eio 1.5 Pi interface
   understood; all call sites mapped.
-- API facts still to pin before S2/S4: Eio.Fiber.first signature,
-  accept_fork socket-close semantics, Flow.copy_string, Time.sleep.
+  - API facts pinned 10-06 (S2): Eio.Fiber.first : ?combine:('a -> 'a ->
+    'a) -> (unit -> 'a) -> (unit -> 'a) -> 'a (two thunks; first finisher
+    wins, its exception propagates); Eio.Time.with_timeout_exn : _ clock ->
+    float -> (unit -> 'a) -> 'a raises Eio.Time.Timeout (the clean
+    body-deadline race); clock = Eio.Stdenv.clock env. Still to pin for
+    S3/S4: accept_fork socket-close semantics, Flow.copy_string.
 
 ## Slices (small loops; one per session)
   - S1 DONE 10-06 on this branch: declared Content-Length past max_body_bytes
@@ -27,7 +31,15 @@ minute 40 no matter what.
     Suite 7/7: new cases = declared CL past cap + chunked stream past cap
     (CL framing never delivers more than it declares; chunked is the read
     path).
-- S2 body-read timeout (slowloris) -> 408 or close.
+  - S2 DONE 10-06 on this branch: whole-body read deadline, default 30s
+    (web.ml default_body_timeout; per-deployment override = serve's
+    optional ~body_timeout, the knob S5 wires into run.ml). Race =
+    Eio.Time.with_timeout_exn around read_body in the request handler; on
+    expiry the awaiting fiber is cancelled and the reader is dropped with
+    the connection. Stall answers 408 + Connection: close - same
+    containment shape as S1's 413 (tell the client why, stop waiting on
+    the unread remainder). Suite 9/9: new cases = partial body + stall ->
+    408 within deadline; slow-but-moving body inside deadline still 200.
 - S3 connection cap -> 503 refusal when saturated.
 - S4 per-connection lifetime cap.
 - S5 run.ml delegation of the knobs; tests mirror the errorpath harness,
@@ -37,5 +49,7 @@ minute 40 no matter what.
 1. Read this file + git log --oneline -3 on this branch. No re-recon.
 2. Implement one slice, dune build, run the web tests.
 3. COMMIT by minute 40 regardless of state; never leave the tree dirty.
-4. Do not push, do not merge to master, do not deploy (deploy chain follows
-   master only; merge+deploy = roerick).
+  4. Never merge to master, never deploy (deploy chain follows master
+     only; merge+deploy = roerick). PUSH the branch (roerick 10-06
+     standing rule, supersedes the old no-push line):
+     git push origin httpun-hardening && git push wyo httpun-hardening.
