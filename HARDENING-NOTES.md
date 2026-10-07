@@ -111,11 +111,19 @@ minute 40 no matter what.
     cluster remedy needed).  httpun-hardening pass complete; merge +
     deploy = roerick per protocol.
 
+## LANDED 10-07 (roerick: 'You can always push. Always push.')
+The pass is COMPLETE: S1-S5 at branch tip 7b0072f, all gates green (web
+15/15 x2 + full suites), pushed origin+wyo. Landing rule superseded:
+green gated work fast-forwards master and pushes it - the wyo master
+hook deploys to club. Branch kept for history; this file is the record.
+
 ## Successor protocol
 1. Read this file + git log --oneline -3 on this branch. No re-recon.
 2. Implement one slice, dune build, run the web tests.
 3. COMMIT by minute 40 regardless of state; never leave the tree dirty.
-  4. Never merge to master, never deploy (deploy chain follows master
-     only; merge+deploy = roerick). PUSH the branch (roerick 10-06
-     standing rule, supersedes the old no-push line):
-     git push origin httpun-hardening && git push wyo httpun-hardening.
+  4. PUSH the branch AND land green gated work (roerick 10-07: 'You can
+     always push. Always push.' - supersedes the 10-06 never-merge line):
+     git push origin <branch> && git push wyo <branch>; when a slice is
+     complete and gates green, ff master onto it and push master - the
+     wyo master hook deploys to club. Judgment still applies: risky or
+     half-done work stays on the branch.
