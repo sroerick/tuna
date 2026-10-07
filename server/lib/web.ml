@@ -367,16 +367,17 @@ let max_body_bytes =
 (* S2 (slowloris): a request body that stalls mid-read must not hold the
    connection open forever.  The whole body has this many seconds from the
    handler's first read; slow-but-moving clients pass, stalled ones get a
-   408 + close.  Per-deployment override is [serve]'s optional
-   [~body_timeout] (S5 wires the knob into run.ml). *)
+   408 + close.  Deployments override it with TUNA_BODY_TIMEOUT (S5);
+   [serve]'s optional [~body_timeout] stays the programmatic override. *)
 let default_body_timeout = 30.0
 
 (* S3 (connection flood): cap on live connections.  While [conn_max]
    connections are being served, each new connection is refused with
    503 + close through the same contained response path as the 413/408
    answers (httpun is request-driven, so the refusal rides the new
-   connection's first request).  Per-deployment override is [serve]'s
-   optional [~conn_max] (S5 wires the knob into run.ml). *)
+   connection's first request).  Deployments override it with
+   TUNA_CONN_MAX (S5); [serve]'s optional [~conn_max] stays the
+   programmatic override. *)
 let default_conn_max = 256
 
 (* S4 (aged connections): a connection's TOTAL lifetime is capped.  A
@@ -384,10 +385,30 @@ let default_conn_max = 256
    recycled - its connection switch is cancelled and the socket closed -
    whether it is idle or mid-request; keep-alive clients open a fresh
    connection for the next request.  This bounds how long any single
-   connection (and anything pinned to it) can live.  Per-deployment
-   override is [serve]'s optional [~conn_lifetime] (S5 wires the knob
-   into run.ml). *)
+   connection (and anything pinned to it) can live.  Deployments
+   override it with TUNA_CONN_LIFETIME (S5); [serve]'s optional
+   [~conn_lifetime] stays the programmatic override. *)
 let default_conn_lifetime = 300.0
+
+(* S5 (deployment knobs): the three hardening knobs are tunable per
+   deployment without code edits, on the same env pattern as
+   TUNA_MAX_BODY_BYTES above: TUNA_CONN_MAX, TUNA_BODY_TIMEOUT,
+   TUNA_CONN_LIFETIME.  Read per [serve] call (a module-init read would
+   freeze them for the whole process; tests set one var per case); an
+   unset, empty, or malformed value falls back to the compiled-in
+   default, never a boot error.  An explicit optional argument still
+   wins over the environment. *)
+let env_int_opt (name : string) : int option =
+  match Sys.getenv_opt name with
+    | Some s -> (
+        match int_of_string_opt s with Some n when n > 0 -> Some n | _ -> None)
+  | None -> None
+
+let env_float_opt (name : string) : float option =
+  match Sys.getenv_opt name with
+    | Some s -> (
+        match float_of_string_opt s with Some v when v > 0.0 -> Some v | _ -> None)
+  | None -> None
 
 let read_body ?(max_bytes = max_body_bytes) (reqd : Httpun.Reqd.t) : string =
   let body = Httpun.Reqd.request_body reqd in
@@ -432,8 +453,14 @@ let safe_respond (reqd : Httpun.Reqd.t) (r : resp) : unit =
 (* [serve] runs the accept loop; blocks the calling fiber forever. *)
 let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     ~(interface : string) ~(port : int)
-    ?(body_timeout = default_body_timeout) ?(conn_max = default_conn_max)
-    ?(conn_lifetime = default_conn_lifetime)
+    ?(body_timeout =
+        Option.value (env_float_opt "TUNA_BODY_TIMEOUT")
+          ~default:default_body_timeout)
+    ?(conn_max =
+        Option.value (env_int_opt "TUNA_CONN_MAX") ~default:default_conn_max)
+    ?(conn_lifetime =
+        Option.value (env_float_opt "TUNA_CONN_LIFETIME")
+          ~default:default_conn_lifetime)
     (handler : handler) : unit =
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in

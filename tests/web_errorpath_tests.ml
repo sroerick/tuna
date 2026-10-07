@@ -727,6 +727,76 @@ let test_conn_lifetime_not_eager () =
           Alcotest.(check bool) "connection stays open inside the cap" false
             (eof_within ~timeout:0.3 s)))
 
+(* -- S5: deployment knobs from the environment ------------------------ *)
+
+(* set one TUNA_* var for a case and clear it afterwards; an empty value
+   parses as absent in web.ml's env reader *)
+let with_env (name : string) (value : string) (f : unit -> unit) : unit =
+  Unix.putenv name value;
+  Fun.protect f ~finally:(fun () -> Unix.putenv name "")
+
+(* 14. an unsupplied optional argument falls back to TUNA_* env, then the
+   compiled-in default (S5).  A tiny TUNA_CONN_LIFETIME in the
+   deployment environment recycles a keep-alive connection early,
+   exactly like case 12's ~conn_lifetime, with no code edit. *)
+let test_env_conn_lifetime () =
+  with_env "TUNA_CONN_LIFETIME" "0.5" (fun () ->
+      with_server handler (fun port ->
+          drive port (fun s ->
+              send_all s keepalive_get;
+              let resp = read_response s in
+              trace "env-lifetime-first" resp;
+              check_status_line "keep-alive request served before the env cap"
+                "HTTP/1.1 200 OK" resp;
+              Alcotest.(check bool)
+                "env lifetime recycles the connection early" true
+                (eof_within ~timeout:4.0 s));
+          let rec serve_again left =
+            let resp =
+              try
+                drive port (fun s ->
+                    send_all s (get_request "/");
+                    read_response s ~timeout:2.0)
+              with _ -> ""
+            in
+            if index_of "HTTP/1.1 200 OK" resp <> None then resp
+            else if left = 0 then
+              Alcotest.fail "fresh connection never served after env recycle"
+            else (
+              systhread (fun () -> Unix.sleepf 0.05);
+              serve_again (left - 1))
+          in
+          let resp = serve_again 100 in
+          trace "env-lifetime-after" resp;
+          check_status_line "fresh connection served after the env recycle"
+            "HTTP/1.1 200 OK" resp))
+
+(* 15. TUNA_CONN_MAX shifts the saturation point (S5): one slot from the
+   environment, held by a parked handler, refuses the next connection -
+   the case-10 refusal with the cap arriving via env instead of
+   ~conn_max. *)
+let test_env_conn_max () =
+  let started = Atomic.make 0 in
+  let gates = Array.init 2 (fun _ -> Eio.Promise.create ()) in
+  with_env "TUNA_CONN_MAX" "1" (fun () ->
+      with_server (gate_handler started gates) (fun port ->
+          let a = hold_gate port 0 in
+          Fun.protect
+            ~finally:(fun () -> close_quiet a)
+            (fun () ->
+              wait_started started 1;
+              drive port (fun s ->
+                  send_all s (get_request "/");
+                  let resp = read_response s in
+                  trace "env-cap-refuse" resp;
+                  check_status_line "env-capped server refuses with 503"
+                    "HTTP/1.1 503 Service Unavailable" resp;
+                  check_contains "refusal closes the connection"
+                    "Connection: close" resp;
+                  Alcotest.(check bool) "server closes its side after 503"
+                    true
+                    (eof_within s)))))
+
 let () =
   let tc name f = Alcotest.test_case name `Quick f in
   run "web-errorpath"
@@ -753,7 +823,11 @@ let () =
                 test_conn_cap_refuses
             ; tc "connection cap: gate release frees a slot -> served again"
                 test_conn_cap_release
-            ; tc "lifetime cap: aged keep-alive connection recycled, fresh served"
-                test_conn_lifetime_recycles
-            ; tc "lifetime cap: connection inside the cap keeps working"
-                test_conn_lifetime_not_eager ] ) ]
+              ; tc "lifetime cap: aged keep-alive connection recycled, fresh served"
+                  test_conn_lifetime_recycles
+              ; tc "lifetime cap: connection inside the cap keeps working"
+                  test_conn_lifetime_not_eager
+              ; tc "env knob: TUNA_CONN_LIFETIME recycles a keep-alive connection early"
+                  test_env_conn_lifetime
+              ; tc "env knob: TUNA_CONN_MAX=1 refuses the second connection"
+                  test_env_conn_max ] ) ]

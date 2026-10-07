@@ -83,8 +83,33 @@ minute 40 no matter what.
     gates: /tmp cleaner gutted the dev pg cluster ("checkpoint request
     failed") -> stop-pg, rm -rf /tmp/tuna-pgsup /tmp/tuna-dev,
     start-pg.
-- S5 run.ml delegation of the knobs; tests mirror the errorpath harness,
-  1-2 cases per slice.
+  - S5 DONE 10-07 on this branch: the three serve knobs are tunable per
+    deployment without code edits.  web.ml reads TUNA_CONN_MAX (S3 live
+    cap, default 256 = default_conn_max), TUNA_BODY_TIMEOUT (S2
+    deadline, default 30s) and TUNA_CONN_LIFETIME (S4 cap, default
+    300s) per serve call - same env pattern as TUNA_MAX_BODY_BYTES:
+    unset, empty or malformed falls back to the compiled-in default,
+    never a boot error; an explicit optional argument still wins.
+    Production rides serve's defaults (bin/main.ml -> Api.serve ->
+    Web.serve passes no knob args).  Repo note for successors: this
+    tree has no server/bin/run.ml (that path is the stale sibling's
+    layout) - the TUNA_MAX_BODY_BYTES precedent itself lives in
+    web.ml, so the env readers went there too, per serve CALL rather
+    than module init so tests can set one var per case.  Suite 15/15
+    (two consecutive green runs; was 13): new cases =
+    TUNA_CONN_LIFETIME=0.5 recycles a keep-alive connection early
+    (case-12 shape via env) + TUNA_CONN_MAX=1 refuses the second
+    connection (case-10 shape via env); with_env sets one var per case
+    and clears it after (an empty value parses as absent).  TEST
+    GOTCHAS: Unix.putenv per case works BECAUSE the env read is per
+    call; Option.filter is unbound under this toolchain's dune build
+    (5.4.1 toplevel has it - unexplained) -> nested match with
+    when-guards, same style as the max_body_bytes reader.  Gate counts
+    at this commit: web 15 x2 green, tuna 38, prim 12, repl 4,
+    store 17, tree_substrate 7 (store/tsub via `bash
+    scripts/test-store.sh <exe> migrations [db]`; PG was up, no
+    cluster remedy needed).  httpun-hardening pass complete; merge +
+    deploy = roerick per protocol.
 
 ## Successor protocol
 1. Read this file + git log --oneline -3 on this branch. No re-recon.
