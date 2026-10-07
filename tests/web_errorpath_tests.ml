@@ -89,9 +89,9 @@ let wait_for_listener (port : int) : unit =
    case end never joins against httpun's error-state machinery; a
    serve that dies early (bind race) is logged and the case fails
    loudly via wait_for_listener *)
-let with_server ?(body_timeout = Tuna_server.Web.default_body_timeout)
-    ?(conn_max : int option)
-    (handler : Tuna_server.Web.handler) (f : int -> unit) : unit =
+  let with_server ?(body_timeout = Tuna_server.Web.default_body_timeout)
+      ?(conn_max : int option) ?(conn_lifetime : float option)
+      (handler : Tuna_server.Web.handler) (f : int -> unit) : unit =
   let env =
     match !env_ref with Some env -> env | None -> failwith "eio env missing"
   in
@@ -102,7 +102,7 @@ let with_server ?(body_timeout = Tuna_server.Web.default_body_timeout)
   Eio.Fiber.fork ~sw (fun () ->
       try
         Tuna_server.Web.serve ~env ~sw ~interface:"127.0.0.1" ~port ?conn_max
-          ~body_timeout handler
+          ?conn_lifetime ~body_timeout handler
       with exn ->
         Printf.eprintf "[t] serve exited: %s\n%!" (Printexc.to_string exn));
   wait_for_listener port;
@@ -662,6 +662,71 @@ let test_conn_cap_release () =
             "HTTP/1.1 200 OK" resp;
           check_contains "handler really ran after release" "alive:GET /" resp))
 
+(* 12. connection lifetime cap (S4): a keep-alive connection that
+   lives past the cap is recycled - the server closes its side (the
+   client sees EOF) although the client never asked to close, and a
+   fresh connection is served normally afterwards. *)
+let keepalive_get = "GET / HTTP/1.1\r\nHost: t\r\n\r\n"
+
+let test_conn_lifetime_recycles () =
+  with_server ~conn_lifetime:0.5 handler (fun port ->
+      drive port (fun s ->
+          send_all s keepalive_get;
+          let resp = read_response s in
+          trace "lifetime-first" resp;
+          check_status_line "keep-alive request served before the cap"
+            "HTTP/1.1 200 OK" resp;
+          (* idle past the cap: the server recycles the connection on
+             its own - EOF or RST within the bound, no request needed *)
+          Alcotest.(check bool)
+            "server closes its side at the lifetime cap" true
+            (eof_within ~timeout:4.0 s));
+      (* the recycle must not wedge the accept loop: a fresh connection
+         is served again (the retry absorbs the same async
+         slot/scheduler gap hold_gate guards against) *)
+      let rec serve_again left =
+        let resp =
+          try
+            drive port (fun s ->
+                send_all s (get_request "/");
+                read_response s ~timeout:2.0)
+          with _ -> ""
+        in
+        if index_of "HTTP/1.1 200 OK" resp <> None then resp
+        else if left = 0 then
+          Alcotest.fail "fresh connection never served after a lifetime recycle"
+        else (
+          systhread (fun () -> Unix.sleepf 0.05);
+          serve_again (left - 1))
+      in
+      let resp = serve_again 100 in
+      trace "lifetime-after" resp;
+      check_status_line "fresh connection served after the recycle"
+        "HTTP/1.1 200 OK" resp)
+
+(* 13. lifetime cap is not eager (S4): a connection inside the cap
+   keeps working - two keep-alive requests on one socket are both
+   served and the server does not close its side early. *)
+let test_conn_lifetime_not_eager () =
+  with_server ~conn_lifetime:2.0 handler (fun port ->
+      drive port (fun s ->
+          send_all s keepalive_get;
+          let resp = read_response s in
+          trace "keepalive-1" resp;
+          check_status_line "first keep-alive request served"
+            "HTTP/1.1 200 OK" resp;
+            (* well inside the lifetime: the same socket serves again.
+               Already on a systhread inside drive: a plain blocking sleep
+               (nested run_in_systhread would raise) *)
+            Unix.sleepf 0.3;
+          send_all s keepalive_get;
+          let resp2 = read_response s in
+          trace "keepalive-2" resp2;
+          check_status_line "second request served on the same socket"
+            "HTTP/1.1 200 OK" resp2;
+          Alcotest.(check bool) "connection stays open inside the cap" false
+            (eof_within ~timeout:0.3 s)))
+
 let () =
   let tc name f = Alcotest.test_case name `Quick f in
   run "web-errorpath"
@@ -684,7 +749,11 @@ let () =
               test_body_read_timeout
             ; tc "slow body within deadline -> still served"
               test_slow_body_within_deadline
-            ; tc "connection cap: saturated -> new connection refused 503 + close"
-              test_conn_cap_refuses
-          ; tc "connection cap: gate release frees a slot -> served again"
-              test_conn_cap_release ] ) ]
+              ; tc "connection cap: saturated -> new connection refused 503 + close"
+                test_conn_cap_refuses
+            ; tc "connection cap: gate release frees a slot -> served again"
+                test_conn_cap_release
+            ; tc "lifetime cap: aged keep-alive connection recycled, fresh served"
+                test_conn_lifetime_recycles
+            ; tc "lifetime cap: connection inside the cap keeps working"
+                test_conn_lifetime_not_eager ] ) ]

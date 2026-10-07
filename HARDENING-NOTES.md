@@ -59,6 +59,30 @@ minute 40 no matter what.
       does; still refused after the window = real slot leak, fails loudly);
       and after a released connection's response, close the client side
       before probing capacity again.
+  - S4 DONE 10-07 on this branch: connection LIFETIME cap (total age
+    of one connection; not per-request, not the S3 concurrency count).
+    serve races each connection's whole life against conn_lifetime
+    (Eio.Time.with_timeout_exn around the connection handler inside
+    the S3 per-connection Switch.run; default 300s =
+    default_conn_lifetime, serve's optional ~conn_lifetime overrides -
+    the knob S5 wires into run.ml). A connection still open past the
+    cap (idle keep-alive or mid-request) has its switch cancelled and
+    its socket closed by accept_fork; the Timeout is caught as a
+    recycle (logged "connection lifetime expired", never on_error) and
+    the S3 slot frees in the same Fun.protect finally. Suite 13/13
+    (three consecutive green runs): new cases = an aged keep-alive
+    connection is recycled (server closes its side unprompted; a fresh
+    connection is served after) + a connection inside the cap keeps
+    working (two keep-alive requests, one socket, no early close).
+    TEST GOTCHAS for S5: keep-alive probes need their own request line
+    (no Connection: close; keepalive_get in the suite) and a PLAIN
+    Unix.sleepf inside drive (nested run_in_systhread raises
+    Effect.Unhandled). Gate counts at this commit: tuna 38, prim 12,
+    repl 4, store 17, tree_substrate 7 (repl/store above the old 3/11
+    baseline; not touched by this slice). Env gotcha re-hit during
+    gates: /tmp cleaner gutted the dev pg cluster ("checkpoint request
+    failed") -> stop-pg, rm -rf /tmp/tuna-pgsup /tmp/tuna-dev,
+    start-pg.
 - S5 run.ml delegation of the knobs; tests mirror the errorpath harness,
   1-2 cases per slice.
 

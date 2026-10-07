@@ -9,8 +9,10 @@
    replaces was already enumerated and small.
 
      redesign.  Body reads are capped and deadline-bounded (the PP
-     max_body_bytes stance + the S2 slowloris guard), and live
-     connections are capped (S3: saturation answers 503 + close). *)
+     max_body_bytes stance + the S2 slowloris guard), live connections
+     are capped (S3: saturation answers 503 + close), and each
+     connection's total lifetime is capped (S4: aged connections are
+     recycled). *)
 
 (* -- leaf text helpers (ported from PP http_kit.ml) ------------------ *)
 
@@ -377,6 +379,16 @@ let default_body_timeout = 30.0
    optional [~conn_max] (S5 wires the knob into run.ml). *)
 let default_conn_max = 256
 
+(* S4 (aged connections): a connection's TOTAL lifetime is capped.  A
+   connection still open [conn_lifetime] seconds after accept is
+   recycled - its connection switch is cancelled and the socket closed -
+   whether it is idle or mid-request; keep-alive clients open a fresh
+   connection for the next request.  This bounds how long any single
+   connection (and anything pinned to it) can live.  Per-deployment
+   override is [serve]'s optional [~conn_lifetime] (S5 wires the knob
+   into run.ml). *)
+let default_conn_lifetime = 300.0
+
 let read_body ?(max_bytes = max_body_bytes) (reqd : Httpun.Reqd.t) : string =
   let body = Httpun.Reqd.request_body reqd in
   let promise, resolver = Eio.Promise.create () in
@@ -421,6 +433,7 @@ let safe_respond (reqd : Httpun.Reqd.t) (r : resp) : unit =
 let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     ~(interface : string) ~(port : int)
     ?(body_timeout = default_body_timeout) ?(conn_max = default_conn_max)
+    ?(conn_lifetime = default_conn_lifetime)
     (handler : handler) : unit =
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
@@ -587,15 +600,26 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
             Fun.protect
               ~finally:(fun () -> if not saturated then drop_slot ())
               (fun () ->
-                try
-                  Eio.Switch.run (fun conn_sw ->
-                      let conn_handler =
-                        Httpun_eio.Server.create_connection_handler
-                          ~request_handler:(request_handler conn_sw ~saturated)
-                          ~error_handler ~sw:conn_sw
-                      in
-                      conn_handler client_addr client_sock)
-                with exn -> on_error exn));
+                  try
+                    Eio.Switch.run (fun conn_sw ->
+                        let conn_handler =
+                          Httpun_eio.Server.create_connection_handler
+                            ~request_handler:(request_handler conn_sw ~saturated)
+                            ~error_handler ~sw:conn_sw
+                        in
+                        (* S4: the whole connection races [conn_lifetime].
+                           On expiry the connection switch is cancelled and
+                           accept_fork closes the socket (the S3 slot frees
+                           in the finally below) - an idle keep-alive
+                           connection is recycled instead of living
+                           forever.  The Timeout is a recycle, not a
+                           failure: logged quietly, never on_error. *)
+                        Eio.Time.with_timeout_exn clock conn_lifetime
+                          (fun () -> conn_handler client_addr client_sock))
+                  with
+                  | Eio.Time.Timeout ->
+                    Printf.eprintf "[tuna] connection lifetime expired\n%!"
+                  | exn -> on_error exn));
         accept_failures := 0
       with
       | (Eio.Cancel.Cancelled _ as ex) -> raise ex
