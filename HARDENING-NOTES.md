@@ -2,9 +2,10 @@
 
 Branch `httpun-hardening`, cut from master 0b5e18c (fix 3430f9b + error-path
 regression tests; 3430f9b deployed to town 10-05 18:35Z). This file persists
-the recon so no session re-derives it. Four detached children have died at
+the recon so no session re-derives it. Five detached children have died at
 the 1h wall on this workstream (papercut 1U5MHFI; the 4th burned ~4.8M tokens
-for zero code). Successor protocol: land ONE slice per session, commit by
+for zero code; the 5th was S3's child, whose slice was rescued 10-07 - see
+the S3 entry). Successor protocol: land ONE slice per session, commit by
 minute 40 no matter what.
 
 ## Recon (from child tuna-httpun-hardening-4, verified on clean master)
@@ -20,8 +21,9 @@ minute 40 no matter what.
     'a) -> (unit -> 'a) -> (unit -> 'a) -> 'a (two thunks; first finisher
     wins, its exception propagates); Eio.Time.with_timeout_exn : _ clock ->
     float -> (unit -> 'a) -> 'a raises Eio.Time.Timeout (the clean
-    body-deadline race); clock = Eio.Stdenv.clock env. Still to pin for
-    S3/S4: accept_fork socket-close semantics, Flow.copy_string.
+      body-deadline race); clock = Eio.Stdenv.clock env. Still to pin for
+      S4: Flow.copy_string. (accept_fork socket-close semantics pinned by
+      S3: slot release = connection-fiber finish = both sides closed.)
 
 ## Slices (small loops; one per session)
   - S1 DONE 10-06 on this branch: declared Content-Length past max_body_bytes
@@ -40,8 +42,23 @@ minute 40 no matter what.
     containment shape as S1's 413 (tell the client why, stop waiting on
     the unread remainder). Suite 9/9: new cases = partial body + stall ->
     408 within deadline; slow-but-moving body inside deadline still 200.
-- S3 connection cap -> 503 refusal when saturated.
-- S4 per-connection lifetime cap.
+    - S3 DONE 10-07 on this branch (slice rescued from the 5th wall-dead
+      child, tuna-httpun-s3-1-7): live-connection cap. The accept loop hands
+      out conn_max slots (Atomic compare-and-set; default 256 =
+      default_conn_max, serve's optional ~conn_max overrides - the knob S5
+      wires into run.ml). A connection accepted while saturated holds no
+      slot; its requests are answered 503 + Connection: close on the first
+      request, through the same contained safe_respond path as the 413/408
+      answers. A served connection releases its slot when its connection
+      fiber finishes - which is after the CLIENT closes its side too
+      (httpun half-closes on Connection: close and lingers on the read
+      side). Suite 11/11 (three consecutive green runs): new cases =
+      saturated refusal + gate-release frees a slot -> served again.
+      TEST GOTCHAS for S4/S5: wait_for_listener's probe takes a slot whose
+      release is async, so holds must retry on an immediate 503 (hold_gate
+      does; still refused after the window = real slot leak, fails loudly);
+      and after a released connection's response, close the client side
+      before probing capacity again.
 - S5 run.ml delegation of the knobs; tests mirror the errorpath harness,
   1-2 cases per slice.
 

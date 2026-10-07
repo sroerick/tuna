@@ -90,6 +90,7 @@ let wait_for_listener (port : int) : unit =
    serve that dies early (bind race) is logged and the case fails
    loudly via wait_for_listener *)
 let with_server ?(body_timeout = Tuna_server.Web.default_body_timeout)
+    ?(conn_max : int option)
     (handler : Tuna_server.Web.handler) (f : int -> unit) : unit =
   let env =
     match !env_ref with Some env -> env | None -> failwith "eio env missing"
@@ -100,7 +101,7 @@ let with_server ?(body_timeout = Tuna_server.Web.default_body_timeout)
   let port = free_port () in
   Eio.Fiber.fork ~sw (fun () ->
       try
-        Tuna_server.Web.serve ~env ~sw ~interface:"127.0.0.1" ~port
+        Tuna_server.Web.serve ~env ~sw ~interface:"127.0.0.1" ~port ?conn_max
           ~body_timeout handler
       with exn ->
         Printf.eprintf "[t] serve exited: %s\n%!" (Printexc.to_string exn));
@@ -250,6 +251,114 @@ let check_status_line (label : string) (expected : string) (resp : string) :
 let check_contains (label : string) (needle : string) (resp : string) : unit =
   Alcotest.(check bool) label true (index_of needle resp <> None)
 
+(* -- S3 connection-cap helpers --------------------------------------- *)
+
+let close_quiet (s : Unix.file_descr) : unit =
+  try Unix.close s with Unix.Unix_error _ -> ()
+
+(* one held connection: its request targets /park/<k>, so the gate
+   handler parks on gate [k] once the request is read - the connection
+   stays live and holds its slot by fact, with no body tricks and no
+   timing.  The socket is returned open; the case's finally closes it.
+
+   The listener probe (wait_for_listener) takes a slot whose release is
+   asynchronous, so a hold can connect while the server still counts
+   that slot: the cap answers it 503 + close on its first request.  A
+   refused hold detects the immediate answer and reconnects; one still
+   refused after the whole window means slots genuinely leak and fails
+   loudly.  A parked hold answers nothing within the window. *)
+let hold_gate (port : int) (k : int) : Unix.file_descr =
+  let rec go left =
+    let verdict =
+      systhread (fun () ->
+          let s = open_conn port in
+          send_all s (get_request ("/park/" ^ string_of_int k));
+          match Unix.select [ s ] [] [] 0.5 with
+          | [ _ ], _, _ -> (
+              let buf = Bytes.create 128 in
+              let n = try Unix.read s buf 0 128 with Unix.Unix_error _ -> 0 in
+              let resp = String.sub (Bytes.to_string buf) 0 n in
+              if n > 0 && index_of "HTTP/1.1 503" resp = None then (
+                trace "hold-unexpected" resp;
+                close_quiet s;
+                `unexpected)
+              else (
+                close_quiet s;
+                `refused))
+          | _ -> `held s)
+    in
+    match verdict with
+    | `held s -> s
+    | `unexpected -> Alcotest.fail "hold_gate: unexpected immediate response"
+    | `refused ->
+        if left = 0 then
+          Alcotest.fail "hold_gate: server saturated for the whole window"
+        else (
+          systhread (fun () -> Unix.sleepf 0.05);
+          go (left - 1))
+  in
+  go 10
+
+(* true once the server closes its side (EOF or RST) within the bound *)
+let eof_within ?(timeout = 2.0) (s : Unix.file_descr) : bool =
+  let r, _, _ = Unix.select [ s ] [] [] timeout in
+  match r with
+  | [] -> false
+  | _ -> (
+      try
+        match Unix.read s (Bytes.create 1) 0 1 with
+        | 0 -> true
+        | _ -> false
+      with Unix.Unix_error (Unix.ECONNRESET, _, _) -> true)
+
+(* the gate handler: GET /park/<k> counts one [started] handler and
+   parks on gate [k], answering nothing until that gate is resolved.
+   Saturation is therefore observable by fact ([started] = cap means
+   cap handlers are parked holding slots), not by probing.  Any other
+   target is served immediately; resolving a gate releases its
+   handler, whose 200 + the client's Connection: close finishes that
+   connection and frees its slot *)
+let gate_handler (started : int Atomic.t) gates :
+    Tuna_server.Web.handler =
+ fun (r : Tuna_server.Web.req) ->
+   let served : Tuna_server.Web.resp =
+     { status = 200
+     ; headers = [ ("Content-Type", "text/plain") ]
+     ; body = "alive:" ^ r.meth ^ " " ^ r.target }
+   in
+   let prefix = "/park/" in
+   if
+     String.length r.target > String.length prefix
+     && String.sub r.target 0 (String.length prefix) = prefix
+   then
+     match
+       int_of_string_opt
+         (String.sub r.target (String.length prefix)
+            (String.length r.target - String.length prefix))
+     with
+     | Some k when k >= 0 && k < Array.length gates ->
+         ignore (Atomic.fetch_and_add started 1);
+         Eio.Promise.await (fst gates.(k));
+         served
+     | _ -> served
+   else served
+
+(* wait until [n] gate handlers have started (each is now parked
+   holding a slot): saturation is a fact at that point.  Bounded so a
+   server that never saturates fails the case instead of hanging the
+   run *)
+let wait_started (started : int Atomic.t) (n : int) : unit =
+  let rec go left =
+    if Atomic.get started >= n then ()
+    else if left = 0 then
+      Alcotest.fail
+        (Printf.sprintf "gate handlers stalled at %d of %d"
+           (Atomic.get started) n)
+    else (
+      systhread (fun () -> Unix.sleepf 0.05);
+      go (left - 1))
+  in
+  go 100
 (* -- the test server -------------------------------------------------- *)
 
 (* every case runs against this: "/" serves 200; "/boom" raises out of
@@ -456,6 +565,103 @@ let test_slow_body_within_deadline () =
             "HTTP/1.1 200 OK" resp;
           check_contains "slow body content delivered" "alive:POST /slow" resp))
 
+(* 10. connection cap (S3): handlers parked on their gate promises hold
+   live connections until the cap; the next connection is refused with
+   503 + close.  Saturation is observed by fact ([started] = cap means
+   cap handlers are parked holding slots), not by probing; the refusal
+   rides the new connection's first request (httpun is request-driven)
+   through the same contained safe_respond path as the 413/408 answers,
+   and the server closes its side after answering. *)
+let test_conn_cap_refuses () =
+  let started = Atomic.make 0 in
+  let gates = Array.init 4 (fun _ -> Eio.Promise.create ()) in
+  with_server ~conn_max:2 (gate_handler started gates) (fun port ->
+      let a = hold_gate port 0 in
+      let b = hold_gate port 1 in
+      Fun.protect
+        ~finally:(fun () -> close_quiet a; close_quiet b)
+        (fun () ->
+          wait_started started 2;
+          (* saturation is now a fact: both slots are held by handlers
+             parked on unresolved gates.  The next connection is
+             refused. *)
+          drive port (fun s ->
+              send_all s (get_request "/");
+              let resp = read_response s in
+              trace "cap-refuse" resp;
+              check_status_line "saturated server refuses with 503"
+                "HTTP/1.1 503 Service Unavailable" resp;
+              check_contains "refusal closes the connection"
+                "Connection: close" resp;
+              Alcotest.(check bool) "server closes its side after 503" true
+                (eof_within s))))
+
+(* 11. connection cap release (S3): resolving one parked handler's gate
+   answers it 200, the client's Connection: close finishes that
+   connection, and its slot frees; a fresh connection is then served
+   normally.  The other hold keeps its gate unresolved and stays
+   parked. *)
+let test_conn_cap_release () =
+  let started = Atomic.make 0 in
+  let gates = Array.init 4 (fun _ -> Eio.Promise.create ()) in
+  with_server ~conn_max:2 (gate_handler started gates) (fun port ->
+      let a = hold_gate port 0 in
+      let b = hold_gate port 1 in
+      Fun.protect
+        ~finally:(fun () -> close_quiet a; close_quiet b)
+        (fun () ->
+          wait_started started 2;
+            (* release one gate: its parked handler answers 200 and the
+               server half-closes (the Connection: close the client
+               asked for).  The slot frees when the connection fiber
+               finishes - which needs the client's side closed too,
+               below *)
+          let _, resolver = gates.(0) in
+          Eio.Promise.resolve resolver ();
+          let released =
+            systhread (fun () -> read_response ~timeout:5.0 a)
+          in
+          trace "cap-release" released;
+          check_status_line "released connection is served"
+            "HTTP/1.1 200 OK" released;
+          check_contains "released handler really ran"
+            "alive:GET /park/0" released;
+          Alcotest.(check bool) "server closes its side after release" true
+            (systhread (fun () -> eof_within a));
+          (* the other hold keeps its slot: its gate stays unresolved,
+             so nothing ever arrives on it *)
+          Alcotest.(check bool) "unreleased hold stays parked" false
+            (systhread (fun () -> eof_within ~timeout:0.3 b));
+            (* the server's side of [a] is closed, but its connection
+               fiber lingers on the read side until the client closes
+               too (graceful half-close) - that fiber finishing is what
+               releases the slot.  Close our side now, then probe *)
+            close_quiet a;
+          (* the freed slot serves a fresh connection again; every
+             attempt's verdict is exact (200 = the handler ran, 503 =
+             the released connection's slot not dropped yet) and the
+             bound only absorbs the scheduler gap in between *)
+          let rec serve_again left =
+            let resp =
+              try
+                drive port (fun s ->
+                    send_all s (get_request "/");
+                    read_response s ~timeout:2.0)
+              with _ -> ""
+            in
+            if index_of "HTTP/1.1 200 OK" resp <> None then resp
+            else if left = 0 then
+              Alcotest.fail "slot never freed after the gate released"
+            else (
+              systhread (fun () -> Unix.sleepf 0.05);
+              serve_again (left - 1))
+          in
+          let resp = serve_again 100 in
+          trace "cap-serve-again" resp;
+          check_status_line "served normally after the gate released"
+            "HTTP/1.1 200 OK" resp;
+          check_contains "handler really ran after release" "alive:GET /" resp))
+
 let () =
   let tc name f = Alcotest.test_case name `Quick f in
   run "web-errorpath"
@@ -476,5 +682,9 @@ let () =
               test_oversize_body_read
           ; tc "body stall mid-read -> 408 within deadline, server serves on"
               test_body_read_timeout
-          ; tc "slow body within deadline -> still served"
-              test_slow_body_within_deadline ] ) ]
+            ; tc "slow body within deadline -> still served"
+              test_slow_body_within_deadline
+            ; tc "connection cap: saturated -> new connection refused 503 + close"
+              test_conn_cap_refuses
+          ; tc "connection cap: gate release frees a slot -> served again"
+              test_conn_cap_release ] ) ]

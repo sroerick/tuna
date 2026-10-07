@@ -8,8 +8,9 @@
    http_kit / http_core family (same owner, ISC); the Dream surface this
    replaces was already enumerated and small.
 
-    redesign.  Body reads are capped and deadline-bounded (the PP
-    max_body_bytes stance + the S2 slowloris guard). *)
+     redesign.  Body reads are capped and deadline-bounded (the PP
+     max_body_bytes stance + the S2 slowloris guard), and live
+     connections are capped (S3: saturation answers 503 + close). *)
 
 (* -- leaf text helpers (ported from PP http_kit.ml) ------------------ *)
 
@@ -368,6 +369,14 @@ let max_body_bytes =
    [~body_timeout] (S5 wires the knob into run.ml). *)
 let default_body_timeout = 30.0
 
+(* S3 (connection flood): cap on live connections.  While [conn_max]
+   connections are being served, each new connection is refused with
+   503 + close through the same contained response path as the 413/408
+   answers (httpun is request-driven, so the refusal rides the new
+   connection's first request).  Per-deployment override is [serve]'s
+   optional [~conn_max] (S5 wires the knob into run.ml). *)
+let default_conn_max = 256
+
 let read_body ?(max_bytes = max_body_bytes) (reqd : Httpun.Reqd.t) : string =
   let body = Httpun.Reqd.request_body reqd in
   let promise, resolver = Eio.Promise.create () in
@@ -410,7 +419,8 @@ let safe_respond (reqd : Httpun.Reqd.t) (r : resp) : unit =
 
 (* [serve] runs the accept loop; blocks the calling fiber forever. *)
 let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
-    ~(interface : string) ~(port : int) ?(body_timeout = default_body_timeout)
+    ~(interface : string) ~(port : int)
+    ?(body_timeout = default_body_timeout) ?(conn_max = default_conn_max)
     (handler : handler) : unit =
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
@@ -459,7 +469,8 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
          Httpun.Body.Writer.close body
        with _ -> ())
     in
-    let request_handler conn_sw (sa : Eio.Net.Sockaddr.stream)
+    let request_handler conn_sw ~(saturated : bool)
+        (sa : Eio.Net.Sockaddr.stream)
         (g : Httpun.Reqd.t Gluten.reqd) : unit =
       ignore sa;
       (* The handler MUST NOT block the connection's read fiber: body reads
@@ -503,7 +514,17 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
                   ; headers = [ ("Connection", "close") ]
                   ; body = "request timeout" }
               in
-              if declared_too_large then respond_413 ()
+              (* S3: this connection arrived while the server was at its
+                 live-connection cap; it holds no slot and its requests
+                 are refused until the socket closes. *)
+              let respond_503 () =
+                safe_respond reqd
+                  { status = 503
+                  ; headers = [ ("Connection", "close") ]
+                  ; body = "service unavailable" }
+              in
+              if saturated then respond_503 ()
+              else if declared_too_large then respond_413 ()
               else
                 match
                   Eio.Time.with_timeout_exn clock body_timeout (fun () ->
@@ -534,6 +555,23 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
       Printf.eprintf "[tuna] connection handler failed: %s\n%!"
         (Printexc.to_string ex)
     in
+    (* S3: live-connection slots.  A connection takes one of [conn_max]
+       slots when its handler fiber starts and releases it when the
+       connection is fully done (accept_fork closes the socket when the
+       callback below returns, and Switch.run drains the connection's
+       fibers first).  Atomic compare-and-set keeps the count exact even
+       if eio ever runs accept fibers on concurrent domains. *)
+    let live = Atomic.make 0 in
+    let take_slot () =
+      let rec go () =
+        let n = Atomic.get live in
+        if n >= conn_max then false
+        else if Atomic.compare_and_set live n (n + 1) then true
+        else go ()
+      in
+      go ()
+    in
+    let drop_slot () = ignore (Atomic.fetch_and_add live (-1)) in
     (* One Eio.Switch per connection: anything fatal inside httpun, gluten,
        or a request fiber cancels that connection's switch only, so the
        accept loop and the process survive (10-04 outage containment). *)
@@ -541,15 +579,23 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     while true do
       try
         Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
-            try
-              Eio.Switch.run (fun conn_sw ->
-                  let conn_handler =
-                    Httpun_eio.Server.create_connection_handler
-                      ~request_handler:(request_handler conn_sw)
-                      ~error_handler ~sw:conn_sw
-                  in
-                  conn_handler client_addr client_sock)
-            with exn -> on_error exn);
+            (* S3: the connection's fate is decided at accept time.  A
+               served connection holds one of the [conn_max] slots until
+               it is fully done; a refused one takes no slot and is
+               answered 503 + close on its first request. *)
+            let saturated = not (take_slot ()) in
+            Fun.protect
+              ~finally:(fun () -> if not saturated then drop_slot ())
+              (fun () ->
+                try
+                  Eio.Switch.run (fun conn_sw ->
+                      let conn_handler =
+                        Httpun_eio.Server.create_connection_handler
+                          ~request_handler:(request_handler conn_sw ~saturated)
+                          ~error_handler ~sw:conn_sw
+                      in
+                      conn_handler client_addr client_sock)
+                with exn -> on_error exn));
         accept_failures := 0
       with
       | (Eio.Cancel.Cancelled _ as ex) -> raise ex
