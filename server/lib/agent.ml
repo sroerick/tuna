@@ -285,6 +285,10 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "secrets file (mode 600). This document never contains tokens."
     ; "An admin mints a non-admin identity + token at " ^ origin
     ; "/identities (or POST /api/identities)."
+      ; "Rotate your own bearer token (self-serve): POST " ^ origin
+      ; "/api/identities/<your-id>/rotate -> {\"token\":\"…\"} returned"
+      ; "once; the previous token stops verifying immediately. An admin"
+      ; "may also rotate another identity's token."
     ; ""
     ; "## Eval API"
     ; ""

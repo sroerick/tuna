@@ -1088,6 +1088,31 @@ let get_identities pool _auth _req =
                     ; ("is_admin", `Bool i.i_is_admin) ])
                 ids) ) ]))
 
+(* token rotation (self-serve): any identity may rotate its OWN bearer
+   token — credential hygiene, not a privilege (design 2026-10-09).
+   Rotating ANOTHER identity's requires the admin gate, the same one
+   as minting.  The new token is returned ONCE (only its sha256 is
+   stored) and the previous token stops verifying immediately. *)
+let post_identity_rotate pool auth req =
+  let id = Web.param req "id" in
+  if auth.auth_id <> id && not auth.auth_is_admin then
+    (j_err ~code:403 "you may rotate only your own token")
+  else
+    let token = Tokens.random_token_hex () in
+    Store.rotate_token pool ~identity_id:id ~token ()
+    >>= (function
+          | None -> (j_err ~code:404 "no such identity")
+          | Some i ->
+              Store.log_auth pool ~identity_id:i.Store.i_id ~kind:"bearer"
+                ~success:true ()
+              >>= fun () ->
+              (j_ok
+                 (`Assoc
+                   [ ("id", `String i.Store.i_id)
+                   ; ("name", `String i.Store.i_name)
+                   ; ("is_admin", `Bool i.Store.i_is_admin)
+                   ; ("token", `String token) ])))
+
 (* delegation-attenuation (grants.borg §delegation-attenuation): mint a
    narrower grant FROM an existing one.  Only the holder may attenuate
    (the store enforces holder + live lineage + proven narrowing); the
@@ -2069,6 +2094,8 @@ let api_routes pool =
       ; Web.post "/api/grants" (with_auth pool (post_grant pool))
       ; Web.post "/api/identities" (with_auth pool (post_identity pool))
       ; Web.get "/api/identities" (with_auth pool (get_identities pool))
+      ; Web.post "/api/identities/:id/rotate"
+          (with_auth pool (post_identity_rotate pool))
       ; Web.post "/api/grants/:id/attenuate" (with_auth pool (attenuate_grant pool))
       ; Web.get "/api/grants/:id" (with_auth pool (get_grant pool))
       ; Web.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))

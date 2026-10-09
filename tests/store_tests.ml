@@ -45,6 +45,37 @@ let test_identities () =
   Alcotest.(check int) "wrong token" 0 (Option.fold ~some:(fun _ -> 1) ~none:0 wrong);
   return ()
 
+let test_rotate_token () =
+  (* rotation swaps the stored sha256 in place: the new token verifies,
+     the previous one dies immediately, unknown id is None.  Seeded via
+     bootstrap (get-or-create) so a re-run against the same scratch
+     database is safe. *)
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.bootstrap_identity p ~is_admin:false ~name:"tuna-test-rotate"
+    ~token:"rotate-seed-token" ()
+  >>= fun i ->
+  S.rotate_token p ~identity_id:i.S.i_id ~token:"rotate-token-a" ()
+  >>= fun r1 ->
+  Alcotest.(check string) "same row" i.S.i_id
+    (expect_some "rotated row" r1).S.i_id;
+  S.verify_token p "rotate-token-a" >>= fun a ->
+  Alcotest.(check string) "new token verifies" i.S.i_id
+    (expect_some "token a" a).S.i_id;
+  S.rotate_token p ~identity_id:i.S.i_id ~token:"rotate-token-b" ()
+  >>= fun _r2 ->
+  S.verify_token p "rotate-token-b" >>= fun b ->
+  Alcotest.(check string) "second rotation verifies" i.S.i_id
+    (expect_some "token b" b).S.i_id;
+  S.verify_token p "rotate-token-a" >>= fun a_gone ->
+  Alcotest.(check int) "previous token dead" 0
+    (Option.fold ~some:(fun _ -> 1) ~none:0 a_gone);
+  S.rotate_token p ~identity_id:"00000000-0000-0000-0000-000000000000"
+    ~token:"rotate-never" ()
+  >>= fun unknown ->
+  Alcotest.(check int) "unknown id none" 0
+    (Option.fold ~some:(fun _ -> 1) ~none:0 unknown);
+  return ()
+
 (* jsonb round-trips through pgx with its own spacing; compare parsed *)
 let json_equal a b =
   match Yojson.Safe.from_string a, Yojson.Safe.from_string b with
@@ -719,6 +750,9 @@ let () =
     Tuna_test_eio.run "store"
          [ ("ping", [ lwt "live" test_ping ])
          ; ("identities", [ lwt "bootstrap+verify" test_identities ])
+         ; ( "rotation"
+           , [ lwt "new verifies, old dies, unknown id is None"
+                 test_rotate_token ] )
          ; ("programs", [ lwt "upsert+fetch" test_programs ])
          ; ("runs", [ lwt "insert/update/fetch/list" test_runs ])
          ; ( "run-id-resolve"

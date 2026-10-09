@@ -1170,6 +1170,23 @@ let verify_token p token =
    | [ r ] -> Direct.return (Some (identity_of_row r))
    | _ -> Direct.return None)
 
+(* token rotation (design 2026-10-09: rotating your OWN token is
+   self-serve for non-admins; another identity's requires the admin
+   gate — enforced in the handler, not here).  Swap the sha256 token
+   hash in place: the raw token never lands in the store, the caller
+   gets it back once, and the previous token stops verifying
+   immediately (verify_token is a plain hash lookup).  None on an
+   unknown id. *)
+let rotate_token p ~identity_id ~token () =
+  Db.q ~params:[ p_str identity_id; p_str (Tuna.Hash.hex_of_string token) ] p
+    "UPDATE identities SET token_hash = $2 WHERE id = $1::uuid \
+     RETURNING id::text, name, token_hash, is_admin"
+  >>= fun rows ->
+  (match rows with
+   | [] -> Direct.return None
+   | [ r ] -> Direct.return (Some (identity_of_row r))
+   | _ -> store_error "rotate_token: RETURNING gave %d rows" (List.length rows))
+
 (* -- accounts: passwords + browser sessions (0013, pp-slice) -------
 
    The browser tier over the SAME identities: kind-tagged credentials
