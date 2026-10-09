@@ -134,7 +134,20 @@ dune runtest 15 suites green (store suite incl. rotation test) on a
 FRESH /tmp pg cluster - the /tmp cleaner had gutted the old one
 ('checkpoint request failed'; remedy stop-pg + rm -rf
 /tmp/tuna-pgsup /tmp/tuna-dev + start-pg, per the 09-17 gotchas).
+## LANDED 10-09 (grants list, admin)
 
+5addf1b on master, pushed origin+wyo; wyo hook deployed to club green
+(probes: GET /api/grants no token -> 401; gregor token -> 403 first
+try, with ?author= -> 403 same).  The slice: GET /api/grants - admin-
+only roster of the grants table (the JSON surface of the /grants page
+list).  ?author=<uuid> scopes to one author identity (minted_by; the
+caller is the fallback for pre-0003 rows that predate the author
+column), ?limit= caps the page (default 100, max 1000, newest first).
+Store.list_grants gained a required ~author; list call sites pass it
+explicitly (the /grants page passes ~author:None).  OCaml gotcha for
+the successor: 'f ?author ()' shorthand with an in-scope option
+variable double-wraps the argument - pass a required labeled arg
+instead.
 ## Successor protocol
 1. Read this file + git log --oneline -3 on this branch. No re-recon.
 2. Implement one slice, dune build, run the web tests.
