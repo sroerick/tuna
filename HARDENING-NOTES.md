@@ -117,6 +117,24 @@ The pass is COMPLETE: S1-S5 at branch tip 7b0072f, all gates green (web
 green gated work fast-forwards master and pushes it - the wyo master
 hook deploys to club. Branch kept for history; this file is the record.
 
+## LANDED 10-09 (token rotation, self-serve)
+
+98733b5 on master, pushed origin+wyo; wyo hook deployed to club green
+(probe: POST /api/identities/<other>/rotate -> 403 first try).  The
+slice: POST /api/identities/:id/rotate - any identity rotates its OWN
+bearer token (hygiene, not a privilege); ANOTHER identity's requires
+the admin gate, same as minting (board ff54443b, operator-approved
+2026-10-09).  New raw token returned ONCE (only sha256 stored);
+previous token stops verifying immediately; auth_log kind=bearer rows.
+Supersedes hand-UPDATE as the only rotate path.  Live-verified on
+club: non-admin rotating another id -> 403; own -> 200; old token 401
+immediately after.  gregor's token (the one DM'd through the wedged
+bridge) rotated in place the same hour.  Gates: dune build @all +
+dune runtest 15 suites green (store suite incl. rotation test) on a
+FRESH /tmp pg cluster - the /tmp cleaner had gutted the old one
+('checkpoint request failed'; remedy stop-pg + rm -rf
+/tmp/tuna-pgsup /tmp/tuna-dev + start-pg, per the 09-17 gotchas).
+
 ## Successor protocol
 1. Read this file + git log --oneline -3 on this branch. No re-recon.
 2. Implement one slice, dune build, run the web tests.
