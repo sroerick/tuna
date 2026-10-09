@@ -9,7 +9,7 @@ module J = Yojson.Basic
 module L = Layout
 
 let view pool user _req =
-  S.list_grants pool ()
+  S.list_grants pool ~author:None ()
   >>= fun gs ->
   let row (g : S.grant) =
     let revoked =

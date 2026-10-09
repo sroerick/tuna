@@ -797,12 +797,27 @@ let mint_grant p ~prim ~args_attenuation ?(path_prefix = None) ~caller
                 )
   | n -> store_error "mint_grant: RETURNING gave %d rows" (List.length n) )
 
-(* newest-first listing for the UI admin page (M8) *)
-let list_grants p ?(limit = 100) () =
-  Db.q ~params:[ p_int limit ] p
-    ("SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
-      minted_by::text, parent_grant::text, revoked_at::text FROM grants ORDER BY created_at DESC LIMIT $1")
-  >>= fun rows -> Direct.return (List.map grant_of_row rows)
+(* newest-first listing for the UI admin page (M8) and the admin
+   JSON list (GET /api/grants).  ~author scopes to grants written by
+   one identity: minted_by, with the caller as the fallback for
+   pre-0003 rows that predate the author column. *)
+let list_grants p ?(limit = 100) ~author () =
+  let select =
+    "SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
+     minted_by::text, parent_grant::text, revoked_at::text FROM grants"
+  in
+  let sql, params =
+    match author with
+    | None ->
+        (select ^ " ORDER BY created_at DESC LIMIT $1", [ p_int limit ])
+    | Some a ->
+        ( select
+            ^ " WHERE (minted_by::text = $1 \
+               OR (minted_by IS NULL AND caller::text = $1)) \
+               ORDER BY created_at DESC LIMIT $2"
+        , [ p_str a; p_int limit ] )
+  in
+  Db.q ~params p sql >>= fun rows -> Direct.return (List.map grant_of_row rows)
 
 let fetch_grant p id =
   Db.q ~params:[ p_str id ] p select_grant_by_id

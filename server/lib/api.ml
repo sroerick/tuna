@@ -1187,6 +1187,29 @@ let get_grant pool auth req =
                    ; ( "descendants"
                      , `List (List.map grant_json descendants) ) ])))
 
+(* GET /api/grants?limit=&author= — admin-only roster of the grants
+   table (the JSON surface of the /grants page list).  ?author= scopes
+   to one author identity (minted_by; pre-0003 rows fall back to the
+   caller); ?limit= caps the page (default 100, max 1000).  The roster
+   names every holder and author — not one identity's capability set —
+   so it is an admin surface; per-row reads stay on /api/grants/:id. *)
+let get_grants pool auth req =
+  if not auth.auth_is_admin then
+    (j_err ~code:403 "only an admin identity may list grants")
+  else
+    let author = Web.query req "author" in
+    let limit =
+      match Web.query req "limit" with
+      | Some s -> (
+          match int_of_string_opt s with
+          | Some v when v > 0 && v <= 1000 -> v
+          | _ -> 100)
+      | None -> 100
+    in
+    Store.list_grants pool ~limit ~author ()
+    >>= fun gs ->
+    (j_ok (`Assoc [ ("grants", `List (List.map grant_json gs)) ]))
+
 (* -- tree substrate (M10): JSON over the derived path index -----------
 
    These endpoints are the HOST surface of the substrate (bearer-authed
@@ -2092,6 +2115,7 @@ let api_routes pool =
     ; Web.post "/api/journals/:run_id/fork"
         (with_auth pool (fork_journal pool))
       ; Web.post "/api/grants" (with_auth pool (post_grant pool))
+      ; Web.get "/api/grants" (with_auth pool (get_grants pool))
       ; Web.post "/api/identities" (with_auth pool (post_identity pool))
       ; Web.get "/api/identities" (with_auth pool (get_identities pool))
       ; Web.post "/api/identities/:id/rotate"
