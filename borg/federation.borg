@@ -65,8 +65,31 @@
     dummy bridge, no forged attribution: pre-registered failure 3 (a
     bridge write attributed to the wrong actor) forbids the shortcut.
     Re-open when PP ships acted_by; the tuna half is a thin client.)|) *)
+(* agent note (|2026-10-13 FED3 RE-OPEN (tuna half): the 10-02 disposition's
+      named blocker cleared on the PP side — acted_by shipped and refereed
+      green (PP 5eb8fcd + m039, actor_provenance_test 5/5 live, PP board
+      FED3 CLEARED 10-11). The tuna half is re-verified live on club
+      @2131be8, driven exactly as a PP bridge client would drive it, in
+      gregor's own namespace (u.gregor.fed3-rehearsal.v1, ops seqs 207-214:
+      tree/put + CAS via expected_version + tree/get + tree/list (owner
+      attribution on read answers), the ops log fetched by prefix, the
+      FED2 ops window pulled for the same prefix (verified:true, per-row
+      prev_hash), and a FED1 value fetch rehash-verified by
+      scripts/fed-pull.sh — every op row attributes the true actor, and a
+      failed CAS journaled as a version-null cas row (denial surfaced, not
+      dropped). Client gotchas pinned for the PP half: the host ternary is
+      COMPLETE-TREE canonical (0 leaf / 1 <child> / 2 <left> <right> —
+      "20" is a parse error at offset 2, not a value), and the fed ops
+      window is SEQ-windowed (after_seq=0 answers an empty prefix-filtered
+      window when the ops live at seq 200+ — target the seq range).
+      REMAINING, both PP-side: (1) bearer parity (the PP delegated Bearer
+      == a tuna identity token — a PP auth-kernel decision) and (2) the PP
+      prims library over /api/tree/* and /api/fed/* (the thin client;
+      pre-registered failure 3 is its acceptance: a bridge write attributed
+      to any identity other than the true actor, or its delegated identity,
+      fails).|) *)
  (section federation
-  (doc "Three phases, each independently shippable, each with pre-registered failure. FED1 implemented 2026-09-18; FED2 implemented 2026-10-01; FED3 still out of scope.")
+  (doc "Three phases, each independently shippable, each with pre-registered failure. FED1 implemented 2026-09-18; FED2 implemented 2026-10-01; FED3 re-opened 2026-10-13 (PP acted_by shipped; tuna half rehearsed live; PP half = bearer parity + the prims library).")
   (status in-progress)
   (subsection phases
    (status in-progress)

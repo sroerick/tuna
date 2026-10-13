@@ -59,7 +59,7 @@
       refereed (borge report 2026-10-04: 111 implemented / 3 in-progress
       federation FED3 cross-repo / 1 deprecated-free). Root stays partial
       PP-root-style WHILE OPEN WORK REMAINS: FED3 (federation.borg,
-      blocked on PP acted_by) and the product lane the 2026-10-04 goal
+      re-opened 10-13, PP half only: bearer parity + the prims library) and the product lane the 2026-10-04 goal
       seal opens below. Not planned: nothing on this page is authored
       but unmade.)|) *) Design discussion before authoring settled: (1) seam-of-structure vs seam-of-text is the honest frame — PP's /api/eval parses hostile strings, tuna's eval path has no parser; (2) "everything else becomes a side effect" inverts into "the journal is the recorded environment = replay sandbox, replay needs nothing live"; (3) the debugging surface target is DIFFABLE not readable — agents grep structure; first-divergence paths and per-program-path subtree hashes beat human-prose logs; (4) counterfactual replay (edit the journal, re-run: the mock IS the recorded answer) falls out of journal-as-data and is priced as a headline demo; (5) caveats priced up front: journal growth/GC tombstones, PII capture, prim contract versioning. v1 chapters: grants, journal, replay, call-sites, acceptance.|) *)
  (convention ocaml-dune)
