@@ -87,6 +87,27 @@
       prims library over /api/tree/* and /api/fed/* (the thin client;
       pre-registered failure 3 is its acceptance: a bridge write attributed
       to any identity other than the true actor, or its delegated identity,
+  (* agent note (|2026-10-15 OWNER-DELEGATED FED3 DECISIONS (roerick: no
+        opinion on either, all mine). (1) BEARER PARITY = identity-mapped
+        provisioning: each PP agent identity that bridges gets a 1:1 tuna
+        identity (same name), minted via tuna's admin identity API; its
+        token is held PP-side keyed by identity and libs/tuna resolves the
+        bearer BY CALLING IDENTITY (v1). Tuna stays PP-unaware - substrate
+        purity; rotation rides tuna's self-serve rotate + re-provision. F3
+        holds structurally: the bridge write is attributed to the delegated
+        tuna identity and PP rows cite the tuna op hash. Rejected: shared
+        token authority (cross-store coupling, rotation divergence) and
+        tuna-trusts-PP-issuer (substrate auth dependence). (2) HTTP
+        allowlist: club TUNA_HTTP_ALLOWLIST stays EMPTY = deny-all egress
+        for the http/get prim (verified empty on club); hosts are added one
+        at a time, only with a concrete journaled need. (3) libs/tuna v0
+        LANDED (PP master 9062454): tree surface client
+        (get/put/cas/list/log/state + ns/fork) with explicit cfg; values
+        cross as tuna canonical ternary only - no PP internals encoded.
+        Fed surface (fed-value/fed-ops) deferred until a PP sha256 prim
+        exists - FED1 and FED2 client laws are rehash-verify-and-reject,
+        and an unverifiable client would absorb, which the book forbids
+        (card ws-tuna 7122ca09 tracks the remainder).|) *)
       fails).|) *)
  (section federation
   (doc "Three phases, each independently shippable, each with pre-registered failure. FED1 implemented 2026-09-18; FED2 implemented 2026-10-01; FED3 re-opened 2026-10-13 (PP acted_by shipped; tuna half rehearsed live; PP half = bearer parity + the prims library).")
