@@ -162,3 +162,34 @@
       3. A bridge write attributed to any identity other than the true
          actor (or its delegated identity) -> failure.  (FED3, not yet
          exercised.) |))))))
+
+(* agent note (|2026-10-16 FED3 PROOFS WRAP-UP (board card
+        todo/g4-fed3-proofs; answers PP run-primitive M12's NEXT line
+        "allowlist, proofs?").  The structural proof is the journaling
+        law itself: every fed-apply answer - applied, shadowed, refused,
+        denied - is a journaled op row in the tree_ops chain (the apply
+        answer's op_append, the deny paths' op_append), so a
+        verification or attribution failure can never be absorbed
+        silently; the chain IS the receipt, and F2's
+        rejects-are-journaled clause holds at the same boundary.  Since
+        M12 landed, the floor tightened on every side a bridge write
+        could ride: g1 (2026-10-16) makes agent tree ops deny-all with
+        explicit covering grants at the direct API too (the
+        operator-side-door stance is retired); a2 (2026-10-16) makes
+        fed apply authorize and verify the window BEFORE it writes, so
+        a denied apply plants nothing; g2 (2026-10-16) adds per-runner
+        revocable Bearer tokens (the glochid issue-token law) - the
+        runner authenticates as its own identity at full bearer parity,
+        which is exactly the attribution F3 demands.  WHAT PROOFS
+        REMAIN: F3 is still "not yet exercised" by its own
+        pre-registration - the one open obligation is an exercised
+        attribution probe, positive (a bridge write through a runner
+        token attributes to that identity: run rows carry caller,
+        journal rows carry the actor, the ops chain carries the
+        fed-apply row) and negative (any attempt to write outside
+        ns/<peer>/ or through a revoked token is refused AND journaled,
+        never absorbed).  Until that probe is pinned as a verify gate,
+        F3 stays open by the MEASURE-don't-massage rule; the allowlist
+        half of M12's question is answered on the tuna side by g1+g2
+        (deny-all floor + per-runner allowlists are drivable end to
+        end).|) *)
