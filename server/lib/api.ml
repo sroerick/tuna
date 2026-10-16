@@ -1947,85 +1947,115 @@ let fed_apply_core pool ~(auth : auth) (j : J.t) =
   else if src = "" then deny 400 "src_prefix must be non-empty"
   else if dst = "" then deny 400 "dst_prefix must be non-empty"
   else
-    (* ingest inline values BEFORE applying: each must rehash to its
-       claimed hash (the peer trusts nothing but the hash, so apply is
-       self-contained and no separate value-put grant is needed). *)
-    let ingest_value v =
-      match
-        (get_string_opt v "hash", get_string_opt v "kind",
-         get_string_opt v "payload")
-      with
-      | Some hash, Some "tree", Some payload ->
-          let hash = Tuna.Hash.normalize_hex hash in
-          let got = Tuna.Hash.hex_of_string payload in
-          if got <> hash then
-            return (Error (Printf.sprintf "value %s does not rehash" hash))
-          else Store.value_put pool ~hash ~ternary:payload >>= fun () -> return (Ok ())
-      | Some hash, Some "bytes", Some payload ->
-          let hash = Tuna.Hash.normalize_hex hash in
-          (match Base64.decode payload with
-           | Error _ ->
-               return
-                 (Error (Printf.sprintf "value %s: payload is not base64" hash))
-           | Ok b ->
-               let got = Store.byte_hash b in
-               if got <> hash then
-                 return
-                   (Error (Printf.sprintf "value %s does not rehash" hash))
-               else
-                 Store.byte_value_put pool ~hash ~bytes:b
-                 >>= fun () -> return (Ok ()))
-      | _ ->
-          return
-            (Error "each value needs hash, kind (tree|bytes) and payload")
-    in
-    let rec ingest = function
-      | [] -> return (Ok ())
-      | v :: rest -> (
-          match v with
-          | `Assoc _ -> (
-              ingest_value v >>= function
-              | Error e -> return (Error e)
-              | Ok () -> ingest rest)
-          | _ -> return (Error "each value must be a JSON object"))
-    in
-    ingest values
-    >>= (function
-          | Error e -> deny 400 e
-          | Ok () ->
-    match
-      (Tree_prims.validate_prefix "src_prefix" src
-      , Tree_prims.validate_prefix "dst_prefix" dst)
-    with
-    | Some e, _ | _, Some e -> deny 400 e
-    | None, None -> (
-        match parse_all () with
-        | Error e -> deny 400 e
-        | Ok parsed -> (
-            let rows =
-              List.map (fun (o, h) -> { Store.w_op = o; w_prev_hash = h }) parsed
-            in
-            match Store.verify_window_rows rows with
-            | `Bad msg -> deny 400 ("window chain broken: " ^ msg)
-            | `Ok ->
-            let allowed =
-              if auth.auth_is_admin then true
-              else
-                match fed_peer_of_name auth.auth_name with
-                | Some peer ->
-                    let ns = "ns/" ^ peer ^ "/" in
-                    String.length dst >= String.length ns
-                    && String.sub dst 0 (String.length ns) = ns
-                | None -> false
-            in
-            if not allowed then
-              deny 403
-                (Printf.sprintf
-                   "identity %s may not write destination %S (peers write \
-                    only ns/<peer>/...)" auth.auth_name dst)
+      (* a2 (todo/a2-fed-apply-cap): every check now runs BEFORE the
+         value ingest, so a denied apply plants nothing in the store -
+         the old order ingested inline values before the peer/ns
+         authorization check, an un-capped byte-values law 3 bypass.
+         The ingest shares value_put_kind's 413 value cap; the fed path
+         itself stays deliberately grant-free (the peer trusts nothing
+         but the rehash), so it cannot route through value_put_kind. *)
+      let ingest_value v =
+        match
+          (get_string_opt v "hash", get_string_opt v "kind",
+           get_string_opt v "payload")
+        with
+        | Some hash, Some "tree", Some payload -> (
+            if String.length payload > Store.value_max_bytes () then
+              return
+                (Error
+                   ( 413
+                   , Printf.sprintf "value %s exceeds the value cap" hash ))
             else
-              Store.fed_apply pool ~actor:auth.auth_id ~dst_prefix:dst
-                ~src_prefix:src parsed
+              let hash = Tuna.Hash.normalize_hex hash in
+              let got = Tuna.Hash.hex_of_string payload in
+              if got <> hash then
+                return
+                  (Error
+                     ( 400
+                     , Printf.sprintf "value %s does not rehash" hash ))
+              else
+                Store.value_put pool ~hash ~ternary:payload
+                >>= fun () -> return (Ok ()))
+        | Some hash, Some "bytes", Some payload -> (
+            if String.length payload > Store.value_max_bytes () then
+              return
+                (Error
+                   ( 413
+                   , Printf.sprintf "value %s exceeds the value cap" hash ))
+            else
+              match Base64.decode payload with
+              | Error _ ->
+                  return
+                    (Error
+                       ( 400
+                       , Printf.sprintf
+                           "value %s: payload is not base64" hash ))
+              | Ok b ->
+                  let got = Store.byte_hash b in
+                  if got <> hash then
+                    return
+                      (Error
+                         ( 400
+                         , Printf.sprintf "value %s does not rehash" hash ))
+                  else
+                    Store.byte_value_put pool ~hash ~bytes:b
+                    >>= fun () -> return (Ok ()))
+        | _ ->
+            return
+              (Error
+                 ( 400
+                 , "each value needs hash, kind (tree|bytes) and payload" ))
+      in
+      let rec ingest = function
+        | [] -> return (Ok ())
+        | v :: rest -> (
+            match v with
+            | `Assoc _ -> (
+                ingest_value v >>= function
+                | Error e -> return (Error e)
+                | Ok () -> ingest rest)
+            | _ ->
+                return (Error (400, "each value must be a JSON object")))
+      in
+      match
+        (Tree_prims.validate_prefix "src_prefix" src
+        , Tree_prims.validate_prefix "dst_prefix" dst)
+      with
+      | Some e, _ | _, Some e -> deny 400 e
+      | None, None -> (
+          let allowed =
+            if auth.auth_is_admin then true
+            else
+              match fed_peer_of_name auth.auth_name with
+              | Some peer ->
+                  let ns = "ns/" ^ peer ^ "/" in
+                  String.length dst >= String.length ns
+                  && String.sub dst 0 (String.length ns) = ns
+              | None -> false
+          in
+          if not allowed then
+            deny 403
+              (Printf.sprintf
+                 "identity %s may not write destination %S (peers write \
+                  only ns/<peer>/...)" auth.auth_name dst)
+          else
+            match parse_all () with
+            | Error e -> deny 400 e
+            | Ok parsed -> (
+                let rows =
+                  List.map
+                    (fun (o, h) -> { Store.w_op = o; w_prev_hash = h })
+                    parsed
+                in
+                match Store.verify_window_rows rows with
+                | `Bad msg -> deny 400 ("window chain broken: " ^ msg)
+                | `Ok ->
+                    ingest values
+                    >>= (function
+                          | Error (code, e) -> deny code e
+                          | Ok () ->
+                              Store.fed_apply pool ~actor:auth.auth_id
+                                ~dst_prefix:dst ~src_prefix:src parsed
               >>= fun result ->
               match result with
               | `Refused msg -> deny 400 msg
