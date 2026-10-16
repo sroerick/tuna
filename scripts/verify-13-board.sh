@@ -67,6 +67,28 @@ TUNA_HTTP_PORT="${TUNA_HTTP_PORT:-18090}" \
 
 # --- 13.6 MIGRATION + the 13.1 byte-free invariant -----------------------
 echo "[13.6] migration: seed legacy fixtures, migrate twice, assert fields"
+
+# Seed the legacy fixtures the field asserts read (13.6 must be
+# self-contained: a fresh cluster never had the pre-L7 byte rows).
+# Idempotent: only absent rows are inserted, so a re-run never resets
+# values the migration already re-encoded.
+LEG_ISO0=$(date -u -d @1790856000 +%Y-%m-%dT%H:%M:%SZ)
+LEG_ISO1=$(date -u -d @1790933400 +%Y-%m-%dT%H:%M:%SZ)
+seed_legacy() { # $1 path, $2 payload bytes (no single quotes)
+  local H=$(printf '%s' "$2" | sha256sum | cut -d' ' -f1)
+  local PH=$(printf '%s' "$1" | sha256sum | cut -d' ' -f1)
+  psql_q -q -c "INSERT INTO byte_values (hash, bytes) VALUES ('$H', convert_to('$2','UTF8')) ON CONFLICT (hash) DO NOTHING"
+  psql_q -q -c "INSERT INTO tree_paths (path, path_hash, value_hash, version, owner) VALUES ('$1', '$PH', '$H', 1, 'legacy-seed') ON CONFLICT (path_hash) DO NOTHING"
+}
+if [ "$(psql_q -tAc "SELECT count(*) FROM tree_paths WHERE path='todo/legacy-tests-000'" | tr -d ' ')" = "0" ]; then
+  seed_legacy "todo/legacy-tests-000" '{"title":"legacy item one","state":"open","created_by":"smoke","created_at":"'"$LEG_ISO0"'"}'
+fi
+if [ "$(psql_q -tAc "SELECT count(*) FROM tree_paths WHERE path='todo/legacy-tests-001'" | tr -d ' ')" = "0" ]; then
+  seed_legacy "todo/legacy-tests-001" '{"title":"legacy \"quoted\" title","state":"done","created_by":"smoke","created_at":"'"$LEG_ISO1"'"}'
+fi
+if [ "$(psql_q -tAc "SELECT count(*) FROM tree_paths WHERE path='todo/legacy-tests-002'" | tr -d ' ')" = "0" ]; then
+  seed_legacy "todo/legacy-tests-002" 'not-json-bytes'
+fi
 LEGACY_N=$(psql_q -tAc "SELECT count(*) FROM tree_paths tp JOIN byte_values bv ON tp.value_hash = bv.hash WHERE tp.path LIKE 'todo/%'")
 TUNA_HTTP_PORT="${TUNA_HTTP_PORT:-18090}" \
   python3 scripts/dialect/board_migrate.py > /dev/null \
