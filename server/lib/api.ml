@@ -1215,14 +1215,35 @@ let get_grants pool auth req =
    These endpoints are the HOST surface of the substrate (bearer-authed
    like every /api/* route; the actor is the calling identity).  They
    journal every op into the tree_ops chain with NULL-value_hash rows
-   for reads and failed writes, exactly like the prim boundary; prim
-   grants do not gate them (grants gate the calculus boundary, per
-   grants.borg - the host API is the operator surface).  /api/tree/log
-   and /api/tree/state are the rewind surface: clients fold ops. *)
+   for reads and failed writes, exactly like the prim boundary.
+   /api/tree/log and /api/tree/state are the rewind surface: clients
+   fold ops.
+
+   AUTHORIZATION (todo/g1-allowlist-deny-all; owner decision 2026-10-15).
+   Agent tree ops are deny-all with explicit grants: every get/put(cas)/
+   list requires a live grant of the caller whose path_prefix covers the
+   op's path - the same covering-grant floor as route publish/delete
+   (routes.ml allowed; a NULL prefix covers everything) - and admins
+   bypass.  Grants still gate the calculus boundary per grants.borg;
+   this floors the host API too.  Denials are journaled op rows like
+   every other answer. *)
 
 let journal_tree_op pool ~actor ~op ~path ?value_hash ?prev_version ?version () =
   Store.op_append pool ~op ~path ~value_hash ~prev_version ~version ~actor
   >>= fun _ -> return ()
+
+(* the g1 floor: admin bypass, else a live covering grant (routes.ml
+   allowed).  Reads and writes gate the same way; a NULL-prefix grant
+   covers everything. *)
+let tree_allowed pool (auth : auth) path =
+  if auth.auth_is_admin then return true
+  else Store.has_covering_grant pool auth.auth_id path
+
+(* a denied op is still an answer: journal it, then 403 like routes *)
+let deny_tree pool (auth : auth) ~op ~path =
+  journal_tree_op pool ~actor:auth.auth_id ~op ~path ()
+  >>= fun () ->
+  j_err ~code:403 (Printf.sprintf "no covering grant for %s" path)
 
 let entry_json (e : Store.path_entry) : J.t =
   `Assoc
@@ -1270,6 +1291,10 @@ let post_tree_get pool auth req =
           match Tree_prims.check_path "path" path with
           | Error e -> (j_err e)
           | Ok path -> (
+            tree_allowed pool auth path
+            >>= function
+            | false -> deny_tree pool auth ~op:"get" ~path
+            | true ->
               Store.path_get pool ~path
               >>= function
               | None ->
@@ -1350,6 +1375,10 @@ let post_tree_put pool auth req =
               match parse_ternary value_ternary with
               | Error msg -> (j_err ("value_ternary: " ^ msg))
               | Ok _value ->
+                    tree_allowed pool auth path
+                    >>= function
+                    | false -> deny_tree pool auth ~op:"put" ~path
+                    | true ->
                   if String.length value_ternary > Prims.payload_cap then
                     (j_err "value exceeds the journal payload cap")
                   else
@@ -1369,6 +1398,10 @@ let post_tree_list pool auth req =
       match Tree_prims.validate_prefix "prefix" prefix with
       | Some e -> (j_err e)
       | None -> (
+            tree_allowed pool auth prefix
+            >>= function
+            | false -> deny_tree pool auth ~op:"list" ~path:prefix
+            | true ->
           Store.path_list pool ~prefix ~limit ()
           >>= fun entries ->
           journal_tree_op pool ~actor:auth.auth_id ~op:"list" ~path:prefix ()

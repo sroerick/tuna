@@ -69,6 +69,23 @@
       (grants are the only capability at a prim boundary, and route
       publish requires a covering grant).  No second permission
       matrix was added - the audit found no hole that needed one. |))))
+(* agent note (|2026-10-16 g1 ENFORCEMENT (owner decision 2026-10-15,
+        board card todo/g1-allowlist-deny-all): the boundary audit above
+        held at the prim boundary from the start, but the DIRECT host API
+        (/api/tree/get, /api/tree/put incl. CAS, /api/tree/list) was the
+        gap - any authenticated identity could read/write/list any path
+        under the old "the host API is the operator surface" stance
+        (retired).  Agent tree ops are now deny-all with explicit grants:
+        every op requires a live covering grant of the caller
+        (path_prefix covers the op path, NULL prefix covers everything),
+        admins bypass - the same rule as route publish/delete
+        (api.ml tree_allowed/deny_tree).  Denials are journaled op rows.
+        verify-1 [1.6] pins the floor: grantless 403s journaled, a
+        covering grant opens exactly its prefix, admin bypass.  Open
+        teeth: the public mint ignores path_prefix (noted in
+        board_probe), so a member can self-mint an unscoped grant and
+        cover everything - pre-existing grant-model law; g2/identity
+        work may tighten it.|) *)
   (subsection public-rim
    (status implemented)
    (details

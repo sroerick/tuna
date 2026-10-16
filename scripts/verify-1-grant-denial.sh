@@ -116,4 +116,51 @@ V=$(run_verify_status "$D_ID")
 V2=$(run_verify_status "$A_ID")
 [ "$V2" = "verified" ] || fail "attenuation-denied run must verify, got $V2"
 
+echo "[1.6] agent tree ops: deny-all with explicit grants (todo/g1, the direct-API floor)"
+# The direct tree API is no longer the operator side-door: an agent identity
+# with NO covering grant is denied (403, journaled) on get/put/list; a live
+# covering grant opens exactly what it covers; admins bypass.  Mirrors the
+# route publish/delete floor (routes.ml allowed, has_covering_grant).
+FLOOR="verify1-floor-$(date +%s)"
+MEM_NAME="$FLOOR-member"
+MEM=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"name\":\"$MEM_NAME\"}" $BASE/api/identities) \
+  || fail "mint floor member"
+MAUTH="Authorization: Bearer $(echo "$MEM" | jget "d['token']")"
+MEM_ID=$(psql_q -tAc "SELECT id::text FROM identities WHERE name='$MEM_NAME'" | tr -d ' ')
+[ -n "$MEM_ID" ] || fail "floor member missing from identities"
+tj() { curl_code -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
+  --data-binary "$2" "$BASE/api/tree/$1"; }
+[ "$(tj put  "{\"path\":\"$FLOOR/x\",\"value_ternary\":\"10\"}")" = 403 ] \
+  || fail "grantless member tree/put must 403"
+[ "$(tj get  "{\"path\":\"$FLOOR/x\"}")" = 403 ] \
+  || fail "grantless member tree/get must 403"
+[ "$(tj list "{\"prefix\":\"$FLOOR/\"}")" = 403 ] \
+  || fail "grantless member tree/list must 403"
+NJ=$(psql_q -tAc \
+  "SELECT count(*) FROM tree_ops WHERE actor='$MEM_ID' AND path LIKE '$FLOOR%'" \
+  | tr -d ' ')
+[ "$NJ" -ge 3 ] || fail "denied tree ops must be journaled (got $NJ rows)"
+echo "  deny-all holds: grantless 403 x3, denials journaled ($NJ rows)"
+# an explicit covering grant opens exactly the prefix (mint + attenuate;
+# the unscoped parent stays alive - revoking it would kill the child)
+MG=$(curl -sf -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
+  --data-binary '{"prim":"tree/put"}' $BASE/api/grants | jget "d['id']")
+SC=$(curl -sf -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"path_prefix\":\"$FLOOR/\",\"args_attenuation\":\"null\"}" \
+  $BASE/api/grants/$MG/attenuate | jget "d['grant']['id']") \
+  || fail "member attenuate to a covering prefix"
+[ -n "$SC" ] || fail "attenuate returned no child grant"
+[ "$(tj put  "{\"path\":\"$FLOOR/x\",\"value_ternary\":\"10\"}")" = 201 ] \
+  || fail "covered in-prefix put must 201"
+[ "$(tj get  "{\"path\":\"$FLOOR/x\"}")" = 200 ] \
+  || fail "covered in-prefix get must 200"
+[ "$(tj list "{\"prefix\":\"$FLOOR/\"}")" = 200 ] \
+  || fail "covered in-prefix list must 200"
+echo "  explicit grant opens the prefix (put 201 / get 200 / list 200)"
+# the admin tier bypasses the floor (same rule as route publish)
+[ "$(curl_code -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"path\":\"$FLOOR/root\",\"value_ternary\":\"10\"}" \
+  $BASE/api/tree/put)" = 201 ] || fail "admin tree/put must bypass the floor"
+echo "  admin bypass pinned"
 echo "ACCEPT 1 OK: grant denial journaled, run continues, replay verifies"
