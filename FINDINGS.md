@@ -601,3 +601,45 @@ error answer with denial_count >= 1 - never a silent pass and never
 a submission refusal either.
 
 ---
+
+## NON-F — HEALTH-GATE AUTOPSY, fe8515e (g5, the run-primitive health
+## mystery)
+
+fe8515e is a PRICKLYPEAR commit (merge of wyo/master, 2026-10-15
+03:29Z, bringing libs/tuna FED3 PP-half v0 plus a lisp/lib/env.ml
+change), not a tuna commit — the gate it is blamed against lives in
+PP's openbsd deploy machinery.  What the autopsy found:
+
+1. THE GATE CLASS.  `pricklypear-promote.ksh` gates a flip on
+   `http://127.0.0.1:18080/health`; `pricklypear-watchdog.ksh` liveness
+   is rc_check/health-only ("a healthy listener IS a healthy service",
+   2026-08-21 lesson) with a documented ghost-listener failure mode:
+   "health was measured against a ghost" (2026-09-03) — a surviving
+   orphan answers /health while the pidfile names no live pid, which is
+   why the watchdog requires the pidfile cross-check before declaring
+   success.
+
+2. THE LOCALLY CONFIRMED INSTANCE (this host, 2026-10-16): a stale
+   glochid `bin/main.exe --serve --port 18090` (pid 950, started
+   outside dev.sh, no pidfile) held :18090 — the port every tuna dev
+   tool defaults to — and answered 404 `no route /health`, while
+   tuna's dev server had silently drifted to :18091.  Any health gate
+   or probe pointed at :18090/health measured the ghost: a hard 404
+   against a healthy (or absent) tuna, or — the dangerous direction —
+   a healthy answer from the wrong process.
+
+3. THE CLASS IS PRE-REGISTERED ON THE PP SIDE TOO: the D4 recon's
+   resolved mystery ("(schedules) -> [] ... the probe hit town (wrong
+   instance)") is the same shape — a probe measured an instance that
+   was not the one under test.
+
+DISPOSITION: not a tuna defect; a probe-ownership defect.  The settle
+check on any host where fe8515e's gate is in question is the
+watchdog's own rule applied at the gate: confirm the pid answering
+:PORT/health is the pid the service's pidfile (or the just-promoted
+release) names before believing either verdict.  Tuna-side hygiene
+recorded: dev.sh's pidfile discipline is correct, but nothing kills an
+out-of-band squatter — the port-squat was only found because /health
+404ed with a foreign error page.
+
+---
