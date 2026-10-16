@@ -123,15 +123,28 @@ let authenticate pool req =
      CSRF is the recorded honest limitation, SameSite=Lax only) *)
   match bearer_token req with
   | Some token -> (
-      Store.verify_token pool token
-      >>= function
-      | None -> return None
-      | Some i ->
-          return
-            (Some
-               { auth_id = i.Store.i_id
-               ; auth_name = i.Store.i_name
-               ; auth_is_admin = i.Store.i_is_admin }))
+        Store.verify_token pool token
+        >>= function
+        | Some i ->
+            return
+              (Some
+                 { auth_id = i.Store.i_id
+                 ; auth_name = i.Store.i_name
+                 ; auth_is_admin = i.Store.i_is_admin })
+        | None ->
+            (* g2 runner tokens (the glochid issue-token precedent): a
+               live issued token is FULL bearer parity - the same
+               identity row - so grants and the tree-op floor apply
+               unchanged. *)
+            Store.verify_runner_token pool token
+            >>= function
+            | None -> return None
+            | Some i ->
+                return
+                  (Some
+                     { auth_id = i.Store.i_id
+                     ; auth_name = i.Store.i_name
+                     ; auth_is_admin = i.Store.i_is_admin }))
   | None -> (
       match Web.cookie req ~decrypt:false Auth.cookie_name with
       | None -> return None
@@ -1113,6 +1126,64 @@ let post_identity_rotate pool auth req =
                    ; ("is_admin", `Bool i.Store.i_is_admin)
                    ; ("token", `String token) ])))
 
+
+(* -- runner tokens (0016, todo/g2-parity-identities): the glochid
+   issue-token precedent.  The OPERATOR (admin) issues a named,
+   individually revocable Bearer for a runner to hold; the raw token
+   leaves the process exactly once.  A live token authenticates at
+   full bearer parity (authenticate); the identity's primary token is
+   never shared with the runner. *)
+let runner_token_json (t : Store.runner_token) : J.t =
+  `Assoc
+    [ ("id", `String t.Store.rt_id)
+    ; ("name", `String t.Store.rt_name)
+    ; ("created_at", `String t.Store.rt_created_at)
+    ; ("last_used_at", opt_str t.Store.rt_last_used_at)
+    ; ("revoked_at", opt_str t.Store.rt_revoked_at) ]
+
+let post_identity_token pool auth req =
+  let id = Web.param req "id" in
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      if not auth.auth_is_admin then
+        (j_err ~code:403 "only admins issue runner tokens")
+      else
+        match get_string_opt j "name" with
+        | None -> (j_err "missing \"name\"")
+        | Some name -> (
+            Store.fetch_identity pool id
+            >>= function
+            | None -> (j_err ~code:404 "unknown identity")
+            | Some _ -> (
+                Store.mint_runner_token pool ~identity_id:id ~name
+                >>= fun (rt_id, token) ->
+                j_ok ~code:201
+                  (`Assoc
+                     [ ("id", `String rt_id)
+                     ; ("identity_id", `String id)
+                     ; ("name", `String name)
+                     ; ("token", `String token) ]))))
+
+let get_identity_tokens pool auth req =
+  let id = Web.param req "id" in
+  if auth.auth_id <> id && not auth.auth_is_admin then
+    (j_err ~code:403 "not this identity's token roster")
+  else
+    Store.list_runner_tokens pool ~identity_id:id
+    >>= fun toks ->
+    j_ok (`Assoc [ ("tokens", `List (List.map runner_token_json toks)) ])
+
+let post_identity_token_revoke pool auth req =
+  let id = Web.param req "id" in
+  let tid = Web.param req "tid" in
+  if auth.auth_id <> id && not auth.auth_is_admin then
+    (j_err ~code:403 "not this identity's token roster")
+  else
+    Store.revoke_runner_token pool ~identity_id:id ~token_id:tid
+    >>= function
+    | false -> (j_err ~code:404 "no such live token")
+    | true -> j_ok (`Assoc [ ("ok", `Bool true) ])
 (* delegation-attenuation (grants.borg §delegation-attenuation): mint a
    narrower grant FROM an existing one.  Only the holder may attenuate
    (the store enforces holder + live lineage + proven narrowing); the
@@ -2153,6 +2224,12 @@ let api_routes pool =
       ; Web.get "/api/identities" (with_auth pool (get_identities pool))
       ; Web.post "/api/identities/:id/rotate"
           (with_auth pool (post_identity_rotate pool))
+      ; Web.post "/api/identities/:id/tokens"
+          (with_auth pool (post_identity_token pool))
+      ; Web.get "/api/identities/:id/tokens"
+          (with_auth pool (get_identity_tokens pool))
+      ; Web.post "/api/identities/:id/tokens/:tid/revoke"
+          (with_auth pool (post_identity_token_revoke pool))
       ; Web.post "/api/grants/:id/attenuate" (with_auth pool (attenuate_grant pool))
       ; Web.get "/api/grants/:id" (with_auth pool (get_grant pool))
       ; Web.post "/api/grants/:id/revoke" (with_auth pool (revoke_grant pool))

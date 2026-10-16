@@ -163,4 +163,40 @@ echo "  explicit grant opens the prefix (put 201 / get 200 / list 200)"
   --data-binary "{\"path\":\"$FLOOR/root\",\"value_ternary\":\"10\"}" \
   $BASE/api/tree/put)" = 201 ] || fail "admin tree/put must bypass the floor"
 echo "  admin bypass pinned"
+echo "[1.7] runner tokens: revocable Bearer at parity (todo/g2, the issue-token precedent)"
+# the operator issues a named token to a fresh runner identity; the raw
+# token leaves the process exactly once (glochid issue-token precedent)
+RUNNER_NAME="verify1-runner-$(date +%s)"
+RID=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"name\":\"$RUNNER_NAME\"}" $BASE/api/identities | jget "d['id']")
+RTOK=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary '{"name":"glochid-bridge"}' "$BASE/api/identities/$RID/tokens")
+RT=$(echo "$RTOK" | jget "d['token']")
+RT_ID=$(echo "$RTOK" | jget "d['id']")
+RTAUTH="Authorization: Bearer $RT"
+# full bearer parity: the issued token drives /api/* as the identity
+curl -sf -H "$RTAUTH" $BASE/api/runs > /dev/null \
+  || fail "runner token must authenticate at bearer parity"
+# the g1 floor applies through it: grantless tree ops 403
+[ "$(curl_code -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
+    --data-binary "{\"path\":\"$FLOOR/runner\",\"value_ternary\":\"10\"}" \
+    $BASE/api/tree/put)" = 403 ] || fail "runner token inherits the tree-op floor"
+# a covering grant the runner mints itself opens exactly its prefix
+RG=$(curl -sf -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
+  --data-binary '{"prim":"tree/put"}' $BASE/api/grants | jget "d['id']")
+RSC=$(curl -sf -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"path_prefix\":\"$FLOOR/\"}" \
+  $BASE/api/grants/$RG/attenuate | jget "d['grant']['id']")
+[ -n "$RSC" ] || fail "runner attenuate to a covering prefix"
+[ "$(curl_code -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
+    --data-binary "{\"path\":\"$FLOOR/runner\",\"value_ternary\":\"10\"}" \
+    $BASE/api/tree/put)" = 201 ] || fail "covered runner put must 201"
+# revocation bites; the identity's PRIMARY token is untouched
+curl -sf -X POST -H "$AUTH" "$BASE/api/identities/$RID/tokens/$RT_ID/revoke" > /dev/null \
+  || fail "revoke runner token"
+[ "$(curl_code -H "$RTAUTH" $BASE/api/runs)" = 401 ] \
+  || fail "revoked runner token must 401"
+curl -sf -H "$MAUTH" $BASE/api/runs > /dev/null \
+  || fail "primary token must survive the runner-token revoke"
+echo "  issue -> parity use -> floor 403 -> covered 201 -> revoke 401; primary intact"
 echo "ACCEPT 1 OK: grant denial journaled, run continues, replay verifies"

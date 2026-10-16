@@ -1332,6 +1332,94 @@ let revoke_session p token =
       >>= fun () -> Direct.return ())
     (fun _ -> Direct.return ())
 
+(* -- runner tokens (0016, todo/g2-parity-identities): the glochid
+   issue-token precedent — a NAMED, individually revocable Bearer per
+   identity, so a runner holds a revocable credential, never the
+   operator's primary token.  A live token resolves to the SAME
+   identity row verify_token answers with (full bearer parity), so
+   grants and the tree-op floor apply unchanged.  Revocation is the
+   whole lifecycle: no TTL. *)
+
+(* returns (row id, raw token); the raw token leaves the process
+   exactly once, in the mint answer *)
+let mint_runner_token p ~identity_id ~name =
+  let token = Credentials.mint_session_token () in
+  Db.q
+    ~params:
+      [ p_str identity_id; p_str name; p_str (Tuna.Hash.hex_of_string token) ]
+    p
+    "INSERT INTO runner_tokens (identity_id, name, token_hash) \
+     VALUES ($1::uuid, $2, $3) RETURNING id::text"
+  >>= fun rows ->
+  match rows with
+  | [ r ] -> Direct.return (text r 0 "runner_tokens.id", token)
+  | n -> store_error "mint_runner_token: RETURNING gave %d rows" (List.length n)
+
+type runner_token = {
+  rt_id : string
+; rt_name : string
+; rt_created_at : string
+; rt_last_used_at : string option
+; rt_revoked_at : string option
+}
+
+let list_runner_tokens p ~identity_id =
+  Db.q
+    ~params:[ p_str identity_id ]
+    p
+    "SELECT id::text, name, created_at::text, last_used_at::text, \
+     revoked_at::text FROM runner_tokens WHERE identity_id = $1::uuid \
+     ORDER BY created_at"
+  >>= fun rows ->
+  Direct.return
+    (List.map
+       (fun r ->
+         { rt_id = text r 0 "runner_tokens.id"
+         ; rt_name = text r 1 "runner_tokens.name"
+         ; rt_created_at = text r 2 "runner_tokens.created_at"
+         ; rt_last_used_at = opt_text r 3
+         ; rt_revoked_at = opt_text r 4 })
+       rows)
+
+(* revoke one of the identity's own tokens by row id; [false] = unknown
+   id, already revoked, or not this identity's row (caller answers 404) *)
+let revoke_runner_token p ~identity_id ~token_id =
+  Db.q
+    ~params:[ p_str token_id; p_str identity_id ]
+    p
+    "UPDATE runner_tokens SET revoked_at = now() \
+     WHERE id = $1::uuid AND identity_id = $2::uuid AND revoked_at IS NULL \
+     RETURNING id::text"
+  >>= fun rows -> Direct.return (match rows with [ _ ] -> true | _ -> false)
+
+(* bearer parity: same identity row verify_token answers with.  The
+   last_used_at touch is best-effort forensics (a single indexed row;
+   swallowed so a touch failure never breaks authentication). *)
+let verify_runner_token p token =
+  if String.length token = 0 then Direct.return None
+  else
+    Db.q
+      ~params:[ p_str (Tuna.Hash.hex_of_string token) ]
+      p
+      "SELECT i.id::text, i.name, i.token_hash, i.is_admin \
+       FROM runner_tokens t JOIN identities i ON i.id = t.identity_id \
+       WHERE t.token_hash = $1 AND t.revoked_at IS NULL LIMIT 1"
+    >>= fun rows ->
+    (match rows with
+     | [] -> Direct.return None
+     | [ r ] ->
+         let i = identity_of_row r in
+         Direct.catch
+           (fun () ->
+             Db.q_unit
+               ~params:[ p_str (Tuna.Hash.hex_of_string token) ]
+               p
+               "UPDATE runner_tokens SET last_used_at = now() \
+                WHERE token_hash = $1 AND revoked_at IS NULL"
+             >>= fun () -> Direct.return (Some i))
+            (fun _ -> Direct.return (Some i))
+      | _ -> Direct.return None)
+
 (* -- tree substrate: derived path index + chained op log (M10) --------
 
    migrations 0005/0006.  Law (tuna.borg watch note): content-addressed

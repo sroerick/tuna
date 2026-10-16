@@ -86,6 +86,24 @@
         board_probe), so a member can self-mint an unscoped grant and
         cover everything - pre-existing grant-model law; g2/identity
         work may tighten it.|) *)
+
+(* agent note (|2026-10-16 g2 RUNNER TOKENS (the glochid issue-token
+        precedent, PP run-primitive.borg §identity + POLICY-5; board card
+        todo/g2-parity-identities): tuna identities are now at Bearer
+        PARITY with the bridge law - an operator (admin) issues a NAMED,
+        individually revocable Bearer to an identity for a runner to hold
+        (migration 0016 runner_tokens; api.ml /api/identities/:id/tokens
+        mint|list|revoke), the raw token leaves the process exactly once,
+        and a live token authenticates as the SAME identity row at FULL
+        bearer parity (authenticate falls back to verify_runner_token),
+        so grants and the g1 tree-op floor apply unchanged.  Revocation
+        is the whole lifecycle (no TTL); the identity's primary token is
+        never shared with the runner and survives a revoke.  ONE IDENTITY
+        PER RUNNER stays the PP law: mint the identity, then issue its
+        runner token.  verify-1 [1.7] pins: issue -> parity use -> floor
+        403 -> covered put 201 -> revoke -> 401, primary intact.  D4 Q5
+        (per-runner identities with deny-all allowlists) is now drivable
+        end to end against tuna.|) *)
   (subsection public-rim
    (status implemented)
    (details
