@@ -279,6 +279,49 @@ fragment and the flip procedure are in
 forward to `127.0.0.1:$TUNA_HTTP_PORT`; tuna never sees a private key.
 Per-instance secrets live in an env file (mode 600), never in the tree.
 
+## Running as an identity + token rotation (pp-slice)
+
+`tuna-as.sh` is the host-side wrapper that runs one API call as a given
+identity: it sources the identity's bearer from a mode-600 env file and
+execs the call — the runner (or the operator driving one) holds a
+revocable credential, never the operator's password.  The canonical copy
+lives at `~/bin/tuna-as.sh` on the serving host and the rotation runbook
+on tuna-deriv/club; this section is the in-repo record of the token
+machinery those procedures drive, so they cannot evaporate.
+
+- **Runners (the issue-token law).**  One identity per runner; the
+  operator issues a named, individually revocable Bearer and hands it
+  over once:
+
+  ```
+  curl -X POST -H "$AUTH" -d '{"name":"vultr-runner-1"}' \
+    $BASE/api/identities/$RID/tokens      # raw token returned exactly once
+  curl -H "$AUTH" $BASE/api/identities/$RID/tokens           # roster, no hashes
+  curl -X POST -H "$AUTH" $BASE/api/identities/$RID/tokens/$TID/revoke
+  ```
+
+  A live runner token authenticates at full bearer parity (the same
+  identity row), so grants and the tree-op floor apply unchanged;
+  revocation bites live and never touches the identity's primary token.
+  Rotation is issue-new -> move the env file -> revoke-old, with no
+  unauthenticated window.
+
+- **Bootstrap (root).**  `TUNA_BOOTSTRAP_TOKEN` in the instance env
+  file ensures the root row each boot.  The insert is deliberately
+  `ON CONFLICT DO NOTHING`: a changed env value cannot silently take
+  over an existing identity — which also means the primary bearer has
+  no rotate path in-repo today.  That is the recorded gap (an admin
+  token-rotate endpoint is the natural future fix); operationally, hold
+  a runner token to a dedicated identity in the env file instead of
+  root's bearer whenever automation allows it.
+
+- **Fed peers.**  Boot mints one per `TUNA_FED_PEERS` name (generated
+  token printed once); `TUNA_FED_PEER_TOKEN_<NAME>` pins a value across
+  restarts.  Peers write only `ns/<peer>/...` (borg/federation.borg).
+
+- **Service identities** (`sabralib`, `board`) seed at boot the same
+  way; their printed-once tokens live in the boot log / env file only,
+  never in rows or chat.
 ## Honest limitations (pp-slice)
 
 Recorded, not hidden:
