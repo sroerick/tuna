@@ -104,6 +104,20 @@
         403 -> covered put 201 -> revoke -> 401, primary intact.  D4 Q5
         (per-runner identities with deny-all allowlists) is now drivable
         end to end against tuna.|) *)
+
+(* agent note (|2026-10-16 a1 RUN VISIBILITY (board card
+        todo/a1-run-authz): run rows are attributable to their caller,
+        and the run-scoped API now enforces it - get/journal/deriv/
+        trace/fork/live-replay/gc answer to the owning identity and
+        admins (404 to anyone else, no existence leak), list_runs
+        scopes non-admins to their own runs, and the verify sweep is an
+        operator surface (all=1 is admin-only; the status view is
+        caller-scoped).  Rows with no caller (pre-attribution v0 rows)
+        answer to admins only.  The public /code browser stays a server
+        page, not this law.  Wrinkle recorded: fork_journal inherits
+        the parent's caller, so an admin fork of a member's run is
+        attributed to the member - defensible for counterfactual
+        history, revisit if forks become a user-facing act.|) *)
   (subsection public-rim
    (status implemented)
    (details

@@ -178,6 +178,14 @@ let with_auth pool handler req =
        (j_err ~code:401 "unauthorized: valid bearer token required")
   | Some auth -> guard (fun () -> handler auth req)
 
+(* a1 (todo/a1-run-authz): run rows are attributable to their caller.
+   Run-scoped reads and management answer to the owning identity and
+   admins; anyone else gets 404 (no existence leak).  Rows with no
+   caller (pre-attribution v0 rows) answer to admins only.  The public
+   /code browser stays a server page, not this law. *)
+let run_visible (auth : auth) (r : Store.run) : bool =
+  auth.auth_is_admin || r.Store.r_caller = Some auth.auth_id
+
 (* -- row json -------------------------------------------------------- *)
 
 let grant_json (g : Store.grant) : J.t =
@@ -567,18 +575,21 @@ let verdict_json pool ~(program_hash : string) (run_id : string)
 
 (* GET /api/runs/:id — auto-verify on fetch: an unverified finished run
    is replay-verified inline and the verdict recorded (verify_status). *)
-let get_run pool _auth req =
+let get_run pool auth req =
   let id = Web.param req "id" in
   Store.fetch_run_resolved pool id
   >>= function
   | None ->  (j_err ~code:404 "unknown run id")
-  | Some (id, r) ->
-      (match (r.Store.r_verify_status, r.Store.r_status) with
-       | None, Store.Run_status.Running -> return ()
-         | None, _ ->
-             Replay.verify_and_record pool ~run_id:id ~deadline:(Run.deadline_now ()) ()
-             >>= fun _ -> return ()
-       | Some _, _ -> return ())
+    | Some (id, r) ->
+        if not (run_visible auth r) then (j_err ~code:404 "unknown run id")
+        else
+          (match (r.Store.r_verify_status, r.Store.r_status) with
+           | None, Store.Run_status.Running -> return ()
+           | None, _ ->
+               Replay.verify_and_record pool ~run_id:id
+                 ~deadline:(Run.deadline_now ()) ()
+               >>= fun _ -> return ()
+           | Some _, _ -> return ())
       >>= fun () ->
       Store.fetch_run pool id
       >>= function
@@ -614,10 +625,17 @@ let get_run pool _auth req =
    Tuna_deriv.  Served VERBATIM so '| deriv-check -' verifies offline.
    404 unknown run/missing bytes; 409 when no record exists (running,
    wall-clock abort, error row). *)
-let get_deriv pool _auth req =
-  Deriv.of_run pool ~run_id:(Web.param req "id")
-  >>= fun (code, body) ->
-  Web.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
+let get_deriv pool auth req =
+  let id = Web.param req "id" in
+  Store.fetch_run pool id
+  >>= function
+  | None -> (j_err ~code:404 "unknown run id")
+  | Some r when not (run_visible auth r) ->
+      (j_err ~code:404 "unknown run id")
+  | Some _ ->
+      Deriv.of_run pool ~run_id:id
+      >>= fun (code, body) ->
+      Web.respond ~code ~headers:[ ("Content-Type", "application/json") ] body
 
 (* -- run traces (borg/trace.borg) ------------------------------------- *)
 
@@ -645,7 +663,7 @@ let trace_event_json (e : Store.trace_event) : J.t =
    capped event pages, seq-ordered.  404 when the run has no trace (an
    untraced run or an unknown id).  Observability only: the events are
    notes ABOUT the run row's numbers, never part of its verdict. *)
-let get_run_trace pool _auth req =
+let get_run_trace pool auth req =
   let id = Web.param req "id" in
   let after =
     match Web.query req "after" with
@@ -661,26 +679,35 @@ let get_run_trace pool _auth req =
         | _ -> 200)
     | None -> 200
   in
-  Store.resolve_run_id pool id
-  >>= function
-  | None -> j_err ~code:404 "run has no trace"
-  | Some id -> Store.fetch_run_trace pool id
-  >>= function
-  | None -> j_err ~code:404 "run has no trace"
-  | Some s ->
-      Store.fetch_trace_events pool id ~after_seq:after ~limit
-      >>= fun evs ->
-      j_ok
-        (`Assoc
-          [ ("run_id", `String id)
-          ; ("trace", trace_json s)
-          ; ("events", `List (List.map trace_event_json evs)) ])
+    Store.resolve_run_id pool id
+    >>= function
+    | None -> j_err ~code:404 "run has no trace"
+    | Some id -> (
+        Store.fetch_run pool id
+        >>= function
+        | None -> j_err ~code:404 "run has no trace"
+        | Some r when not (run_visible auth r) ->
+            (j_err ~code:404 "run has no trace")
+          | Some _ ->
+              Store.fetch_run_trace pool id
+            >>= function
+            | None -> j_err ~code:404 "run has no trace"
+            | Some s ->
+                Store.fetch_trace_events pool id ~after_seq:after ~limit
+                >>= fun evs ->
+                j_ok
+                  (`Assoc
+                     [ ("run_id", `String id)
+                     ; ("trace", trace_json s)
+                     ; ("events", `List (List.map trace_event_json evs)) ]))
 
 (* GET /api/runs/verify?all=1 — the verification sweeper: replay-verify
    every finished run (cap 200, newest first).  Without all=1, returns
    the current verify statuses only.  NOTE: routed BEFORE /api/runs/:id. *)
-let verify_sweep pool _auth req =
+let verify_sweep pool auth req =
   match Web.query req "all" with
+  | Some "1" when not auth.auth_is_admin ->
+      (j_err ~code:403 "verify sweep is an operator surface (admin only)")
   | Some "1" ->
       Store.list_runs pool ~caller:None ~program:None ~limit:200 ()
       >>= fun rs ->
@@ -696,7 +723,9 @@ let verify_sweep pool _auth req =
       go [] rs >>= fun vs ->
        (j_ok (`Assoc [ ("verified", `List vs) ]))
   | _ ->
-      Store.list_runs pool ~caller:None ~program:None ~limit:200 ()
+      Store.list_runs pool
+        ~caller:(if auth.auth_is_admin then None else Some auth.auth_id)
+        ~program:None ~limit:200 ()
       >>= fun rs ->
        (j_ok
           (`Assoc
@@ -710,21 +739,25 @@ let verify_sweep pool _auth req =
                          ; ("status", `String (Store.Run_status.to_string r.Store.r_status)) ])
                      rs)) ]))
 
-let list_runs pool _auth req =
-  let caller = Web.query req "caller" in
+let list_runs pool auth req =
   let program = Web.query req "program" in
-  Store.list_runs pool ~caller ~program ~limit:100 () >>= fun rs ->
+  Store.list_runs pool
+    ~caller:
+      (if auth.auth_is_admin then Web.query req "caller" else Some auth.auth_id)
+    ~program ~limit:100 () >>= fun rs ->
    (j_ok (`Assoc [ ("runs", `List (List.map run_json rs)) ]))
 
 (* -- journals -------------------------------------------------------- *)
 
-let get_journal pool _auth req =
+let get_journal pool auth req =
   let run_id = Web.param req "run_id" in
   let dec = Web.query req "dec" = Some "1" in
   Store.fetch_run_resolved pool run_id
   >>= function
   | None ->  (j_err ~code:404 "unknown run id")
-  | Some (run_id, r) ->
+    | Some (run_id, r) ->
+        if not (run_visible auth r) then (j_err ~code:404 "unknown run id")
+        else
       Store.fetch_journals pool run_id
       >>= fun js ->
       journal_provenance pool r
@@ -823,7 +856,7 @@ let rec validate_edits acc = function
    journal-fed (replay engine): the edited answers flow through the
    program, the derived row carries the counterfactual outcome, and
    its own verification is recorded. *)
-let fork_journal pool _auth req =
+let fork_journal pool auth req =
   let run_id = Web.param req "run_id" in
   body_json req >>= function
   | Error msg ->  (j_err msg)
@@ -836,8 +869,11 @@ let fork_journal pool _auth req =
              request to overwrite history that never happened -> 400 *)
           Store.fetch_run_resolved pool run_id >>= (function
           | None -> j_err ~code:404 "unknown run id"
-          | Some (run_id, _) ->
-              Store.fetch_journals pool run_id >>= fun js ->
+            | Some (run_id, parent_row) ->
+                if not (run_visible auth parent_row) then
+                  (j_err ~code:404 "unknown run id")
+                else
+                  Store.fetch_journals pool run_id >>= fun js ->
               let known = List.length js in
               match List.find_opt (fun (seq, _) -> seq >= known) edits with
               | Some (seq, _) ->
@@ -906,8 +942,11 @@ let live_replay_run pool auth req =
       Store.fetch_run_resolved pool id
       >>= (function
             | None -> j_err ~code:404 "unknown run id"
-            | Some (parent_id, parent) ->
-                Replay.live_replay pool ~caller:auth.auth_id
+              | Some (parent_id, parent) ->
+                  if not (run_visible auth parent) then
+                    (j_err ~code:404 "unknown run id")
+                  else
+                    Replay.live_replay pool ~caller:auth.auth_id
                   ~grant_ids:(strings_of j "grants") ~parent ~fuel ~size_cap
                   ()
                 >>= (function
@@ -2211,7 +2250,7 @@ let dispatch_route pool req =
 (* POST /api/runs/:id/gc — retention GC (journal.retention-gc): delete
    the run's journal rows behind the cited tombstone.  Verifiers report
    GONE for this run afterwards, never VERIFIED.  Body: {"policy": str}. *)
-let gc_run pool _auth req =
+let gc_run pool auth req =
   let id = Web.param req "id" in
   body_json req >>= function
   | Error msg ->  (j_err msg)
@@ -2222,11 +2261,17 @@ let gc_run pool _auth req =
         Store.resolve_run_id pool id
         >>= (function
               | None -> j_err ~code:404 "unknown run id"
-              | Some id ->
-                  Store.gc_journal pool ~run_id:id ~policy ()
-                  >>= (function
-                        | None -> (j_err ~code:500 "gc lost the run row")
-                        | Some r -> (j_ok ~code:200 (run_json r)))))
+                | Some id -> (
+                    Store.fetch_run pool id
+                    >>= function
+                    | None -> (j_err ~code:500 "gc lost the run row")
+                    | Some r when not (run_visible auth r) ->
+                        (j_err ~code:404 "unknown run id")
+                    | Some _ ->
+                        Store.gc_journal pool ~run_id:id ~policy ()
+                        >>= (function
+                              | None -> (j_err ~code:500 "gc lost the run row")
+                              | Some r -> (j_ok ~code:200 (run_json r))))))
 
 (* -- router / server ------------------------------------------------- *)
 
