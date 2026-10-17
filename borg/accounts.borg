@@ -118,6 +118,19 @@
         the parent's caller, so an admin fork of a member's run is
         attributed to the member - defensible for counterfactual
         history, revisit if forks become a user-facing act.|) *)
+
+(* agent note (|2026-10-16 a5 COOKIE HARDENING (board card
+        todo/a5-cookie-csrf): the Dream-style ~encrypt/~decrypt flags
+        were ceremony - the cookie carries only an opaque server-side
+        session token - and are gone; name/value/path are sanitized
+        (separators or control characters would craft arbitrary
+        Set-Cookie attributes); the clearing cookie now matches the
+        session cookie's HttpOnly; Secure rides TUNA_COOKIE_SECURE
+        (unset = loopback dev, the deploy env file sets it behind the
+        TLS edge).  The CSRF limitation is enumerated honestly in the
+        README (the mutating GET is get_run's auto replay-verify; the
+        all=1 sweep is admin-only since a1) - a real CSRF token stays
+        the named future fix.|) *)
   (subsection public-rim
    (status implemented)
    (details

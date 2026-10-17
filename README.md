@@ -332,10 +332,16 @@ Recorded, not hidden:
   the format is string-compatible so a future upgrade verifies legacy
   rows and transparently rehashes on success — no flag day.  There is
   no server-side pepper yet.
-- **No CSRF token.**  The session cookie is SameSite=Lax only; browser
+- **No CSRF token.**  The session cookie is SameSite=Lax; browser
   clients may drive `/api/*` with the session cookie, so same-site
-  cross-origin requests are the residual risk.  Bearer-only agents are
-  unaffected.
+  cross-origin requests are the residual risk.  The mutating GETs are
+  enumerated, not hidden: `GET /api/runs/:id` auto-runs replay
+  verification (a write), and the verify sweep's all=1 is admin-only
+  (a1).  Cookie values are separator/control-character sanitized, the
+  session cookie carries `HttpOnly`, and `Secure` rides
+  `TUNA_COOKIE_SECURE` (set it in the deploy env file behind the TLS
+  edge).  Bearer-only agents are unaffected.  A real CSRF token is the
+  named future fix.
 - **No OAuth/JWT**, no password reset, no login throttling.  `auth_log`
   rows exist so a throttle/forensics pass has data instead of guesses.
 - **TLS is at the reverse proxy**; tuna speaks plain HTTP on loopback.

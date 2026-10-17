@@ -28,7 +28,7 @@ let session_ttl_seconds = 60 * 60 * 24 * 14
 
 (* Resolve the page identity from the session cookie (None = anonymous). *)
 let identity_of_req pool req : S.identity option =
-  match Web.cookie req ~decrypt:false cookie_name with
+  match Web.cookie req cookie_name with
   | None -> return None
   | Some token -> S.verify_session pool token
 
@@ -40,7 +40,7 @@ let require_auth pool handler req =
   | Some user -> handler user req
 
 let set_session resp req token =
-  Web.set_cookie resp req ~encrypt:false ~http_only:true
+  Web.set_cookie resp req ~http_only:true
     ~same_site:(Some `Lax) ~path:(Some "/") cookie_name token
 
 let drop_session resp req = Web.drop_cookie resp req cookie_name
@@ -98,7 +98,7 @@ let login_post pool req =
   | _ -> L.err_page "bad form submission"
 
 let logout_get pool req =
-  match Web.cookie req ~decrypt:false cookie_name with
+  match Web.cookie req cookie_name with
   | None -> Web.redirect req "/login"
   | Some token ->
       S.revoke_session pool token

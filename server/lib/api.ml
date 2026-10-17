@@ -146,7 +146,7 @@ let authenticate pool req =
                      ; auth_name = i.Store.i_name
                      ; auth_is_admin = i.Store.i_is_admin }))
   | None -> (
-      match Web.cookie req ~decrypt:false Auth.cookie_name with
+        match Web.cookie req Auth.cookie_name with
       | None -> return None
       | Some tok ->
           Store.verify_session pool tok

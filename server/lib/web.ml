@@ -153,8 +153,28 @@ let redirect (r : req) (loc : string) =
 
 (* -- cookies -------------------------------------------------------- *)
 
-let cookie (r : req) ~(decrypt : bool) (name : string) : string option =
-  ignore decrypt;
+(* a5 (todo/a5-cookie-csrf): the cookie carries ONLY an opaque
+   server-side session token (sha256 stored), so the Dream-style
+   ~encrypt/~decrypt flags were ceremony and are gone.  Parts are
+   sanitized: a name/value/path holding separators or control
+   characters would craft arbitrary Set-Cookie attributes.  The Secure
+   attribute rides TUNA_COOKIE_SECURE (unset = loopback dev; the deploy
+   env file sets it behind the TLS edge). *)
+let cookie_char_ok c =
+  let code = Char.code c in
+  code >= 0x21 && code <= 0x7e && c <> ';' && c <> ',' && c <> '\\'
+
+let cookie_part_ok what s =
+  if s = "" || not (String.for_all cookie_char_ok s) then
+    failwith (Printf.sprintf "cookie %s: separator or control character" what)
+
+let cookie_secure =
+  match Sys.getenv_opt "TUNA_COOKIE_SECURE" with
+  | Some ("1" | "true" | "yes") -> true
+  | _ -> false
+
+let cookie (r : req) (name : string) : string option =
+  cookie_part_ok "name" name;
   match header_ci r.headers "cookie" with
   | None -> None
   | Some raw ->
@@ -170,26 +190,32 @@ let cookie (r : req) ~(decrypt : bool) (name : string) : string option =
               if k = name then Some v else None)
         pairs
 
-let set_cookie (resp : resp) (_r : req) ~(encrypt : bool) ~(http_only : bool)
+let set_cookie (resp : resp) (_r : req) ~(http_only : bool)
     ~(same_site : [ `Lax | `Strict | `None ] option) ~(path : string option)
     (name : string) (value : string) : unit =
-  ignore encrypt;
+  cookie_part_ok "name" name;
+  cookie_part_ok "value" value;
+  (match path with Some p -> cookie_part_ok "path" p | None -> ());
   let attrs =
     [ (if http_only then "; HttpOnly" else "")
+    ; (if cookie_secure then "; Secure" else "")
     ; (match same_site with
        | Some `Lax -> "; SameSite=Lax"
        | Some `Strict -> "; SameSite=Strict"
        | Some `None -> "; SameSite=None"
        | None -> "")
-    ; (match path with Some p -> "; Path=" ^ p | None -> "")
-    ]
+    ; (match path with Some p -> "; Path=" ^ p | None -> "") ]
   in
   let cookie = name ^ "=" ^ value ^ String.concat "" attrs in
   resp.headers <- ("Set-Cookie", cookie) :: resp.headers
 
 let drop_cookie (resp : resp) (_r : req) (name : string) : unit =
+  cookie_part_ok "name" name;
   resp.headers <-
-    ("Set-Cookie", name ^ "=; Path=/; Max-Age=0") :: resp.headers
+    ( "Set-Cookie"
+    , name ^ "=; Path=/; Max-Age=0; HttpOnly"
+      ^ (if cookie_secure then "; Secure" else "") )
+    :: resp.headers
 
 (* -- form decoding -------------------------------------------------- *)
 
