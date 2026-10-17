@@ -355,7 +355,7 @@ dune runtest                     # 60+ alcotest suites + 24-entry differential c
 scripts/smoke-api.sh             # 14 sections over a live server
 scripts/smoke-ui.sh              # 17 sections over the htmx UI
 scripts/smoke-public.sh          # 12 sections over the public rim + sessions
-scripts/verify-1..11-*.sh        # acceptance criteria 1–11 (callable in any order, exit 0 on green)
+scripts/verify-1..14-*.sh        # acceptance criteria 1–11 + the dialect, board and FED3 gates (callable in any order, exit 0 on green)
 borge lint && borge report       # book/reality consistency
 ```
 

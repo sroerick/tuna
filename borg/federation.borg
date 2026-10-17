@@ -159,9 +159,16 @@
          re-verifies each row (tampered = 400, journaled fed-apply); a
          value-citing effect whose value is not held locally is also
          refused (400), value-pull-before-ops is the caller's law.
-      3. A bridge write attributed to any identity other than the true
-         actor (or its delegated identity) -> failure.  (FED3, not yet
-         exercised.) |))))))
+        3. A bridge write attributed to any identity other than the true
+           actor (or its delegated identity) -> failure.  (FED3 EXERCISED
+           2026-10-16: scripts/verify-14-f3-attribution.sh pins positive
+           attribution - a peer's own ops row and run row carry its
+           identity, and a spoofed-actor fed apply re-attributes at the
+           boundary, ops.actor and tree_paths.owner are the true actor,
+           server-derived, the client never sets actor fields - and the
+           negatives (out-of-namespace apply refused AND journaled,
+           never absorbed; token revocation via verify-1 [1.7]).  FED3
+           holds. |))))))
 
 (* agent note (|2026-10-16 FED3 PROOFS WRAP-UP (board card
         todo/g4-fed3-proofs; answers PP run-primitive M12's NEXT line
