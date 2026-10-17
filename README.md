@@ -309,9 +309,11 @@ machinery those procedures drive, so they cannot evaporate.
 - **Bootstrap (root).**  `TUNA_BOOTSTRAP_TOKEN` in the instance env
   file ensures the root row each boot.  The insert is deliberately
   `ON CONFLICT DO NOTHING`: a changed env value cannot silently take
-  over an existing identity — which also means the primary bearer has
-  no rotate path in-repo today.  That is the recorded gap (an admin
-  token-rotate endpoint is the natural future fix); operationally, hold
+  over an existing identity.  Rotation goes through
+  `POST /api/identities/:id/rotate` (self-serve for your own token,
+  admin gate for others — the new token is returned once and the old
+  one stops verifying immediately), so the bootstrap env value is a
+  bootstrapping credential, not a lifetime one.  Operationally, hold
   a runner token to a dedicated identity in the env file instead of
   root's bearer whenever automation allows it.
 
