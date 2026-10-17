@@ -1050,20 +1050,21 @@ let grant_descendants p ?(max_depth = 64) id =
    unverifiable-by-retention, not confirmed).  Runs as one transaction
    so the delete and the tombstone cannot split apart. *)
 let gc_journal p ~run_id ~policy () =
-  (* simple_query only: a parameterized extended-protocol query cannot
-     span BEGIN/COMMIT.  Policy/run-id are short admin-supplied text;
-     escape single quotes by doubling. *)
-  let esc s = String.concat "''" (String.split_on_char '\'' s) in
-  let sql =
-    Printf.sprintf
-      "BEGIN; \
-       DELETE FROM journals WHERE run_id = '%s'::uuid; \
-       UPDATE runs SET journal_gced_at = now(), journal_gced_policy = '%s', \
-         verify_status = 'gced', verified_at = now() WHERE id = '%s'::uuid; \
-       COMMIT;"
-      (esc run_id) (esc policy) (esc run_id)
-  in
-  Db.with_pool p (fun c -> Db.Pg.simple_query c sql)
+  (* a4 (todo/a4-store-tx): one transaction, parameterized - the old
+     interpolated simple_query string was an injection surface whose
+     stated justification ("a parameterized extended-protocol query
+     cannot span BEGIN/COMMIT") was never true: with_tx exists.  A
+     failure inside also no longer returns a poisoned (aborted-tx)
+     connection to the pool. *)
+  Db.with_tx p (fun c ->
+      Db.q_conn_unit c
+        ~params:[ p_str run_id ]
+        "DELETE FROM journals WHERE run_id = $1::uuid"
+      >>= fun () ->
+      Db.q_conn_unit c
+        ~params:[ p_str policy; p_str run_id ]
+        "UPDATE runs SET journal_gced_at = now(), journal_gced_policy = $1, \
+         verify_status = 'gced', verified_at = now() WHERE id = $2::uuid")
   >>= fun _ -> fetch_run p run_id
 
 (* Was this run's journal GC'd?  Some policy = GONE (tombstone cited). *)
@@ -1085,18 +1086,21 @@ let fetch_gc_tombstone p run_id =
    the next fetch re-verifies and surfaces the break (a stale VERIFIED
    would be the silent-delete the book forbids). *)
 let redact_journal_row p ~run_id ~seq ~policy () =
-  Db.q_unit
-    ~params:[ p_str policy; p_str run_id; p_int seq ]
-    p
-    "UPDATE journals SET result_ternary = NULL, result_hash = NULL, \
-       error = 'redacted (chain break): ' || $1 \
-     WHERE run_id = $2::uuid AND seq = $3"
-  >>= fun () ->
-  Db.q_unit
-    ~params:[ p_str run_id ]
-    p
-    "UPDATE runs SET verify_status = NULL, verified_at = NULL \
-     WHERE id = $1::uuid"
+  (* a4 (todo/a4-store-tx): one transaction - the old two-update version
+     ran on separate pooled connections, so a redacted row could leave
+     the run reading VERIFIED: exactly the stale-VERIFIED state the
+     comment above forbids. *)
+  Db.with_tx p (fun c ->
+      Db.q_conn_unit c
+        ~params:[ p_str policy; p_str run_id; p_int seq ]
+        "UPDATE journals SET result_ternary = NULL, result_hash = NULL, \
+         error = 'redacted (chain break): ' || $1 \
+         WHERE run_id = $2::uuid AND seq = $3"
+      >>= fun () ->
+      Db.q_conn_unit c
+        ~params:[ p_str run_id ]
+        "UPDATE runs SET verify_status = NULL, verified_at = NULL \
+         WHERE id = $1::uuid")
 
 (* -- identities ------------------------------------------------------ *)
 
@@ -1827,9 +1831,18 @@ let op_append_conn c ~op ~path ~value_hash ~prev_version ~version ~actor =
      to_timestamp($8::double precision), $9)"
   >>= fun () -> Direct.return (seq, h)
 
-(* pool-level append: one op row on the global log.  Returns (seq, op_hash). *)
+(* pool-level append: one op row on the global log.  Returns (seq, op_hash).
+   a4 (todo/a4-store-tx): the head-read/insert pair runs in one
+   transaction under a global advisory lock - the chain is global, so
+   appends serialize; a concurrent append can no longer read the same
+   head and die on the PK.  (ns_fork's conn-level append runs inside
+   its caller's transaction and keeps the documented PK-collision
+   discipline.) *)
 let op_append p ~op ~path ~value_hash ~prev_version ~version ~actor =
-  Db.with_pool p (fun c ->
+  Db.with_tx p (fun c ->
+        Db.q_conn c ~params:[ p_int64 0x54554E41L ]
+          "SELECT pg_advisory_xact_lock($1)"
+        >>= fun _ ->
       op_append_conn c ~op ~path ~value_hash ~prev_version ~version ~actor)
 
 (* ops_fold: the replay/rewind surface.  Reads rows for [prefix] (empty
@@ -1934,8 +1947,11 @@ let ns_fork p ~src_prefix ~dst_prefix ~actor =
 (* -- federation FED2: ops-chain sync (borg/federation.borg) ------------- *)
 
 (* head seq of the whole log (0L for an empty log).  Used by the pull
-   surface and, inside a transaction, to assert "this apply's window
-   lands exactly on top of the head I fetched" (no intervening append). *)
+   surface to place a fetch window.  NOTE (a4): the old comment claimed
+   fed_apply asserts "this apply's window lands exactly on top of the
+   head I fetched" - no such assertion exists; the apply-side guard is
+   the window's own per-row prev_hash verification (verify_window_rows)
+   plus the PK collision on a concurrent append, not a head check. *)
 let ops_head_seq p =
   Db.q p "SELECT COALESCE(MAX(seq), 0) FROM tree_ops"
   >>= function

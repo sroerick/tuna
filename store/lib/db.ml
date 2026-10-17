@@ -172,14 +172,27 @@ let q_conn ?params c sql = Pg.execute ?params c sql
 let q_conn_unit ?params c sql = Pg.execute_unit ?params c sql
 
 (* Transactional multi-statement execution: [f] runs on one pooled
-   connection inside BEGIN/COMMIT; any failure rolls back and re-raises. *)
+   connection inside BEGIN/COMMIT; any failure rolls back and re-raises.
+   a4 (todo/a4-store-tx): the whole scope is Fun.protect-ed because
+   BEGIN/COMMIT are cancellation points too - without the finally, a
+   cancelled fiber returned an open-transaction connection to the pool.
+   The flag keeps a successful COMMIT from being rolled back by its own
+   finally. *)
 let with_tx p (f : Pg.t -> 'a) : 'a =
   with_pool p (fun c ->
-      Pg.execute_unit c "BEGIN";
-      match f c with
-      | r ->
-          Pg.execute_unit c "COMMIT";
-          r
-      | exception e ->
-          (try Pg.execute_unit c "ROLLBACK" with _ -> ());
-          raise e)
+      let open_tx = ref false in
+      Fun.protect
+        ~finally:(fun () ->
+          if !open_tx then (try Pg.execute_unit c "ROLLBACK" with _ -> ()))
+        (fun () ->
+          Pg.execute_unit c "BEGIN";
+          open_tx := true;
+          match f c with
+          | r ->
+              Pg.execute_unit c "COMMIT";
+              open_tx := false;
+              r
+          | exception e ->
+              (try Pg.execute_unit c "ROLLBACK" with _ -> ());
+              open_tx := false;
+              raise e))
