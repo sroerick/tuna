@@ -11,7 +11,6 @@
      from [genesis]. *)
 open Direct.Infix
 
-module Db_alias = Db
 module V = Pgx.Value
 
 exception Store_error of string
@@ -1277,11 +1276,21 @@ let verify_password p ~username ~password =
                        >>= fun () -> Direct.return ())
                      (fun _ -> Direct.return ())
                    >>= fun () -> Direct.return (Some i)
-               | _ ->
-                   (* wrong password, no row, or more rows - one
-                      uniform deny, same log shape *)
-                   log_auth p ~identity_id:i.i_id ~kind:"password" ~success:false ()
-                   >>= fun () -> Direct.return None))
+                 | rows ->
+                     (* deny: a wrong password paid its verify in the
+                        guard; no-credentials and multi-row paid none -
+                        run the dummy so the cost does not name the
+                        account state (a6) *)
+                     (match rows with
+                      | [ _ ] -> ()
+                      | _ ->
+                          let _ =
+                            Credentials.verify_password password
+                              ~stored:Credentials.dummy_hash
+                          in
+                          ());
+                     log_auth p ~identity_id:i.i_id ~kind:"password" ~success:false ()
+                     >>= fun () -> Direct.return None))
 
 (* Mint an opaque session token for a login.  The raw token leaves the
    process exactly once (cookie value); auth_sessions stores only its
@@ -1329,8 +1338,13 @@ let revoke_session p token =
         p
         "UPDATE auth_sessions SET revoked_at = now() \
          WHERE token_hash = $1 AND revoked_at IS NULL"
-      >>= fun () -> Direct.return ())
-    (fun _ -> Direct.return ())
+        >>= fun () -> Direct.return ())
+    (fun e ->
+      (* a6: idempotent from the caller's view, never silent - a DB
+         outage answering as a successful logout must be visible *)
+      Printf.eprintf "[tuna] revoke_session failed: %s\n%!"
+        (Printexc.to_string e);
+      Direct.return ())
 
 (* -- runner tokens (0016, todo/g2-parity-identities): the glochid
    issue-token precedent — a NAMED, individually revocable Bearer per
@@ -1567,7 +1581,10 @@ let is_admin p id =
       >>= function
       | [ r ] -> Direct.return (bool r 0 "identity.is_admin")
       | _ -> Direct.return false)
-    (fun _ -> Direct.return false)
+      (fun e ->
+        Printf.eprintf "[tuna] probe is_admin failed: %s\n%!"
+          (Printexc.to_string e);
+        Direct.return false)
 
 (* value/put capability: the caller holds at least one unrevoked grant *)
 let has_live_grant p caller =
@@ -1578,7 +1595,10 @@ let has_live_grant p caller =
       >>= (function
             | [] -> Direct.return false
             | _ -> Direct.return true))
-    (fun _ -> Direct.return false)
+      (fun e ->
+        Printf.eprintf "[tuna] probe has_live_grant failed: %s\n%!"
+          (Printexc.to_string e);
+        Direct.return false)
 
 (* M11 route publish/delete capability: an unrevoked grant of [caller]
    whose prefix covers [path] (NULL prefix covers everything) *)
@@ -1595,7 +1615,24 @@ let has_covering_grant p caller path =
              | None -> true
              | Some pfx -> prefix_match pfx path)
            rows))
-    (fun _ -> Direct.return false)
+      (fun e ->
+        Printf.eprintf "[tuna] probe has_covering_grant failed: %s\n%!"
+          (Printexc.to_string e);
+        Direct.return false)
+
+(* a6 (todo/a6-rim-batch): the reusable live grant id for a service
+   capability (same prim, prefix, caller), if one exists - anonymous
+   program-route traffic used to mint a fresh row per request *)
+let find_live_grant_id p ~prim ~path_prefix ~caller =
+  Db.q
+    ~params:[ p_str prim; p_str path_prefix; p_str caller ]
+    p
+    "SELECT id::text FROM grants WHERE prim = $1 AND path_prefix = $2 \
+     AND caller = $3::uuid AND revoked_at IS NULL \
+     ORDER BY created_at DESC LIMIT 1"
+  >>= (function
+        | [ r ] -> Direct.return (Some (text r 0 "grants.id"))
+        | _ -> Direct.return None)
 
 (* unconditional write: INSERT at version 1, or version+1 on the
    existing row (tree/put prim).  Returns the new version. *)
@@ -1982,7 +2019,10 @@ let value_present p hash =
          UNION ALL SELECT 1 FROM byte_values WHERE hash = $1 \
          UNION ALL SELECT 1 FROM programs WHERE hash = $1 LIMIT 1"
       >>= (function [] -> Direct.return false | _ -> Direct.return true))
-    (fun _ -> Direct.return false)
+      (fun e ->
+        Printf.eprintf "[tuna] probe value_present failed: %s\n%!"
+          (Printexc.to_string e);
+        Direct.return false)
 
 (* Apply a window of (op, true-predecessor-hash) pairs into [dst_prefix].
    Each row is first re-verified against its carried predecessor (so a

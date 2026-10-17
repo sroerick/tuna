@@ -2,7 +2,14 @@
    Shared so the seeding module never imports api.ml. *)
 
 let random_token_hex () =
-  let ic = open_in_bin "/dev/urandom" in
+  let ic =
+    try open_in_bin "/dev/urandom"
+    with Sys_error msg ->
+      failwith
+        (Printf.sprintf
+           "random_token_hex: cannot open /dev/urandom (%s) - the boot \
+            token source is unavailable" msg)
+  in
   Fun.protect
     ~finally:(fun () -> close_in ic)
     (fun () ->

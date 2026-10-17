@@ -169,7 +169,9 @@ let guard p =
         | e -> Printexc.to_string e
       in
       Web.log "handler error: %s" msg;
-       (j_err ~code:500 msg))
+      (* a6: the detail is logged, never returned - internal error
+         strings are schema disclosure *)
+      (j_err ~code:500 "internal server error"))
 
 let with_auth pool handler req =
   authenticate pool req

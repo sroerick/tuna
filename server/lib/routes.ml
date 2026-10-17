@@ -445,9 +445,19 @@ let serve_program pool ~service ~record ~site_path ~meth ~query ~body ~actor =
     match record.r_grant_prefix with
     | None -> return []
     | Some pfx ->
-        S.mint_grant pool ~prim:"*" ~args_attenuation:"null"
-          ~path_prefix:(Some pfx) ~caller:run_caller ~minted_by:(Some service) ()
-        >>= fun g -> return [ g.S.g_id ]
+        (* a6 (todo/a6-rim-batch): anonymous program-route traffic used
+           to mint a fresh grant row per request - unbounded grants
+           growth.  Reuse the live identical grant when one exists;
+           mint only on a miss. *)
+        S.find_live_grant_id pool ~prim:"*" ~path_prefix:pfx
+          ~caller:run_caller
+        >>= function
+        | Some gid -> return [ gid ]
+        | None ->
+            S.mint_grant pool ~prim:"*" ~args_attenuation:"null"
+              ~path_prefix:(Some pfx) ~caller:run_caller
+              ~minted_by:(Some service) ()
+            >>= fun g -> return [ g.S.g_id ]
   in
   let ctx =
     Tuna.Cstr.encode
