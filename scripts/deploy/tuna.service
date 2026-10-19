@@ -9,7 +9,7 @@
 #   systemctl --user status tuna.service
 #
 # The service runs `scripts/serve.sh start` in the foreground-shape
-# (serve.sh daemonizes its own server; Type=oneshot would suit a
+# (serve.sh self-backgrounds its own server; Type=oneshot would suit a
 # supervisor that also owns PG).  Here we let serve.sh own the process
 # and Restart=always re-runs it, matching the local glochid exemplar.
 [Unit]
