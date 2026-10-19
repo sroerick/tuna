@@ -1,0 +1,50 @@
+(project tuna-metatheory
+  (doc "Tuna book chapter: metatheory - the proof ladder. Pre-registered as a sketch so the substrate never grows a feature that forecloses it. Thesis: replay verification, derivation recording, and machine-checked metatheory are one ladder, not three projects; each rung makes the next mechanical. Agreed with roerick 2026-10-19.")
+  (* agent note (|2026-10-19, THE LADDER (agreed with roerick):
+      RUNG 1 - REPLAY VERIFICATION (live): determinism is a tested invariant
+      (SPEC section 2); a run is machine-checked by re-execution - input
+      hash -> output hash, same step count. Verifies THIS execution only;
+      no universal claim.
+      RUNG 2 - DERIVATION RECORDING (the provable-backend gap, parked
+      09-19; next milestone after FED3): journals hold boundary events only
+      today; record the reduction sequence so a derivation V0 ->* V1
+      becomes a machine-checkable equational proof of V0 = V1 - every step
+      is one of the five rules, replay verifies each step. Unlocks
+      postmortem-as-proof (the SWARM-1 journal format) and factory
+      write-back receipts.
+      RUNG 3 - COQ/Rocq FORMALIZATION OF THE CORE (carded on PP 10-19):
+      five rules as an inductive reduction relation; theorems - determinism
+      (unique reduct) and values-closed-under-reduction (a program applied
+      to data either diverges or yields data; the receipt soundness
+      theorem); extract an OCaml evaluator from the proved definition;
+      differential bench vs the validated step-counting CL reference
+      (~/tree-calc/tree-calc.lisp) over a bench battery - same input tree,
+      same result, same step count, all three engines. Deliverable: a
+      certified canonical engine - F1 canonical side made unimpeachable
+      (the optimized engine must match it or the engine split stands, per
+      acceptance.borg F1). Step 0: survey existing formalizations
+      (barry-jay-personal/tree-calculus book + blog, olydis/tree-calculus,
+      treecalcul.us; web.search down 10-19, gist + curl reachable). What
+      Coq does NOT give: proofs about particular runs (rung 2 is the tool)
+      and the typed layer (rung 4 is a separate development).
+      RUNG 4 - TYPED LAYER (Jay typed/delta calculus; roerick: types are
+      just functions): types live ABOVE the five rules, never as new core
+      rules. A type is a tree-valued function; a type check is a reduction
+      (apply the value to its type, reduce to true); the checker is a
+      tree-calculus program in the store, journaled and replayable -
+      well-typed becomes a claim with a receipt. Adopting Jay typed
+      semantics as new core rules would re-derive the whole book - rejected
+      for v0. Checker runs under the fuel/size budget, canonical step
+      accounting (F1).
+      RUNG 5 - PROOF TERMS: propositions as trees, proof terms as trees
+      (derivation chains + lemmas), checker = a tree-calculus program.
+      Where rungs 4 and 5 merge: a type judgment is a reduction, a proof
+      is a derivation, both are receipts from the same journal.
+      WALL - META-THEOREMS stay in the book as hand-argued chapters + tests
+      (or a host prover): termination, checker totality, for-all-inputs
+      safety cannot be proven by the engine about itself (Turing-complete;
+      treecalcul.us demos the halting problem). We do not build a proof
+      kernel inside tuna. Independent-verifier note: promoting the CL
+      reference to a second implementation cross-checking the OCaml engine
+      is the cheap trust story and needs no proof language.|) *)
+  (status sketch))
