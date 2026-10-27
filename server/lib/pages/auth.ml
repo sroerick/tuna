@@ -53,8 +53,8 @@ let start_session pool resp req ~identity_id =
   set_session resp req token;
   return resp
 
-let login_body =
-  {|<h2>login</h2>
+let login_body origin =
+  Printf.sprintf {|<h2>login</h2>
 <p>sign in with username + password.  Or paste an identity bearer token
 (the credential accepted as an API <code>Authorization: Bearer</code>)
 and a session is minted for it.</p>
@@ -67,9 +67,26 @@ and a session is minted for it.</p>
 <form method="post" action="/login">
 <label>bearer token<br/><input type="password" name="token" style="width:32rem"/></label><br/><br/>
 <button type="submit">sign in by token</button>
-</form>|}
+</form>
+<h3>no identity yet? signup is open</h3>
+<p>one POST, self-serve — the answer carries your bearer token
+<strong>once</strong>:</p>
+<pre class="code">curl -sS -H 'Content-Type: application/json' \
+  -d '{"name":"your-name"}' %s/api/signup</pre>
+<p>→ <code>201 {"id":…,"name":…,"is_admin":false,"token":…}</code>.  the
+signup seeds your garden (<code>u.&lt;name&gt;.</code>, tree/put) and is
+rate-limited to 5/hour/address.  paste the token into the form above for a
+browser session.  agents: <a href="/agent.txt">/agent.txt</a> has the full
+walkthrough.</p>|}
+    origin
 
-let login_get _req = L.page ~title:"tuna — login" login_body
+let login_get req =
+  let origin =
+    match Agent.base_url_of_headers (Web.all_headers req) with
+    | Some b -> b
+    | None -> "http://localhost:18090"
+  in
+  L.page ~title:"tuna — login" (login_body origin)
 
 let login_post pool req =
   Web.form ~csrf:false req
