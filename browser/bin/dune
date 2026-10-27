@@ -1,4 +1,4 @@
 (executable
  (name main)
  (modes js)
- (libraries tuna tuna_interp tuna_compiler digestif.ocaml))
+ (libraries tuna tuna_interp tuna_compiler digestif.ocaml js_of_ocaml))
