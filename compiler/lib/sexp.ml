@@ -3,6 +3,8 @@
    Grammar (whitespace, ";" line comments):
      <term> ::= (lambda (<var>+) <term>)   multi-arg sugar for nested lambdas
               | (let ((<var> <term>)+) <term>)   sequential let (desugars)
+                | (match <term> ((leaf) <t>) ((stem <var>) <t>) ((fork <v> <v>) <t>))
+                                              shape dispatch -> the triage application
               | (<term> <term>+)           left-assoc application
               | <var>                      identifier (- _ a-z A-Z 0-9, not all ternary digits)
               | 0                          leaf literal
@@ -17,14 +19,17 @@
    the fork constructor (apply Leaf a = Stem a; apply (Stem a) b =
    Fork (a, b) — both wrapper applications, zero triage steps).
 
-   Dialect sugar (borg/dialect.borg) is a TOTAL reader fold into this
-   grammar: brackets desugar to pair-applications, decimal atoms to
-   Tree_lit of the canonical law-5 int (Tuna.Int_enc), let to nested
-   lambda applications, and keyed literals {...} to the bracket list of
-   [key value] pairs the record vocabulary already reads (a :name key
-   reads as the dictionary name key-name; borg/dialect.borg v0.2).  A
-   sugar form and its hand-written twin compile to the identical tree
-   and step count (acceptance 12.1). *)
+    Dialect sugar (borg/dialect.borg) is a TOTAL reader fold into this
+    grammar: brackets desugar to pair-applications, decimal atoms to
+    Tree_lit of the canonical law-5 int (Tuna.Int_enc), let to nested
+    lambda applications, match to the triage application, and keyed
+    literals {...} to the bracket list of [key value] two-lists the record
+    vocabulary reads (a :name key reads as the dictionary name key-name;
+    borg/dialect.borg v0.3: the list is SORTED by key and duplicate keys
+    are a reader error, so a record is canonical by construction - two
+    records with the same fields compile to the identical tree whatever
+    order they were written in).  A sugar form and its hand-written twin
+    compile to the identical tree and step count (acceptance 12.1). *)
 
 exception Lex_error of int * string
 
@@ -234,6 +239,7 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
           match peek () with
           | Some (Atom (_, "lambda")) -> parse_lambda start scope
           | Some (Atom (_, "let")) -> parse_let start scope
+            | Some (Atom (_, "match")) -> parse_match start scope
           | Some (Atom (_, "runtime")) -> parse_runtime start scope
           | Some (Atom (_, "prim")) ->
             (* (prim "name" args...): boundary call. "prim" is reserved as
@@ -368,52 +374,77 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
     | Some RC ->
         raise (Ir.Error ([], Printf.sprintf "unexpected '}' at offset %d" !pos))
     | Some LC ->
-        (* {..}: a KEYED LITERAL (borg/dialect.borg v0.2).  Each entry
-           is a :name key followed by a value term; the form desugars to
-           the bracket list of [key-value value] two-lists the record
-           vocabulary already reads.  A :name key resolves to the
-           dictionary name "key-name" (scope > dictionary > builtin),
-           exactly as a bare atom would, so the schema stays data.
-           The desugar is [key value] = (pair key (pair value 0)). *)
+          (* {..}: a KEYED LITERAL (borg/dialect.borg v0.3).  Each entry is
+             a :name key followed by a value term; the form desugars to the
+             bracket list of [key value] two-lists the record vocabulary
+             reads, SORTED by key with duplicate keys refused - the record
+             is canonical by construction, so two records with the same
+             fields compile to the identical tree whatever order they were
+             written in.  A :name key resolves to the dictionary name
+             "key-name" (scope > dictionary > builtin), exactly as a bare
+             atom would, so the schema stays data.  The desugar is
+             [key value] = (pair key (pair value 0)). *)
         advance ();
-        let start = !pos - 1 in
-        let pairs = ref [] in
-        let rec key_loop () =
-          match peek () with
-          | Some RC -> advance ()
-          | Some (Atom (kot, k)) when String.length k > 0 && k.[0] = ':' -> (
-              advance ();
-              let name = String.sub k 1 (String.length k - 1) in
-              let key_ir = resolve_atom scope kot ("key-" ^ name) in
-              let val_ir =
-                match peek () with
-                | Some RC ->
-                    raise
-                      (Ir.Error
-                         ([],
-                          Printf.sprintf "{%s}: needs a value at offset %d" k
-                            start))
-                | _ -> parse_term scope
-              in
-              let sp : Ir.span = { off = kot; len = String.length k } in
-              pairs := pair_chain sp [ key_ir; val_ir ] :: !pairs;
-              key_loop ())
-          | Some (Atom (_, a)) ->
-              raise
-                (Ir.Error
-                   ( [],
-                     Printf.sprintf
-                       "{{}: expected a :key at offset %d, found %S" start a ))
-          | _ ->
+          let start = !pos - 1 in
+          let pairs = ref [] in
+          let rec key_loop () =
+            match peek () with
+            | Some RC -> advance ()
+            | Some (Atom (kot, k)) when String.length k > 0 && k.[0] = ':' -> (
+                advance ();
+                let name = String.sub k 1 (String.length k - 1) in
+                let key_ir = resolve_atom scope kot ("key-" ^ name) in
+                let val_ir =
+                  match peek () with
+                  | Some RC ->
+                      raise
+                        (Ir.Error
+                           ([],
+                             Printf.sprintf "{%s}: needs a value at offset %d" k
+                              start))
+                  | _ -> parse_term scope
+                in
+                let sp : Ir.span = { off = kot; len = String.length k } in
+                pairs := (name, pair_chain sp [ key_ir; val_ir ]) :: !pairs;
+                key_loop ())
+            | Some (Atom (_, a)) ->
+                raise
+                  (Ir.Error
+                     ( [],
+                       Printf.sprintf
+                          "{{}: expected a :key at offset %d, found %S" start a ))
+            | _ ->
+                raise
+                  (Ir.Error
+                     ([],
+                      Printf.sprintf
+                        "{{}: expected '}' or a :key at offset %d" start))
+          in
+          key_loop ();
+          let sp : Ir.span = { off = start; len = !pos - start } in
+          (* canonical record law (dialect v0.3): the record IS its sorted
+             field list - written field order and repeated keys are reader
+             errors, not data.  Two records with the same fields in any
+             written order compile to the identical tree, so hash identity
+             matches semantic identity: the swarm writes the same claim the
+             same way however it spells the fields (agora's measured
+             defect: written order made {:a 1 :b 2} and {:b 2 :a 1} two
+             different hashes). *)
+          let rec first_dup = function
+            | a :: b :: _ when a = b -> Some a
+            | _ :: tl -> first_dup tl
+            | [] -> None
+          in
+          (match first_dup (List.sort compare (List.map fst !pairs)) with
+          | Some k ->
               raise
                 (Ir.Error
                    ([],
-                    Printf.sprintf
-                      "{{}: expected '}' or a :key at offset %d" start))
-        in
-        key_loop ();
-        let sp : Ir.span = { off = start; len = !pos - start } in
-        pair_chain sp (List.rev !pairs)
+                     Printf.sprintf "{...}: duplicate key :%s at offset %d" k
+                      start))
+          | None -> ());
+          pair_chain sp
+            (List.map snd (List.sort (fun (a, _) (b, _) -> compare a b) !pairs))
     | Some (Atom (off, a)) -> (
         advance ();
         match a.[0] with
@@ -574,6 +605,78 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
             ; arg = rhs }
     in
     desugar (List.rev !bindings)
+    (* (match S ((leaf) A) ((stem x) B) ((fork x y) C)) desugars to the
+       triage application (((0 ((0 A) B')) C') S): a Fork-headed fork is
+       the calculus's own triage (tree.ml apply case 3 dispatches on the
+       SUBJECT's head shape), so kind dispatch is structural and
+       dictionary-free - it works with an empty dictionary, i.e. in the
+       browser bundle.  The branch order in the source is irrelevant (the
+       desugar places each kind in its fixed slot).  The sugar is a total
+       reader fold: the hand-written twin compiles to the identical tree
+       and step count (acceptance 12.1). *)
+    and parse_match start scope =
+      advance () (* 'match' *);
+      let sp0 : Ir.span = { off = start; len = 0 } in
+      let subject = parse_term scope in
+      let leaf = ref None and stem = ref None and fork = ref None in
+      let branch_err what =
+        raise (Ir.Error ([], Printf.sprintf "match: %s at offset %d" what start))
+      in
+      let rec branch_loop () =
+        match peek () with
+        | Some RP -> advance ()
+        | Some LP -> (
+            advance ();
+            let kind =
+              match peek () with
+              | Some (Atom (_, k)) when k = "leaf" || k = "stem" || k = "fork" ->
+                  advance ();
+                  k
+              | _ -> branch_err "expected a (leaf)/(stem)/(fork) pattern"
+            in
+            let params = ref [] in
+            let rec params_loop () =
+              match peek () with
+              | Some RP -> advance ()
+              | Some (Atom (_, a)) when is_var_atom a ->
+                  advance ();
+                  params := a :: !params;
+                  params_loop ()
+              | _ -> branch_err "bad pattern parameter"
+            in
+            params_loop ();
+            let arity = match kind with "leaf" -> 0 | "stem" -> 1 | _ -> 2 in
+            if List.length !params <> arity then
+              branch_err
+                (Printf.sprintf "the %s pattern takes %d parameter(s)" kind arity);
+            let body = parse_term (List.rev !params @ scope) in
+            expect_rp start "match branch";
+            let wrapped =
+              List.fold_left
+                (fun acc p ->
+                  Ir.Lam { id = fresh (); span = sp0; param = p; body = acc })
+                body !params
+            in
+            let slot = match kind with "leaf" -> leaf | "stem" -> stem | _ -> fork in
+            if !slot <> None then
+              branch_err (Printf.sprintf "duplicate %s branch" kind);
+            slot := Some wrapped;
+            branch_loop ())
+        | _ -> branch_err "expected a branch or ')')"
+      in
+      branch_loop ();
+      (match (!leaf, !stem, !fork) with
+      | Some a, Some f, Some c ->
+          expect_rp start "match";
+          let sp : Ir.span = { off = start; len = !pos - start } in
+          let app fn arg = Ir.App { id = fresh (); span = sp; fn; arg } in
+          let leaf_lit () = Ir.Leaf_lit { id = fresh (); span = sp } in
+          (* Fork (A, F) = ((0 A) F): two wrapper applications *)
+          let inner = app (app (leaf_lit ()) a) f in
+          (* Fork (Fork (A, F), C) = ((0 inner) C) *)
+          let outer = app (app (leaf_lit ()) inner) c in
+          app outer subject
+      | _ -> branch_err "needs leaf, stem and fork branches")
 
   (* (runtime (prim "name" args...)): mark a prim call run-time-only.
      compile-IS must not fire it while compiling — prims only execute

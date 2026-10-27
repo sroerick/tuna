@@ -203,7 +203,19 @@
          law: the form and its hand-written [key-value value] twin
          compile to the identical tree and steps. Reserved shape: { }
          and the :key token join the reader grammar; a :key outside a
-         keyed literal is a normal (if usually unbound) atom. |))))
+         keyed literal is a normal (if usually unbound) atom.
+         v0.3 (2026-10-27): the pair list is SORTED by key and duplicate
+         keys are a reader error - a record is canonical by construction
+         (equal records are equal trees whatever order they were written
+         in; the agora defect this kills: written order made {:a 1 :b 2}
+         and {:b 2 :a 1} two different hashes).
+       MATCH (v0.3, 2026-10-27). (match M ((leaf) A) ((stem x) F)
+         ((fork a b) C)) dispatches on the SUBJECT'S SHAPE by compiling
+         to the triage application ((((0 A) F) C) M): two wrapper
+         applications build the dispatch fork (zero triage), the
+         branches are plain lambdas, and all three branches are
+         required - totality by construction.  Same 12.1 equality law:
+         the form and its hand-written twin compile identically. |))))
   (subsection records
    (status implemented)
    (details
@@ -420,6 +432,10 @@
          including keyed_*/todo_flip).  v0.2: 5/5 compiler keyed tests
          + 3 corpus rows (dialect_keyed_literal, dialect_keyed_
          accessor, dialect_todo_flip) agree.
+           v0.3 (2026-10-27): +3 keyed tests (written-order twin,
+           leading-zeros twin, duplicate-key reader error) + 3 match
+           tests (triage-application twin, leaf/stem dispatch runs,
+           three-branch totality error).
       12.2 COMPAT: bare 0 remains the leaf (0 1 0); the -<digits>
          reservation audit is clean; corpus intact and grown (92).
       12.3 READER SEAM: compiler delta since the dialect baseline is

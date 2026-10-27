@@ -161,12 +161,24 @@ let sugar_tests =
     compile_error "empty let binding list" "(let () 0)" "" "empty binding";
     compile_error "let binding without a body" "(let ((x 1)))" ""
       "unexpected ')'";
+      (* match -> the triage application (dialect v0.3) *)
+      desugars "match dispatches to the triage application"
+        "(match 0 ((leaf) 1) ((stem x) 2) ((fork a b) 3))"
+        "(((0 1 (lambda (x) 2)) (lambda (a b) 3)) 0)" None;
+      runs "match takes the leaf branch for a leaf"
+        "(match 0 ((leaf) 0) ((stem x) x) ((fork a b) a))" [] "0";
+      runs "match takes the stem branch for a stem"
+        "(match %10 ((leaf) 0) ((stem x) x) ((fork a b) a))" [] "10";
+      compile_error "match needs all three branches"
+        "(match 0 ((leaf) 0))" "" "needs leaf, stem and fork branches";
   ]
 
 (* keyed literals: a {...} form maps each :name key to the dictionary
-   name key-name and desugars to the bracket list of [key value] pairs;
-   with the key-* defs in the dictionary, the form and its hand twin
-   compile to the identical tree (borg/dialect.borg v0.2). *)
+   name key-name and desugars to the bracket list of [key value] pairs,
+   SORTED by key with duplicate keys refused (dialect v0.3: a record is
+   canonical by construction - equal records are equal trees whatever
+   order they were written in); with the key-* defs in the dictionary,
+   the form and its hand twin compile to the identical tree. *)
 let keyed_tests =
   let dict =
     [ ("key-state", Tuna.Canon.parse_exn "10")
@@ -190,6 +202,12 @@ let keyed_tests =
     keyed "keyed literal as an application argument"
       "(lambda (f) (f {:state 1}))" "(lambda (f) (f [[key-state 1]]))";
     keyed "empty keyed literal is the empty list" "{}" "[]";
+      keyed "canonical: written order is irrelevant" "{:who 1110 :state 1}"
+        "[[key-state 1] [key-who 1110]]";
+      keyed "canonical: leading zeros collapse (law 5)" "{:who 01110 :state 1}"
+        "{:who 1110 :state 1}";
+      compile_error "duplicate keys are a reader error" "{:state 1 :state 2}" ""
+        "duplicate key";
     Alcotest.test_case "keyed key resolves through the dictionary" `Quick
       (fun () ->
         (* a missing key names the missing key-<name> def *)
