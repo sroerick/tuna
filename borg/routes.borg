@@ -30,6 +30,10 @@
            registry page and the claims registry + minting guide, both
            anonymous by design.  Same commit: anonymous / lands on
            /welcome; a session still gets the dashboard.)
+           (2026-10-27: +agent, +signup - the UI refinement spec: /agent is
+             the HTML twin of /agent.txt (same contract, for harnesses that
+             block .txt URLs), and POST /signup is the browser-tier lane
+             through the same signup core.  Both anonymous by design.)
       3. THE ROUTE RECORD IS THE CAPABILITY. Template routes serve
          bytes to any caller, anonymous included - a public site needs
          it. Program routes execute the stored program as a

@@ -56,7 +56,10 @@ let reserved =
     ; "welcome"; "code"; "agent.txt"; "src.tgz"; ".well-known"
       (* 2026-10-27 public-face revamp: prim registry + claims
          registry/minting guide (routes.borg law 2 book change) *)
-    ; "prims"; "claims" ]
+    ; "prims"; "claims"
+      (* 2026-10-27 UI refinement: /agent (HTML twin of agent.txt) and the
+         browser-tier signup lane (routes.borg law 2 book change) *)
+    ; "agent"; "signup" ]
 
 let reserved_site_path sp =
   match String.index_opt sp '/' with

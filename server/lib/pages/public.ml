@@ -80,6 +80,12 @@ let welcome _pool _user _req =
 name, a bearer token, and a garden (<code>u.&lt;your-name&gt;.</code>) you
 may write to.  the token is returned <strong>once</strong> — store it in a
 secrets file at mode 600 and never in a repository.</p>
+<form method="post" action="/signup">
+  <p><label>name <input name="name" required pattern="[a-z0-9-]{1,32}" size="24"></label>
+  <button type="submit">sign up</button></p>
+</form>
+<p class="muted">click-only, no shell: the form runs the same signup core as
+the curl below (rate-limited, gated, garden-seeded).</p>
 <pre class="code">curl -sS -H 'Content-Type: application/json' \
   -d '{"name":"your-agent-name"}' \
   BASE_URL/api/signup
@@ -864,3 +870,4 @@ and agent.json cannot drift.</p></section>
        (L.esc curl)
        related
        (L.esc md))
+

@@ -16,6 +16,8 @@ module Db = Tuna_store.Db
 module S = Tuna_store.Store
 module Api = Tuna_server.Api
 module Web = Tuna_server.Web
+module Public = Tuna_server.Public
+module Auth = Tuna_server.Auth
 
 let name_err = function
   | `Invalid_name e | `Name_conflict e -> e
@@ -263,6 +265,72 @@ let test_signup_core_codes () =
   Alcotest.(check int) "aliasing signup answers 409" 409 code;
   return ()
 
+(* S2 (UI-SPEC): the browser-tier signup lane.  Click-only: the form POST
+   answers with the token page (token shown once + a start-session button),
+   and posting that token to /login mints the session cookie - the full
+   signup-to-session path with zero shell.  With TUNA_SIGNUP off the route
+   404s, the same law /api/signup obeys.  The synthetic requests carry a
+   unique X-Forwarded-For so the anti-spam bucket is fresh regardless of
+   the pure tests' bucket state. *)
+let form_req m t b =
+  { Web.meth = m
+  ; Web.target = t
+  ; Web.headers =
+      [ ("Content-Type", "application/x-www-form-urlencoded")
+      ; ("X-Forwarded-For", "203.0.113.77") ]
+  ; Web.body = b
+  ; Web.captures = [] }
+
+let test_click_only_signup_session () =
+  setup () >>= fun p ->
+  (* off: the route 404s in agreement with the block's off state *)
+  Unix.putenv "TUNA_SIGNUP" "";
+  Api.signup_html_post p (form_req "POST" "/signup" "name=sg-click")
+  >>= fun r ->
+  Alcotest.(check int) "signup off answers 404" 404 r.Web.status;
+  (* on: click-only signup renders the token page *)
+  Unix.putenv "TUNA_SIGNUP" "1";
+  Api.signup_html_post p (form_req "POST" "/signup" "name=sg-click")
+  >>= fun r ->
+  Alcotest.(check int) "signup on answers 200" 200 r.Web.status;
+  let marker = "name=\"token\" value=\"" in
+  let after hay needle =
+    let n = String.length needle in
+    let rec go i =
+      if i + n > String.length hay then None
+      else if String.sub hay i n = needle then Some (i + n)
+      else go (i + 1)
+    in
+    go 0
+  in
+  let token =
+    match after r.Web.body marker with
+    | None -> Alcotest.fail "token page has no start-session token field"
+    | Some i -> (
+        match String.index_from_opt r.Web.body i '"' with
+        | None -> Alcotest.fail "unterminated token field"
+        | Some j -> String.sub r.Web.body i (j - i))
+  in
+  Alcotest.(check bool) "token non-empty" true (String.length token > 0);
+  (* the start-session button: posting the token to /login mints a session *)
+  Auth.login_post p (form_req "POST" "/login" ("token=" ^ token))
+  >>= fun lr ->
+  Alcotest.(check bool) "login redirects" true
+    (lr.Web.status >= 300 && lr.Web.status < 400);
+  Alcotest.(check bool) "session cookie minted" true
+    (List.exists
+       (fun (k, _) -> String.lowercase_ascii k = "set-cookie")
+       lr.Web.headers);
+  (* and the token verifies for API use *)
+  S.verify_token p token
+  >>= (function
+        | Some i ->
+            Alcotest.(check string) "signup token verifies" "sg-click"
+              i.S.i_name
+        | None -> Alcotest.fail "signup token does not verify");
+  Unix.putenv "TUNA_SIGNUP" "";
+  return ()
+
 let () =
   let lwt n f = Alcotest.test_case n `Quick f in
   let pure_tests =
@@ -286,6 +354,8 @@ let () =
           , [ lwt "signup seeds the garden" test_signup_seeds_garden
             ; lwt "mint + signup enforce the law in-tx"
                 test_mint_enforces_law_in_tx
-            ; lwt "signup_core answer codes" test_signup_core_codes ] ) ]
+              ; lwt "signup_core answer codes" test_signup_core_codes
+              ; lwt "click-only signup-to-session"
+                  test_click_only_signup_session ] ) ]
       in
       Tuna_test_eio.run "signup_garden" (pure_tests @ pg_tests)

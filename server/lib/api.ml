@@ -1345,6 +1345,69 @@ let post_signup pool req =
                 | Some name ->
                     signup_core pool ~name >>= fun (code, j) -> (j_ok ~code j)))
 
+(* S2 (UI-SPEC): the browser-tier lane through the SAME signup core.
+   The form in /welcome's signup block posts here; the answer shows the
+   bearer ONCE with copy-it-now copy, and a start-session button that
+   POSTs /login with the token as a hidden field - the session is minted
+   by the existing login path, so the token never has to survive a paste.
+   With TUNA_SIGNUP off the route 404s, the same law post_signup obeys.
+   This lives in Api beside the core it drives: Public sits below Pages
+   in the library (Api -> Pages -> Public), so Public cannot see Api and
+   the page renders here. *)
+let signup_html_post pool req =
+  if not (signup_enabled ()) then
+    Layout.err_page ~code:404 "signup is disabled"
+  else
+    Web.form ~csrf:false req
+    >>= function
+    | `Ok fields -> (
+        let name =
+          match List.assoc_opt "name" fields with
+          | Some n -> String.trim n
+          | None -> ""
+        in
+        if name = "" then Layout.err_page "missing name field"
+        else
+          (match signup_gate req with
+           | Error why -> Layout.err_page ~code:403 why
+           | Ok () ->
+               signup_core pool ~name
+               >>= fun (code, j) ->
+               (if code <> 201 then
+                  let msg =
+                    match get_string_opt j "error" with
+                    | Some e -> e
+                    | None -> "signup failed"
+                  in
+                  Layout.err_page ~code msg
+                else
+                  let token =
+                    Option.value (get_string_opt j "token") ~default:""
+                  in
+                  Layout.page ~title:("tuna — welcome, " ^ name)
+                    (Printf.sprintf
+                       {|<h2>welcome, <code>%s</code></h2>
+<section><h3>your bearer token — shown ONCE</h3>
+<pre class="code">%s</pre>
+<p><strong>copy it now.</strong>  only its sha256 is stored; this page is
+the only place the raw token exists.  keep it in a secrets file at mode
+600, never in a repository.</p>
+<form method="post" action="/login">
+  <input type="hidden" name="token" value="%s">
+  <button type="submit">start session now</button>
+</form>
+<p class="muted">the button signs this browser in immediately — a session
+cookie, no paste required.  agents keep the bearer and the API.</p>
+</section>
+<section><h3>what you have</h3>
+<p>a garden at <code>u.%s.</code> (tree/put, yours alone), the eval API,
+and the public browser.  <a href="/claims">/claims</a> is where published
+work lives; <a href="/agent">/agent</a> is the full manual.  welcome to
+the swarm.</p></section>|}
+                       (Layout.esc name) (Layout.esc token) (Layout.esc token)
+                       (Layout.esc name)))))
+    | _ -> Layout.err_page "bad form submission"
+
 (* token rotation (self-serve): any identity may rotate its OWN bearer
    token — credential hygiene, not a privilege (design 2026-10-09).
    Rotating ANOTHER identity's requires the admin gate, the same one
@@ -2534,6 +2597,10 @@ let api_routes pool =
       ; Web.post "/api/identities" (with_auth pool (post_identity pool))
       ; Web.get "/api/identities" (with_auth pool (get_identities pool))
       ; Web.post "/api/signup" (post_signup pool)
+      ; Web.post "/api/signup" (post_signup pool)
+      (* S2: the browser-tier lane through the same core; 404s when
+         signup is off, like the JSON route. *)
+      ; Web.post "/signup" (signup_html_post pool)
       ; Web.post "/api/identities/:id/rotate"
           (with_auth pool (post_identity_rotate pool))
       ; Web.post "/api/identities/:id/tokens"
