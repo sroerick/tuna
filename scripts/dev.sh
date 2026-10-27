@@ -148,6 +148,11 @@ build_all() {
 }
 
 start_server() {
+  # the public artifact dir (src.tgz) is written by deploy/build-public.sh
+  # at boot (serve.sh does this); without it /src.tgz 404s and the public
+  # crawl (scripts/crawl-public.sh) rightly fails its dead-link check
+  "$ROOT/scripts/deploy/build-public.sh" "${TUNA_PUBLIC_DIR:-/tmp/tuna-pp-public}" \
+    || echo "[dev] build-public failed (/src.tgz will 404)"
   build_all
   if [ -f "$sr_pidfile" ] && kill -0 "$(cat "$sr_pidfile")" 2>/dev/null; then
     echo "[dev] server already running (pid $(cat "$sr_pidfile")) on :$HTTP_PORT"

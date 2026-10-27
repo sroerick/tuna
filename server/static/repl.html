@@ -9,9 +9,15 @@
  textarea { width: 100%; height: 8rem; font-family: monospace; }
  input { width: 7rem; font-family: monospace; }
  pre { background: #f4f4f4; padding: .75rem; min-height: 3rem; white-space: pre-wrap; }
+ nav { border-bottom: 1px solid #ccc; padding-bottom: .5rem; margin-bottom: 1rem; }
+ nav a { margin-right: 1rem; }
 </style>
 </head>
 <body>
+<!-- the shared nav (Pages.Layout.nav, anonymous variant); this page is
+     served as a static file, so it carries its own copy - keep them in
+     sync (scripts/crawl-public.sh [3] checks it) -->
+<nav><a href="/">runs</a> <a href="/repl">repl</a> <a href="/grants">grants</a> <a href="/identities">identities</a> <a href="/todo">todo</a> <a href="/prims">prims</a> <a href="/claims">claims</a> <a href="/welcome">welcome</a> <a href="/code">code</a> <a href="/login">login</a></nav>
 <h1>tuna repl</h1>
 <p>tree calculus, evaluated in your browser. same engine the server runs,
 compiled to JavaScript - nothing you type here is sent anywhere.</p>
