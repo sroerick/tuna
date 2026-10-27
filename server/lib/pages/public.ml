@@ -587,10 +587,31 @@ projection it belongs to is <a href="/claims/%s">%s</a>.</p>
                       (L.esc (L.short_hash narrative_hash))
                       (L.esc base) (L.esc h12))))
         >>= fun narrative ->
-        L.page ~title:("tuna — claim " ^ field "assertion")
-          (Printf.sprintf
-             {|<h2>claim</h2>
-<p class="muted"><code>%s</code> %s</p>
+        if kvs = [] then
+          (* a prose assertion: the claimant filed words, not a key=value
+             projection — the field tables would render empty and the text
+             would hide inside raw projection.  render the text itself as
+             the claim, with the verdict table beside it. *)
+          L.page ~title:("tuna — claim " ^ path)
+            (Printf.sprintf
+              {|<h2>claim</h2>
+<p class="muted"><code>%s</code></p>
+<section><h3>what it asserts</h3>
+<p class="muted">a prose assertion — the claimant's words stand alone, no
+key=value projection was filed.  verdicts below are corrections.</p>
+<pre class="code">%s</pre></section>
+<section><h3>verdicts (%d)</h3>
+<table>
+<tr><th>verdict</th><th>note</th><th>record</th></tr>
+%s
+</table></section>|}
+              (L.esc path) (L.esc text)
+              (List.length verdicts) verdict_rows)
+        else
+          L.page ~title:("tuna — claim " ^ field "assertion")
+            (Printf.sprintf
+              {|<h2>claim</h2>
+<p class="muted"><code>%s</code></p>
 <section><h3>what it asserts</h3>
 <table>
 <tr><th>kind</th><td><code>%s</code></td></tr>
@@ -632,33 +653,32 @@ them by hash without holding the claimant's garden.</p></section>
 </table></section>
 <section><h3>raw projection</h3>
 <details><summary>the citation text</summary>%s</details></section>|}
-             (L.esc path)
-             (if verdicts = [] then "" else "")
-             (L.esc (field "kind"))
-             (L.esc (field "subject"))
-             (L.esc (field "assertion"))
-             (L.esc (field "claimant"))
-             (L.esc (field "minted_at"))
-             (hash_link (field "program"))
-             (match field "inputs" with
-              | "" -> {|<span class="muted">none (closed term)</span>|}
-              | s ->
-                  String.concat ", "
-                    (List.map hash_link (String.split_on_char ',' s)))
-             (L.esc (field "semantics"))
-             (L.esc (field "fuel"))
-             (L.esc (field "size_cap"))
-             (hash_link (field "result"))
-             (L.esc (field "steps"))
-             (L.status_badge (field "status"))
-             (run_link (field "run"))
-             (hash_link (field "run-record"))
-             (hash_link (field "journal"))
-             (L.esc (field "server_rev"))
-             narrative
-             (List.length verdicts)
-             verdict_rows
-             (L.code_block text))
+              (L.esc path)
+              (L.esc (field "kind"))
+              (L.esc (field "subject"))
+              (L.esc (field "assertion"))
+              (L.esc (field "claimant"))
+              (L.esc (field "minted_at"))
+              (hash_link (field "program"))
+              (match field "inputs" with
+               | "" -> {|<span class="muted">none (closed term)</span>|}
+               | s ->
+                   String.concat ", "
+                     (List.map hash_link (String.split_on_char ',' s)))
+              (L.esc (field "semantics"))
+              (L.esc (field "fuel"))
+              (L.esc (field "size_cap"))
+              (hash_link (field "result"))
+              (L.esc (field "steps"))
+              (L.status_badge (field "status"))
+              (run_link (field "run"))
+              (hash_link (field "run-record"))
+              (hash_link (field "journal"))
+              (L.esc (field "server_rev"))
+              narrative
+              (List.length verdicts)
+              verdict_rows
+              (L.code_block text))
 
 let code pool _user _req =
   S.list_programs pool ~limit:200 ()
