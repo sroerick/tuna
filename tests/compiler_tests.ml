@@ -449,7 +449,7 @@ let compile_budget_tests =
 let resolved_of ?dictionary src =
   let names = ref [] in
   let _art =
-    Bracket.compile_source ?dictionary
+    Tuna_compiler.Bracket.compile_source ?dictionary
       ~on_resolve:(fun name off -> names := (name, off) :: !names)
       src
   in
