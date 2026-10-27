@@ -1144,6 +1144,9 @@ let fetch_identity_by_name p name =
   | [ r ] -> Direct.return (Some (identity_of_row r))
   | _ -> store_error "multiple identity rows for name %s" name )
 
+(* boot-time operator seeding ("root"): deliberately OUTSIDE the
+   name-registry law below - the operator's identity predates gardens,
+   and the law only gates API-level creation (mint + signup). *)
 (* bootstrap (server-boot): insert (name, sha256 token) if absent;
    idempotent — a re-boot with the same token is a no-op, and the
    identity row is returned either way. *)
@@ -1160,23 +1163,144 @@ let bootstrap_identity p ?(is_admin = true) ~name ~token () =
        | None -> store_error "bootstrap_identity: insert succeeded but fetch failed"
                  )
 
-(* admin mint (pp-slice T2): a NEW non-admin (default) identity with
-   its own bearer token.  The raw token is returned to the caller ONCE
-   and never stored (only sha256); the identity row is do-nothing on a
-   name collision (ON CONFLICT DO NOTHING) so a duplicate mint cannot
-   silently overwrite an existing identity's token — the caller sees
-   the existing row's id but the returned token will not verify. *)
-let mint_identity p ?(is_admin = false) ~name ~token () =
-  Db.q_unit
+(* -- the name-registry law (garden aliasing) -------------------------
+
+   Every identity name doubles as its garden prefix "u.<name>.", and
+   garden coverage is RAW-STRING prefix matching (prefix_match), which
+   is delimiter-blind: any grant spelled "u.<name>" (no trailing dot -
+   the recorded u.notes/u.notes-writer tooth) or "u.<name>." must stay
+   unambiguous, so the registry works at the garden ROOT namespace
+   "u.<name>".  The law, enforced whenever an identity is created
+   (admin mint and signup alike): a name is a lowercase token
+   ([a-z0-9-], 1..name_max_len chars, no leading/trailing hyphen) and
+   its root may never alias ANY existing identity's root - equal,
+   covering, or covered (no name may be a raw string prefix of
+   another).  The check runs INSIDE the creating transaction, so claim
+   + insert are one atomic scope. *)
+
+type name_error =
+  [ `Invalid_name of string  (* not a safe garden token *)
+  | `Name_conflict of string  (* aliases an existing identity's garden *)
+  | `Exists  (* the exact name is already taken *) ]
+
+let name_max_len = 32
+
+let normalize_name name = String.lowercase_ascii (String.trim name)
+
+let check_name_charset name : (unit, string) result =
+  let n = String.length name in
+  if n = 0 then Error "name must be non-empty"
+  else if n > name_max_len then
+    Error (Printf.sprintf "name must be at most %d characters" name_max_len)
+  else if name.[0] = '-' then Error "name must not start with '-'"
+  else if name.[n - 1] = '-' then Error "name must not end with '-'"
+  else if
+    String.for_all
+      (fun c -> (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c = '-')
+      name
+  then Ok ()
+  else Error "name may contain only a-z, 0-9, and '-'"
+
+let garden_prefix_of_name name = "u." ^ name ^ "."
+
+(* raw-string aliasing of two garden roots: equal, or either a prefix
+   of the other (both begin "u.") *)
+let name_prefixes_alias a b =
+  let la = String.length a and lb = String.length b in
+  if la <= lb then String.sub b 0 la = a else String.sub a 0 lb = b
+
+(* the one shared law, DB-free: validate [candidate] and reject it if
+   any existing name's garden ROOT ("u.<existing>") aliases its own
+   ("u.<candidate>").  Ok (the normalized name) or Error (the
+   user-facing reason). *)
+let check_name_claim ~candidate ~existing : (string, name_error) result =
+  let name = normalize_name candidate in
+  match check_name_charset name with
+  | Error e -> Error (`Invalid_name e)
+  | Ok () -> (
+      let root = "u." ^ name in
+      match
+        List.find_opt
+          (fun e -> name_prefixes_alias root ("u." ^ normalize_name e))
+          existing
+      with
+      | Some e -> Error (`Name_conflict e)
+      | None -> Ok name)
+
+(* the law against the live roster, on a held transaction connection *)
+let claim_name_tx c ~candidate : (string, name_error) result =
+  Db.q_conn c "SELECT name FROM identities"
+  >>= fun rows ->
+  let existing = List.map (fun r -> text r 0 "identity.name") rows in
+  Direct.return (check_name_claim ~candidate ~existing)
+
+(* insert on a held transaction connection; None = the name was taken
+   concurrently (ON CONFLICT DO NOTHING fired) *)
+let insert_identity_tx c ~name ~token ~is_admin =
+  Db.q_conn
     ~params:[ p_str name; p_str (Tuna.Hash.hex_of_string token); p_bool is_admin ]
-    p
+    c
     "INSERT INTO identities (name, token_hash, is_admin) VALUES ($1, $2, $3) \
-     ON CONFLICT (name) DO NOTHING"
-  >>= fun () ->
-  fetch_identity_by_name p name
-  >>= (function
-       | Some i -> Direct.return i
-       | None -> store_error "mint_identity: insert succeeded but fetch failed")
+     ON CONFLICT (name) DO NOTHING \
+     RETURNING id::text, name, token_hash, is_admin"
+  >>= function
+  | [ r ] -> Direct.return (Some (identity_of_row r))
+  | [] -> Direct.return None
+  | _ -> store_error "identity insert: unexpected row count"
+
+(* admin mint (pp-slice T2): a NEW non-admin (default) identity with its
+   own bearer token.  The raw token is returned to the caller ONCE and
+   never stored (only sha256).  The name-registry law is enforced inside
+   the creating transaction; an exact-name collision (ON CONFLICT DO
+   NOTHING) answers `Exists so a duplicate mint cannot silently
+   overwrite an existing identity's token. *)
+let mint_identity p ?(is_admin = false) ~name ~token () :
+    (identity, name_error) result =
+  Db.with_tx p (fun c ->
+      claim_name_tx c ~candidate:name
+      >>= function
+      | Error e -> Direct.return (Error e)
+      | Ok name -> (
+          insert_identity_tx c ~name ~token ~is_admin
+          >>= function
+          | Some i -> Direct.return (Ok i)
+          | None -> Direct.return (Error `Exists)))
+
+(* signup (the TUNA_SIGNUP surface): a NON-ADMIN identity AND its garden
+   grant - prim tree/put (the prim the tree boundary's holder checks
+   answer), path_prefix u.<name>. - created in ONE transaction.  The
+   grant is the only path authority the new identity holds, and the law
+   above guarantees the garden is not already spoken for. *)
+let signup_identity p ~name ~token () : (identity * grant, name_error) result =
+  Db.with_tx p (fun c ->
+      claim_name_tx c ~candidate:name
+      >>= function
+      | Error e -> Direct.return (Error e)
+      | Ok name -> (
+          insert_identity_tx c ~name ~token ~is_admin:false
+          >>= function
+          | None -> Direct.return (Error `Exists)
+          | Some i -> (
+              Db.q_conn
+                ~params:[ p_str i.i_id; p_str (garden_prefix_of_name name) ]
+                c
+                "INSERT INTO grants (prim, args_attenuation, path_prefix, \
+                 caller, minted_by, parent_grant) \
+                 VALUES ('tree/put', '{}'::jsonb, $2, $1::uuid, NULL, NULL) \
+                 RETURNING id::text"
+              >>= function
+              | [ g ] -> (
+                  Db.q_conn ~params:[ p_str (text g 0 "grant.id") ] c
+                    select_grant_by_id
+                  >>= (function
+                        | [ gr ] -> Direct.return (Ok (i, grant_of_row gr))
+                        | rows ->
+                            store_error
+                              "signup_identity: grant fetch gave %d rows"
+                              (List.length rows)))
+              | rows ->
+                  store_error "signup_identity: grant insert gave %d rows"
+                      (List.length rows))))
 
 (* the identities roster (admin page/API): never carries token hashes *)
 let list_identities p () =

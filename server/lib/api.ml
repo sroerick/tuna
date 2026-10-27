@@ -1176,24 +1176,25 @@ let post_identity pool auth req =
         match get_string_opt j "name" with
         | None -> (j_err "missing \"name\"")
         | Some name -> (
-            let name = String.trim name in
-            if name = "" then (j_err "\"name\" must be non-empty")
-            else
-              let token = Tokens.random_token_hex () in
-              Store.fetch_identity_by_name pool name
-              >>= (function
-                    | Some _ -> (j_err ~code:409 "identity name already exists")
-                    | None ->
-                        let is_admin =
-                          Option.value (get_bool_opt j "is_admin") ~default:false
-                        in
-                        Store.mint_identity pool ~is_admin ~name ~token ()
-                        >>= fun i ->
-                        (match get_string_opt j "password" with
-                         | Some pw when String.trim pw <> "" ->
-                             Store.set_password pool ~identity_id:i.Store.i_id
-                               ~password:pw
-                         | _ -> return ())
+            let is_admin =
+              Option.value (get_bool_opt j "is_admin") ~default:false
+            in
+            let token = Tokens.random_token_hex () in
+            (* the name-registry law runs inside the mint transaction: a
+               bad charset answers 400, garden aliasing or an exact
+               duplicate answers 409 *)
+            Store.mint_identity pool ~is_admin ~name ~token ()
+            >>= (function
+                  | Error (`Invalid_name e) -> (j_err ~code:400 e)
+                  | Error (`Name_conflict e) -> (j_err ~code:409 e)
+                  | Error `Exists ->
+                      (j_err ~code:409 "identity name already exists")
+                  | Ok i ->
+                      (match get_string_opt j "password" with
+                       | Some pw when String.trim pw <> "" ->
+                           Store.set_password pool ~identity_id:i.Store.i_id
+                             ~password:pw
+                       | _ -> return ())
                         >>= fun () ->
                         (j_ok ~code:201
                            (`Assoc
@@ -1215,6 +1216,60 @@ let get_identities pool _auth _req =
                     [ ("id", `String i.i_id); ("name", `String i.i_name)
                     ; ("is_admin", `Bool i.i_is_admin) ])
                 ids) ) ]))
+
+(* -- signup (public; the whole route lives behind TUNA_SIGNUP) --------
+
+   POST /api/signup {"name": "..."} creates a NON-ADMIN identity and
+   seeds its garden grant (prim tree/put, path_prefix u.<name>.) in ONE
+   transaction; the bearer token is returned ONCE in the admin mint's
+   response shape.  No auth - this is the public door - so the route
+   answers 404 unless TUNA_SIGNUP=1: it can deploy safely before the
+   anti-spam decision. *)
+
+let signup_enabled () = Sys.getenv_opt "TUNA_SIGNUP" = Some "1"
+
+(* the anti-spam SEAM: the future gate (rate limit, proof of work,
+   invite codes) plugs in here - one function, one call site below.
+   Ok lets the signup through; Error is a 403 with the reason. *)
+let signup_gate _req : (unit, string) result = Ok ()
+
+(* the signup core (everything after the env gate + the seam), as a
+   (code, json) pair in direct position - the grant_mint_core shape, so
+   tests drive it without Web.  Errors mirror j_err's {"error": ...}. *)
+let signup_core pool ~name =
+  let token = Tokens.random_token_hex () in
+  Store.signup_identity pool ~name ~token ()
+  >>= (function
+        | Error (`Invalid_name e) ->
+            return (400, `Assoc [ ("error", `String e) ])
+        | Error (`Name_conflict e) ->
+            return (409, `Assoc [ ("error", `String e) ])
+        | Error `Exists ->
+            return
+              (409, `Assoc [ ("error", `String "identity name already exists") ])
+        | Ok (i, _garden) ->
+            return
+              ( 201
+              , `Assoc
+                  [ ("id", `String i.Store.i_id)
+                  ; ("name", `String i.Store.i_name)
+                  ; ("is_admin", `Bool i.Store.i_is_admin)
+                  ; ("token", `String token) ] ))
+
+let post_signup pool req =
+  if not (signup_enabled ()) then (j_err ~code:404 "signup is disabled")
+  else
+    match signup_gate req with
+    | Error why -> (j_err ~code:403 why)
+    | Ok () ->
+        guard (fun () ->
+            body_json req >>= function
+            | Error msg -> (j_err msg)
+            | Ok j -> (
+                match get_string_opt j "name" with
+                | None -> (j_err "missing \"name\"")
+                | Some name ->
+                    signup_core pool ~name >>= fun (code, j) -> (j_ok ~code j)))
 
 (* token rotation (self-serve): any identity may rotate its OWN bearer
    token — credential hygiene, not a privilege (design 2026-10-09).
@@ -2391,6 +2446,7 @@ let api_routes pool =
       ; Web.get "/api/grants" (with_auth pool (get_grants pool))
       ; Web.post "/api/identities" (with_auth pool (post_identity pool))
       ; Web.get "/api/identities" (with_auth pool (get_identities pool))
+      ; Web.post "/api/signup" (post_signup pool)
       ; Web.post "/api/identities/:id/rotate"
           (with_auth pool (post_identity_rotate pool))
       ; Web.post "/api/identities/:id/tokens"

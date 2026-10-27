@@ -268,9 +268,14 @@ let test_grant_mint_scope () =
   >>= fun (code, _) ->
   Alcotest.(check int) "a prefix outside the caller's authority is refused" 403 code;
   (* the operator seeds the garden; the member then narrows inside it *)
-  S.mint_identity p ~is_admin:true ~name:"mint-seed-root" ~token:"mint-seed-token"
-    ()
-  >>= fun op ->
+    S.mint_identity p ~is_admin:true ~name:"mint-seed-root" ~token:"mint-seed-token"
+      ()
+    >>= (function
+          | Ok op -> return op
+          | Error `Exists -> Alcotest.fail "mint-seed-root: exists"
+          | Error (`Invalid_name m) | Error (`Name_conflict m) ->
+              Alcotest.fail ("mint-seed-root: " ^ m))
+    >>= fun op ->
   let op_auth =
     { Api.auth_id = op.S.i_id
     ; Api.auth_name = op.S.i_name

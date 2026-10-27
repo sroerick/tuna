@@ -227,3 +227,24 @@
  (deps web_errorpath_tests.exe)
  (action
   (run %{exe:web_errorpath_tests.exe})))
+
+; signup + the name-registry law (pp-slice): the pure law tests run
+; WITHOUT postgres (direct rule below); the pg parts ride the same
+; store-test gate, on their own scratch database.
+(executable
+ (name signup_garden_tests)
+ (modules signup_garden_tests tuna_test_eio)
+ (libraries tuna tuna_compiler tuna_store tuna_server unix alcotest eio eio_main eio.unix))
+
+(rule
+ (alias runtest)
+ (deps signup_garden_tests.exe)
+ (action
+  (run %{exe:signup_garden_tests.exe})))
+
+(rule
+ (alias runtest)
+ (deps signup_garden_tests.exe ../scripts/test-store.sh (source_tree ../migrations))
+ (action
+  (bash
+   "bash %{workspace_root}/scripts/test-store.sh %{exe:signup_garden_tests.exe} ../migrations tuna_test_signup")))

@@ -76,15 +76,17 @@ let mint pool user req =
                 | Some _ -> true
                 | None -> false
               in
-              S.fetch_identity_by_name pool name
-              >>= (function
-                    | Some _ ->
-                        L.err_page ~code:409 ~user
-                          (Printf.sprintf "identity %S already exists" name)
-                    | None ->
-                        let token = Tokens.random_token_hex () in
-                        S.mint_identity pool ~is_admin ~name ~token ()
-                        >>= fun i ->
+                let token = Tokens.random_token_hex () in
+                (* the name-registry law runs inside the mint transaction *)
+                S.mint_identity pool ~is_admin ~name ~token ()
+                >>= (function
+                      | Error (`Invalid_name e) -> L.err_page ~code:400 ~user e
+                      | Error (`Name_conflict e) -> L.err_page ~code:409 ~user e
+                      | Error `Exists ->
+                          L.err_page ~code:409 ~user
+                            (Printf.sprintf "identity %S already exists"
+                               (S.normalize_name name))
+                      | Ok i ->
                         let pw =
                           Option.value (List.assoc_opt "password" fields)
                             ~default:""
