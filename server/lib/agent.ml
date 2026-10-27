@@ -74,10 +74,12 @@ let rules =
   ]
 
 let first_calls =
-  [ "curl -sS -H 'Authorization: Bearer $TOKEN' -H 'Content-Type: application/json' \
-     -d '{\"source\":\"(\\\\f. \\\\x. f x)\"}' $BASE/api/programs"
+  [ "curl -sS -H 'Content-Type: application/json' -d '{\"name\":\"my-agent\"}' \
+      $BASE/api/signup   # 201 {id,name,is_admin,token}; token returned ONCE"
   ; "curl -sS -H 'Authorization: Bearer $TOKEN' -H 'Content-Type: application/json' \
-     -d '{\"program\":\"<hash>\",\"inputs\":[]}' $BASE/api/runs"
+      -d '{\"source\":\"(\\f. \\x. f x)\"}' $BASE/api/programs"
+  ; "curl -sS -H 'Authorization: Bearer $TOKEN' -H 'Content-Type: application/json' \
+      -d '{\"program\":\"<hash>\",\"inputs\":[]}' $BASE/api/runs"
   ; "curl -sS -H 'Authorization: Bearer $TOKEN' $BASE/api/runs/<id>/trace"
   ; "curl -sS $BASE/code"
   ]
@@ -114,9 +116,12 @@ let agent_json ?(base_url : string option = None) () : Yojson.Basic.t =
               , `String "tuna identities table (bearer token, sha256 at rest)" )
             ; ( "how_to_get_credentials"
               , `String
-                  "A human supplies the bearer token once (boot prints root's, \
-                   or an admin mints one at /identities); store it mode 600.  \
-                   There are no credentials in this document." )
+                  "Self-serve: POST /api/signup {\"name\":\"...\"} -> 201 {id, \
+                   name, is_admin:false, token}; the token is returned ONCE - \
+                   store it mode 600.  The signup seeds your garden (tree/put \
+                   on u.<name>.).  Servers with TUNA_SIGNUP unset answer 404.  \
+                   Or a human/admin supplies a token (boot prints root's; \
+                   admins mint at /identities).  No credentials in this doc." )
             ; ( "session_cookie"
               , `String
                   "Browser clients may use cookie tuna_session (HttpOnly, \
@@ -209,6 +214,26 @@ let agent_json ?(base_url : string option = None) () : Yojson.Basic.t =
                     , `Assoc
                         [ ("token", `String "returned ONCE, only sha256 stored")
                         ; ("is_admin", `Bool false) ] ) ] )
+              ; ( "signup"
+                , `Assoc
+                    [ ("method", `String "POST")
+                    ; ("path", `String "/api/signup")
+                    ; ( "auth"
+                      , `String "none (self-serve; server gate TUNA_SIGNUP)" )
+                    ; ( "request"
+                      , `Assoc [ ("name", `String "agent-label") ] )
+                    ; ( "response_ok"
+                      , `Assoc
+                          [ ("id", `String "uuid")
+                          ; ("name", `String "agent-label")
+                          ; ("is_admin", `Bool false)
+                          ; ( "token"
+                            , `String "returned ONCE, only sha256 stored" ) ] )
+                    ; ( "notes"
+                      , `String "mints a non-admin identity + garden grant \
+                                 (tree/put on u.<name>.) in one transaction; \
+                                 404 when signup is disabled, 409 on name \
+                                 conflicts" ) ] )
             ; ( "route_put"
               , `Assoc
                   [ ("method", `String "POST")
@@ -281,10 +306,13 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "Browser clients may use cookie tuna_session (HttpOnly,"
     ; "SameSite=Lax) after POST /login; agents use Bearer."
     ; ""
-    ; "How to get credentials: ask the human once. Store them in a local"
-    ; "secrets file (mode 600). This document never contains tokens."
-    ; "An admin mints a non-admin identity + token at " ^ origin
-    ; "/identities (or POST /api/identities)."
+    ; "How to get credentials (self-serve): POST " ^ origin ^ "/api/signup"
+    ; "with {\"name\":\"your-label\"} -> 201 {id,name,is_admin,token}; the"
+    ; "token is returned ONCE - store it mode 600 immediately.  Signup"
+    ; "seeds your garden (tree/put on u.<name>.).  A server with TUNA_SIGNUP"
+    ; "unset answers 404.  Ask-the-human still works: an admin mints a"
+    ; "non-admin identity + token at " ^ origin ^ "/identities (or POST"
+    ; "/api/identities).  This document never contains tokens."
       ; "Rotate your own bearer token (self-serve): POST " ^ origin
       ; "/api/identities/<your-id>/rotate -> {\"token\":\"…\"} returned"
       ; "once; the previous token stops verifying immediately. An admin"

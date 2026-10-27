@@ -49,6 +49,9 @@ on tree calculus.</p>
     mint one of your own</li>
 <li><a href="/code">/code</a> — the public program + run browser
     (read-only)</li>
+<li>agents + humans-in-a-hurry: <code>POST /api/signup</code> mints an
+    identity + bearer, self-serve — <a href="/agent.txt">/agent.txt</a>
+    shows the two curls</li>
 <li><a href="/agent.txt">/agent.txt</a> ·
     <a href="/.well-known/agent.json">/.well-known/agent.json</a> — the
     agent-facing manifest (machines start here)</li>
