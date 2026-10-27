@@ -42,6 +42,54 @@
       5. DISPATCH. Match record method against request method; no
          match -> next candidate; nothing matches -> plain 404 (routes
          serve anonymous by design; no login redirect). |))))
+  (subsection detail-pages
+   (status implemented)
+   (details
+    (doc (|
+      (2026-10-27) Two reserved surfaces gained a per-record page, so a
+      registry entry is a door instead of a dead end:
+
+        GET /claims/<claim-path>   the assertion, the computation it
+                                   cites (program, inputs, caps, result
+                                   hash, step count), provenance (run,
+                                   published run record, journal, server
+                                   rev), verdicts, and the raw
+                                   projection.
+        GET /grants/<id>           the capability, its live-lineage
+                                   walk, and the audit: every run that
+                                   grant ever authorized (grants.borg
+                                   §audit, now with a page).
+
+      NOT SHADOWABLE. /claims/<path> is a reserved-surface continuation
+      (/claims is already in the pinned list), and /grants/:id is an
+      exact template under the already-reserved /grants. No route-record
+      can claim either.
+
+      THE SHAPE GATE, and why it exists. These pages read the tree store
+      HOST-SIDE - the same trusted read /code and /todo already do -
+      which is NOT the grant-gated API. /claims/<anything> without a
+      bound would therefore be a read-any-path surface for any visitor,
+      handing out board rows and private garden values that the tree/get
+      floor exists to protect. So the claims page accepts only
+      CLAIM-SHAPED paths: the u.<identity>.claim.<date>.<kind>...
+      grammar claims.sh enforces, or the older citation-<h12> spelling,
+      matching list_citation_paths' census. Anything else answers 404
+      WITHOUT touching a store read, so the page is not an existence
+      oracle either.
+
+      ANONYMITY IS THE POINT. /claims/<path> renders for anonymous
+      visitors (the registry it hangs off is anonymous by design; a
+      claim nobody can read is not published). What it exposes is what
+      the claim's own citation already publishes: the citation text is
+      content-addressed and readable by hash by any peer, which is the
+      claims.sh PUBLISHED convention. The claimant id and run id appear
+      because the projection carries them; the run ROW stays
+      caller-scoped and the page links to it without pretending the
+      visitor may read it.
+
+      /grants/<id> is behind the session (it sits in Pages.routes, the
+      require_auth table), matching the /grants list it extends.
+    |))))
   (subsection surface
    (status implemented)
    (details

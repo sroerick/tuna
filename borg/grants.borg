@@ -208,7 +208,7 @@
   )
 
   (subsection audit
-   (doc "Grant usage as a SQL query — the audit demo")
+   (doc "Grant usage as a SQL query — the audit demo, now with a page")
    (status implemented)
    (details
     (doc (|
@@ -222,6 +222,35 @@
          answer to "why structure over text": in a text-seam system this
          query is a log-grep heuristic; here it is indexed relational
          data produced as a byproduct of running.
+
+         (2026-10-27) THE PAGE. Until now this demo was reachable only
+         from psql on the box (scripts/verify-6-audit.sh proves the
+         query); an operator asking "what did this grant actually
+         authorize?" had to open a shell. GET /grants/<id> is the same
+         query for a human, and it is deliberately the SAME semantics,
+         not a paraphrase:
+
+           - one row per run the grant authorized, with the distinct
+             prims it was exercised at, the call count, and the first
+             callsite path;
+           - a per-run expansion showing every journal row (seq,
+             callsite, prim, contract version, result hash);
+           - the live-lineage walk beside it, because a grant's
+             authority dies when ANY ancestor is revoked, so "this row
+             is unrevoked" is not the same claim as "this grant is
+             live".
+
+         DENIALS ARE NOT EXERCISES. A denial journals with grant_id
+         NULL (the boundary records the attempt before crediting any
+         grant), so a run the grant REFUSED never appears in its audit
+         table. That is the correct reading of the query and the page
+         says so out loud rather than letting a reader assume the
+         absent rows were authorized calls.
+
+         Store accessors: Store.list_grant_exercises (the grouped
+         query) and Store.list_grant_calls (one run's rows under one
+         grant). Both are host-side reads on the audit page, exactly
+         like Store.list_grants on the list page.
     |))
    )
   )

@@ -1226,7 +1226,18 @@ let check_name_claim ~candidate ~existing : (string, name_error) result =
           (fun e -> name_prefixes_alias root ("u." ^ normalize_name e))
           existing
       with
-      | Some e -> Error (`Name_conflict e)
+      (* the payload is the EXISTING name, and it used to be returned as
+         the whole error text: a caller reading the JSON got
+         {"error":"agora"} and had to guess what it meant.  Name the
+         collision and the reason (garden aliasing, not just duplication),
+         because the garden prefix is what makes the law non-obvious. *)
+      | Some e ->
+          Error
+            (`Name_conflict
+              (Printf.sprintf
+                 "name %S collides with the existing identity %S: garden \
+                  prefixes may not overlap (u.%s. would alias u.%s.)"
+                 name e name (normalize_name e)))
       | None -> Ok name)
 
 (* the law against the live roster, on a held transaction connection *)
@@ -1781,6 +1792,86 @@ let find_live_grant_id p ~prim ~path_prefix ~caller =
   >>= (function
         | [ r ] -> Direct.return (Some (text r 0 "grants.id"))
         | _ -> Direct.return None)
+
+(* -- the grant audit surface (grants.audit) --------------------------
+
+   "Which runs touched grant g?" answers EXACTLY from journal rows, with
+   no log grep: the effect record IS the audit record (verify-6-audit).
+   grants.borg states the headline demo, and until now it was reachable
+   only from psql on the box; this is the same query behind the page.
+
+   Grouped by run so the detail page can render one line per run: how
+   many calls the grant authorized, which prims, and the first/last
+   callsite paths it was exercised at.  A DENIAL row carries grant_id
+   NULL (the denial is journaled before any grant is credited), so an
+   ungranted run that TRIED to use this grant's prim never appears
+   here - correctly: the grant did not authorize it. *)
+
+type grant_exercise = {
+  ge_run_id : string
+; ge_prim : string list      (* distinct prims this grant authorized in that run *)
+; ge_calls : int64           (* journal rows attributable to this grant *)
+; ge_first_callsite : string
+; ge_last_callsite : string
+; ge_run_status : string
+; ge_run_steps : int option
+; ge_run_caller : string option
+; ge_run_created : string option
+}
+
+let list_grant_exercises p ?(limit = 200) id =
+  Db.q
+    ~params:[ p_str id; p_int limit ]
+    p
+    "SELECT j.run_id::text, \
+            string_agg(DISTINCT j.prim, ',' ORDER BY j.prim) AS prims, \
+            count(*)::bigint, \
+            min(j.callsite_path) AS first_cs, \
+            max(j.callsite_path) AS last_cs, \
+            r.status, r.step_count, r.caller::text, r.created_at::text \
+       FROM journals j JOIN runs r ON r.id = j.run_id \
+      WHERE j.grant_id = $1::uuid \
+      GROUP BY j.run_id, r.status, r.step_count, r.caller, r.created_at \
+      ORDER BY r.created_at DESC NULLS LAST LIMIT $2"
+  >>= fun rows ->
+  Direct.return
+    (List.map
+       (fun r ->
+         { ge_run_id = text r 0 "journals.run_id"
+         ; ge_prim =
+             (match opt_text r 1 with
+              | None -> []
+              | Some s -> String.split_on_char ',' s)
+         ; ge_calls = int64 r 2 "journal.calls"
+         ; ge_first_callsite = text r 3 "journal.first_callsite"
+         ; ge_last_callsite = text r 4 "journal.last_callsite"
+         ; ge_run_status = text r 5 "runs.status"
+         ; ge_run_steps = opt_int r 6
+         ; ge_run_caller = opt_text r 7
+         ; ge_run_created = opt_text r 8 })
+       rows)
+
+(* the callsite-level detail for ONE run under ONE grant: which prim ran
+   at which canonical path, and how it went (error text is the journaled
+   denial reason, if any) *)
+let list_grant_calls p ~grant_id ~run_id =
+  Db.q
+    ~params:[ p_str grant_id; p_str run_id ]
+    p
+    "SELECT seq, callsite_path, prim, prim_contract, error, result_hash \
+       FROM journals WHERE grant_id = $1::uuid AND run_id = $2::uuid \
+      ORDER BY seq"
+  >>= fun rows ->
+  Direct.return
+    (List.map
+       (fun r ->
+         ( int r 0 "journal.seq"
+         , text r 1 "journal.callsite_path"
+         , text r 2 "journal.prim"
+         , text r 3 "journal.prim_contract"
+         , opt_text r 4
+         , opt_text r 5 ))
+       rows)
 
 (* unconditional write: INSERT at version 1, or version+1 on the
    existing row (tree/put prim).  Returns the new version. *)

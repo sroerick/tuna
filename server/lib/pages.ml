@@ -16,6 +16,7 @@
       GET  /runs/:id/trace         firing trace (borg/trace.borg)
       POST /runs/:id/verify         replay-verify button
        GET  /grants (read-only view; mint/revocation live on the /api/grants surface)
+     GET  /grants/:id            one capability: its live lineage + the runs it authorized
      GET  /repl       POST /repl/eval
       GET  /view/:hash             value viewer (tree/bytes/program)
       GET  /todo                   the todo board (store-backed)
@@ -43,6 +44,7 @@ let routes pool =
       ; (`Get, "/runs/:id/trace", Run_page.trace_page pool)
     ; (`Post, "/runs/:id/verify", Run_page.verify_post pool)
     ; (`Get, "/grants", Grants.view pool)
+    ; (`Get, "/grants/:id", Grants.detail pool)
     ; (`Get, "/identities", Identities.view pool)
     ; (`Post, "/identities/mint", Identities.mint pool)
     ; (`Get, "/repl", Repl.view pool)
@@ -65,6 +67,12 @@ let open_routes pool =
     ; Web.get "/welcome" (Public.welcome pool None)
     ; Web.get "/prims" (Public.prims pool None)
     ; Web.get "/claims" (Public.claims pool None)
+    (* a claim is identified by its PATH, not by an opaque id: the path IS
+       the assertion, and it contains dots and slashes-in-name only, so a
+       trailing ** capture carries it verbatim (no encoding round-trip on a
+       URL a human types).  Registered after the exact /claims so the
+       registry still wins its own request. *)
+    ; Web.get "/claims/**" (Public.claim_detail pool None)
     ; Web.get "/code" (Public.code pool None)
     ; Web.get "/agent.txt" (Public.agent_txt pool)
     ; Web.get "/.well-known/agent.json" (Public.agent_json pool)
