@@ -1244,10 +1244,68 @@ let get_identities pool _auth _req =
 
 let signup_enabled () = Sys.getenv_opt "TUNA_SIGNUP" = Some "1"
 
-(* the anti-spam SEAM: the future gate (rate limit, proof of work,
-   invite codes) plugs in here - one function, one call site below.
-   Ok lets the signup through; Error is a 403 with the reason. *)
-let signup_gate _req : (unit, string) result = Ok ()
+(* -- anti-spam: per-address fixed window --------------------------------
+
+   The only public unauthenticated route, so its gate must cost nothing
+   and touch no db.  Behind relayd every request carries
+   X-Forwarded-For; relayd APPENDS the observed peer address, so the
+   LAST entry is the one the front actually saw - earlier entries are
+   client-controlled and never trusted.  Direct (loopback/dev) calls
+   answer "direct" and share one bucket.  TUNA_SIGNUP_RATE_PER_HOUR caps
+   signups per address per hour (default 5); state is in-memory on
+   purpose - a restart resets it, and metering a heuristic is not worth
+   a migration.  One Eio domain drives every handler, so a plain table
+   needs no lock. *)
+
+let signup_client_addr req =
+  let default = "direct" in
+  match Web.header req "x-forwarded-for" with
+  | None -> default
+  | Some xff ->
+      let last =
+        match String.rindex_opt xff ',' with
+        | Some i -> String.sub xff (i + 1) (String.length xff - i - 1)
+        | None -> xff
+      in
+      let addr = String.trim last in
+      if addr = "" then default else addr
+
+let signup_rate_limit () =
+  match Sys.getenv_opt "TUNA_SIGNUP_RATE_PER_HOUR" with
+  | Some v -> (
+      match int_of_string_opt (String.trim v) with
+      | Some n when n > 0 -> n
+      | _ -> 5)
+  | None -> 5
+
+(* (window_start, count) per address *)
+let signup_buckets : (string, float * int) Hashtbl.t = Hashtbl.create 16
+
+(* the pure law, injectable for tests: a fresh window starts at the
+   first request inside it; a refusal consumes no slot. *)
+let signup_rate_check ~table ~limit ~window ~now addr =
+  let start, count =
+    match Hashtbl.find_opt table addr with
+    | Some (s, c) when now -. s < window -> (s, c)
+    | _ -> (now, 0)
+  in
+  if count >= limit then
+    Error "too many signups from this address; retry later"
+  else (
+    Hashtbl.replace table addr (start, count + 1);
+    Ok ())
+
+(* the anti-spam SEAM: the future gate (proof of work, invite codes)
+   plugs in here - one function, one call site below.  Ok lets the
+   signup through; Error is a 403 with the reason. *)
+let signup_gate req =
+  match
+    signup_rate_check ~table:signup_buckets ~limit:(signup_rate_limit ())
+      ~window:3600. ~now:(Unix.time ())
+      (signup_client_addr req)
+  with
+  | Ok () -> Ok ()
+  | Error why -> Error why
 
 (* the signup core (everything after the env gate + the seam), as a
    (code, json) pair in direct position - the grant_mint_core shape, so

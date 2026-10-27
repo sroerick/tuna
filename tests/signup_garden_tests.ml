@@ -15,6 +15,7 @@ open Tuna_store.Direct
 module Db = Tuna_store.Db
 module S = Tuna_store.Store
 module Api = Tuna_server.Api
+module Web = Tuna_server.Web
 
 let name_err = function
   | `Invalid_name e | `Name_conflict e -> e
@@ -86,6 +87,65 @@ let test_signup_env_gate () =
   Unix.putenv "TUNA_SIGNUP" "1";
   Alcotest.(check bool) "1 enables" true (Api.signup_enabled ());
   Unix.putenv "TUNA_SIGNUP" ""
+
+(* -- the anti-spam gate (DB-free) -------------------------------------- *)
+
+let expect_allowed what = function
+  | Ok () -> ()
+  | Error e -> Alcotest.failf "%s: expected Ok, got Error %S" what e
+
+let expect_refused what = function
+  | Error _ -> ()
+  | Ok () -> Alcotest.failf "%s: expected refusal, got Ok" what
+
+let test_signup_rate_window () =
+  let t : (string, float * int) Hashtbl.t = Hashtbl.create 8 in
+  let try_at now =
+    Api.signup_rate_check ~table:t ~limit:3 ~window:3600. ~now "1.2.3.4"
+  in
+  expect_allowed "1st in window" (try_at 100.);
+  expect_allowed "2nd in window" (try_at 101.);
+  expect_allowed "3rd in window" (try_at 102.);
+  expect_refused "4th in window refused" (try_at 103.);
+  expect_refused "refusal consumes no slot: still capped late in window"
+    (try_at 3400.);
+  expect_allowed "fresh window re-arms" (try_at 3700.)
+
+let test_signup_rate_per_address () =
+  let t : (string, float * int) Hashtbl.t = Hashtbl.create 8 in
+  let try_at addr =
+    Api.signup_rate_check ~table:t ~limit:1 ~window:3600. ~now:5. addr
+  in
+  expect_allowed "first address" (try_at "1.1.1.1");
+  expect_refused "same address capped" (try_at "1.1.1.1");
+  expect_allowed "another address unaffected" (try_at "2.2.2.2")
+
+let test_signup_client_addr () =
+  let mk headers =
+    { Web.meth = "POST"; target = "/api/signup"; headers; body = ""
+    ; captures = [] }
+  in
+  let addr h = Api.signup_client_addr (mk h) in
+  Alcotest.(check string) "no header is direct" "direct" (addr []);
+  Alcotest.(check string) "single entry passes through" "9.9.9.9"
+    (addr [ ("X-Forwarded-For", "9.9.9.9") ]);
+  Alcotest.(check string) "relayd-appended last entry wins" "8.8.8.8"
+    (addr [ ("X-Forwarded-For", "spoofed, 8.8.8.8") ]);
+  Alcotest.(check string) "empty header is direct" "direct"
+    (addr [ ("X-Forwarded-For", " ") ])
+
+let test_signup_gate_rate () =
+  Unix.putenv "TUNA_SIGNUP_RATE_PER_HOUR" "1";
+  let mk ip =
+    { Web.meth = "POST"
+    ; target = "/api/signup"
+    ; headers = [ ("X-Forwarded-For", ip) ]
+    ; body = ""
+    ; captures = [] }
+  in
+  expect_allowed "gate 1st" (Api.signup_gate (mk "gate-test-1"));
+  expect_refused "gate 2nd refused" (Api.signup_gate (mk "gate-test-1"));
+  Unix.putenv "TUNA_SIGNUP_RATE_PER_HOUR" ""
 
 (* -- pg: the law + the garden (scripts/test-store.sh gate) ----------- *)
 
@@ -206,12 +266,17 @@ let test_signup_core_codes () =
 let () =
   let lwt n f = Alcotest.test_case n `Quick f in
   let pure_tests =
-    [ ( "law"
-      , [ lwt "aliasing both directions" test_alias_both_directions
-        ; lwt "prefix-family names refused" test_alias_prefix_family
-        ; lwt "normalization" test_normalization
-        ; lwt "charset" test_charset
-        ; lwt "TUNA_SIGNUP gate" test_signup_env_gate ] ) ]
+      [ ( "law"
+        , [ lwt "aliasing both directions" test_alias_both_directions
+          ; lwt "prefix-family names refused" test_alias_prefix_family
+          ; lwt "normalization" test_normalization
+          ; lwt "charset" test_charset
+          ; lwt "TUNA_SIGNUP gate" test_signup_env_gate ] )
+      ; ( "anti-spam"
+        , [ lwt "fixed window refills" test_signup_rate_window
+          ; lwt "buckets are per address" test_signup_rate_per_address
+          ; lwt "client addr trusts the last hop" test_signup_client_addr
+          ; lwt "gate rate-limits" test_signup_gate_rate ] ) ]
   in
   match Sys.getenv_opt "TUNA_TEST_PG" with
   | None -> Alcotest.run "signup_garden" pure_tests
