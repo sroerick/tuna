@@ -624,9 +624,20 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
       in
       let rec branch_loop () =
         match peek () with
-        | Some RP -> advance ()
+        | Some RP -> ()
+            (* do NOT consume this RP: it closes the whole (match ...) form
+               and the expect_rp after branch_loop takes it.  Consuming it
+               here made every syntactically valid match die as
+               "unterminated list". *)
         | Some LP -> (
             advance ();
+            (* the branch is ((PATTERN) BODY) and PATTERN is itself
+               parenthesised -- (leaf) / (stem x) / (fork a b) -- so step
+               over its opening paren.  Without this the reader saw LP where
+               it wanted the kind atom and rejected every branch as
+               "expected a (leaf)/(stem)/(fork) pattern": the exact shape the
+               docstring above and tests/compiler_tests.ml both use. *)
+            (match peek () with Some LP -> advance () | _ -> ());
             let kind =
               match peek () with
               | Some (Atom (_, k)) when k = "leaf" || k = "stem" || k = "fork" ->

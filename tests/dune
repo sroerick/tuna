@@ -110,6 +110,19 @@
  (action
   (run %{exe:prim_tests.exe})))
 
+; dialect sugar + reader tests (borg/dialect.borg v0.1-v0.3).
+; THE GAP THIS CLOSES: compiler_tests.exe was declared at the top of this
+; file but never had a runtest rule, so `dune runtest` stayed green while
+; the suite carried 4 failures -- including every `match` row, i.e. the
+; whole v0.3 reader form.  A test that never runs is not a gate.  The exe
+; is self-contained (no corpus on disk, unlike flat_tests), so no
+; source_tree dep is needed.
+(rule
+ (alias runtest)
+ (deps compiler_tests.exe)
+ (action
+  (run %{exe:compiler_tests.exe})))
+
 ; M5 store integration tests: require a live postgres (scripts/dev.sh
 ; start-pg); skipped silently when it is down.  The migrations tree is
 ; passed in so the test executable can bootstrap a fresh cluster.

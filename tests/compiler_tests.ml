@@ -162,13 +162,25 @@ let sugar_tests =
     compile_error "let binding without a body" "(let ((x 1)))" ""
       "unexpected ')'";
       (* match -> the triage application (dialect v0.3) *)
+      (* the twin needs BOTH wrapper layers the desugar emits:
+         inner = ((0 A) F) and outer = ((0 inner) C), so the hand-written
+         form carries two 0s, not one.  As previously written the twin
+         compiled to 2100 against the sugar's 202100 and this row failed
+         on "identical ternary" -- a wrong fixture, not a wrong desugar. *)
       desugars "match dispatches to the triage application"
         "(match 0 ((leaf) 1) ((stem x) 2) ((fork a b) 3))"
-        "(((0 1 (lambda (x) 2)) (lambda (a b) 3)) 0)" None;
+        "(((0 ((0 1) (lambda (x) 2))) (lambda (a b) 3)) 0)" (Some "202100");
       runs "match takes the leaf branch for a leaf"
         "(match 0 ((leaf) 0) ((stem x) x) ((fork a b) a))" [] "0";
+      (* subject %10 is Stem(Leaf), so the stem pattern binds x to the
+         PAYLOAD (Leaf), and a branch body of `x` answers 0 -- which is
+         also what the leaf branch would answer, so it cannot distinguish
+         the two.  Return a distinct constant instead, so this row proves
+         what its name claims: that a stem subject takes the stem branch. *)
       runs "match takes the stem branch for a stem"
-        "(match %10 ((leaf) 0) ((stem x) x) ((fork a b) a))" [] "10";
+        "(match %10 ((leaf) 0) ((stem x) %110) ((fork a b) a))" [] "110";
+      runs "match binds the stem payload, not the whole stem"
+        "(match %10 ((leaf) %110) ((stem x) x) ((fork a b) %110))" [] "0";
       compile_error "match needs all three branches"
         "(match 0 ((leaf) 0))" "" "needs leaf, stem and fork branches";
   ]
