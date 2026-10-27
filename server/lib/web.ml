@@ -77,6 +77,33 @@ let html_escape (s : string) : string =
     s;
   Buffer.contents buf
 
+(* -- glob + rev observability ---------------------------------------- *)
+
+(* single-'*' glob match (no '**', no classes): the query surface takes
+   option=value pairs, so callers need a match syntax — /claims?match=<glob>
+   filters the registry with this. *)
+let glob_match (pat : string) (name : string) : bool =
+  let n = String.length pat and m = String.length name in
+  let rec go i j =
+    if i = n then j = m
+    else
+      match pat.[i] with
+      | '*' ->
+          let rec star j = j > m || go (i + 1) j || star (j + 1) in
+          star j
+      | _ -> j < m && pat.[i] = name.[j] && go (i + 1) (j + 1)
+  in
+  go 0 0
+
+(* rev observability: a citation must name the SERVER rev it observed.
+   TUNA_BUILD_REV is baked at promote (tuna-promote writes
+   TUNA_BUILD_REV=<rev12> into the env file rc.d sources); "unknown"
+   means the binary predates the convention. *)
+let build_rev =
+  match Sys.getenv_opt "TUNA_BUILD_REV" with
+  | Some r when String.trim r <> "" -> String.trim r
+  | _ -> "unknown"
+
 (* -- request / response --------------------------------------------- *)
 
 type req = {

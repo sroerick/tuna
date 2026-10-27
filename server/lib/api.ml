@@ -319,13 +319,19 @@ let program_json (p : Store.program) : J.t =
 
 (* -- /health (open) -------------------------------------------------- *)
 
-(* /health is open; db ping must not raise — a dead PG answers db:false *)
+(* /health is open; db ping must not raise — a dead PG answers db:false.
+   rev rides here so a claim can name the server rev it observed
+   (claims.sh records server_rev= from this at mint). *)
 let health pool _req =
   catch
     (fun () -> Db.ping pool >>= fun () -> return true)
     (fun _ -> return false)
   >>= fun up ->
-   (j_ok (`Assoc [ ("status", `String "ok"); ("db", `Bool up) ]))
+   (j_ok
+      (`Assoc
+        [ ("status", `String "ok")
+        ; ("db", `Bool up)
+        ; ("rev", `String Web.build_rev) ]))
 
 (* -- programs -------------------------------------------------------- *)
 
@@ -1691,15 +1697,27 @@ let post_ns_fork pool auth req =
             , Tree_prims.validate_path "dst" dst )
           with
           | Some e, _ | _, Some e -> (j_err e)
-          | None, None -> (
-              Store.ns_fork pool ~src_prefix:src ~dst_prefix:dst
-                ~actor:auth.auth_id
-              >>= fun copied ->
-              (j_ok ~code:201
-                 (`Assoc
-                   [ ("src", `String src)
-                   ; ("dst", `String dst)
-                   ; ("copied", `Int copied) ])))))
+            | None, None -> (
+                (* the API floor meets the run boundary: a namespace copy
+                   needs covering grants on BOTH prefixes — src you may
+                   read, dst you may fill.  Until 10-27 this route checked
+                   none, so any authenticated identity could lift another
+                   garden's slice into its own. *)
+                tree_allowed pool auth src >>= fun src_ok ->
+                (if src_ok then tree_allowed pool auth dst else return false)
+                >>= fun dst_ok ->
+                if src_ok && dst_ok then
+                  Store.ns_fork pool ~src_prefix:src ~dst_prefix:dst
+                    ~actor:auth.auth_id
+                    >>= fun copied ->
+                    (j_ok ~code:201
+                       (`Assoc
+                         [ ("src", `String src)
+                         ; ("dst", `String dst)
+                         ; ("copied", `Int copied) ]))
+                else
+                  deny_tree pool auth ~op:"ns-fork"
+                      ~path:(if src_ok then dst else src))))
 
 let get_tree_state pool auth req =
   let prefix = Option.value (Web.query req "prefix") ~default:"" in

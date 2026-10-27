@@ -21,3 +21,12 @@ is live. Current deployed rev:
 Deploy flow: push refs/heads/master to wyo tuna.git -> post-receive
 relay -> vultr -> tuna-promote here (build + battery + migrations +
 swap + rcctl restart + health GET / 303, auto-rollback to .prev).
+
+## Server rev observability (10-27)
+
+tuna-promote writes `TUNA_BUILD_REV=<rev12>` into /etc/tuna/tuna.env
+before the restart, so /health (open) answers `rev:` and every
+claims.sh mint records `server_rev=` in its projection - a citation
+names the server rev it observed. An unset value answers "unknown":
+the binary predates the convention. The manual hook-entry path must
+set the line too, or the next /health says unknown.

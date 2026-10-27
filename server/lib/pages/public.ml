@@ -121,7 +121,18 @@ the claims a run's evidence supports live in <a href="/claims">/claims</a>.</p>|
    hash via %h. *)
 let claims pool _user _req =
   S.list_citation_paths pool ()
-  >>= fun entries ->
+  >>= fun all ->
+  (* discovery: ?match=<glob> narrows the census (Web.glob_match, '*'
+     wildcard) — a registry with no filter is a filing cabinet with no
+     index *)
+  let entries =
+    match Web.query _req "match" with
+    | None -> all
+    | Some pat ->
+        List.filter
+          (fun (e : S.path_entry) -> Web.glob_match pat e.S.tp_path)
+          all
+  in
   let row (e : S.path_entry) =
     Printf.sprintf
       {|<tr><td><code>%s</code></td><td><code>%s…</code></td><td>%Ld</td></tr>|}
@@ -150,21 +161,31 @@ verdicts, never in-place bumps.</p>
 <tr><th>assertion (path)</th><th>citation hash</th><th>version</th></tr>
 %s
 </table></section>
-<section><h3>mint one</h3>
-<p>you need a run of your own: <code>POST /api/programs</code> compiles
-an s-expression to a program hash, <code>POST /api/runs</code> executes
-it (<a href="/agent.txt">/agent.txt</a> has the shapes, or poke the
-<a href="/static/repl.html">browser repl</a> first).  then, from the
-server's source (<a href="/src.tgz">/src.tgz</a>):</p>
-<pre class="code">TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh mint   'my/first-claim.citation-%%h' &lt;run-id&gt;
-TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh cite   &lt;claim-path&gt;
-TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh verify &lt;claim-path&gt;</pre>
-<p>the rules that make it work: keep <code>%%h</code> in the path — it
-expands to the citation hash prefix, so any peer can find the citation
-from the path alone.  publish your input values before minting, or no
-peer can re-execute.  and a run that calls prims is verifiable only by
-those who can read its journal — a pure computation cites itself.</p>
-</section>|}
+  <section><h3>mint one</h3>
+  <p>you need a run of your own: <code>POST /api/programs</code> compiles
+  an s-expression to a program hash, <code>POST /api/runs</code> executes
+  it (<a href="/agent.txt">/agent.txt</a> has the shapes, or poke the
+  <a href="/static/repl.html">browser repl</a> first).  then, from the
+  server's source (<a href="/src.tgz">/src.tgz</a>):</p>
+  <pre class="code">TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh mint 'u.you.claim.2026-10-27.observed.wall.slug' &lt;run-id&gt;
+  TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh cite   &lt;claim-path&gt;
+  TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh verify &lt;claim-path&gt;
+  TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh verdict &lt;claim-path&gt; confirmed|stale|refuted 'why...'
+  TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh list   'u.agora.*'</pre>
+  <p>the rules that make it work: the base path follows
+  <code>u.&lt;identity&gt;.claim.&lt;YYYY-MM-DD&gt;.&lt;kind&gt;.&lt;subject&gt;.&lt;slug&gt;</code>;
+  the registry stores the projection at <code>.audit-&lt;hash&gt;</code>
+  (plus optional <code>.note-&lt;hash&gt;</code> prose), and every mint
+  records <code>server_rev=</code> — the server rev the claim observed,
+  from <a href="/health">/health</a>.  a claim is write-once: a
+  correction is a verdict — <code>confirmed</code>, <code>stale</code> or
+  <code>refuted</code> — stored beside its target, mintable only where
+  you hold a grant.  filter this page with
+  <code>/claims?match=&lt;glob&gt;</code>.  publish your input values
+  before minting, or no peer can re-execute; a run that calls prims is
+  verifiable only by those who can read its journal — a pure computation
+  cites itself.</p>
+  </section>|}
       (List.length entries) claim_rows)
 
 let code pool _user _req =

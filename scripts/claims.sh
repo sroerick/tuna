@@ -39,9 +39,12 @@
 # owner, an admin, or a verifier handed the journal some other way.
 #
 # Usage:
-#   TUNA_TOKEN=<bearer> claims.sh mint   <claim-path[%h]> <run-id>
-#   TUNA_TOKEN=<bearer> claims.sh cite   <claim-path | value-hash>
-#   TUNA_TOKEN=<bearer> claims.sh verify <claim-path | value-hash>
+#   TUNA_TOKEN=<bearer> claims.sh mint    <base> <run-id> [--narrative F|--narrative-hash H]
+#                                         [--target CLAIM-PATH]
+#   TUNA_TOKEN=<bearer> claims.sh cite    <claim-path | value-hash>
+#   TUNA_TOKEN=<bearer> claims.sh verify  <claim-path | value-hash>
+#   TUNA_TOKEN=<bearer> claims.sh verdict <claim-path> <confirmed|stale|refuted> [note]
+#   TUNA_TOKEN=<bearer> claims.sh list    [glob]
 #
 # Env: TUNA_BASE (default http://127.0.0.1:18090), TUNA_TOKEN (required).
 # Needs curl, awk, sed and a sha256 tool; a production box ships no jq/python3.
@@ -283,6 +286,12 @@ cmd_verify() {
 # the one part of a claim that is authored rather than derived: context, never
 # evidence, and nothing in the projection depends on its content.
 
+# Rev observability: every projection records server_rev=<rev> fetched
+# from /health, so an observation claim names the server rev it observed
+# and can go stale against a rev instead of silently.  --target <path>
+# adds target=<path> for verdict claims (kind=verdict) that judge a
+# specific earlier claim.  A verdict correction can also be minted with
+# `claims.sh verdict` (a small standalone record beside its target).
 CLAIM_KINDS=' observed computed cited interpreted asserted axiom verdict '
 LEAF_HASH=5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
 
@@ -320,19 +329,20 @@ claim_write() {   # $1 path, $2 wanted value hash, $3 ternary (idempotent write-
 }
 
 cmd_mint() {
-  local base="" runid="" resp ph res st fuel cap sem status caller inputs h jrn
-  local enc hash run_art jrn_art narr_enc p12 n12
+  local base="" runid="" target="" resp ph res st fuel cap sem status caller inputs h jrn
+  local enc hash run_art jrn_art narr_enc p12 n12 rev
   NARR_HASH=''
 
-  [ $# -ge 2 ] || die "usage: claims.sh mint <claim-base-path> <run-id> [--narrative FILE|--narrative-hash HASH]"
+  [ $# -ge 2 ] || die "usage: claims.sh mint <claim-base-path> <run-id> [--narrative FILE|--narrative-hash HASH] [--target PATH]"
   base="$1"
   runid="$2"
   shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
-      --narrative)      [ $# -ge 2 ] || die "--narrative needs a file"; narr_file="$2"; shift 2 ;;
-      --narrative-hash) [ $# -ge 2 ] || die "--narrative-hash needs a hash"; NARR_HASH="$2"; shift 2 ;;
-      *) die "unknown option: $1" ;;
+        --narrative)      [ $# -ge 2 ] || die "--narrative needs a file"; narr_file="$2"; shift 2 ;;
+        --narrative-hash) [ $# -ge 2 ] || die "--narrative-hash needs a hash"; NARR_HASH="$2"; shift 2 ;;
+        --target)         [ $# -ge 2 ] || die "--target needs a claim path"; target="$2"; shift 2 ;;
+        *) die "unknown option: $1" ;;
     esac
   done
 
@@ -354,6 +364,9 @@ cmd_mint() {
     [ "$(getcode "/api/value/$h?kind=tree")" = 200 ] ||
       die "input $h is not published as a value: POST /api/value/put {\"ternary\":...} first"
   done
+    # rev observability: the projection names the server rev it observed
+    rev=$(fetch /health | jstr rev)
+    [ -n "$rev" ] || rev=unknown
 
   # the cited computation becomes a public artifact
   run_art=$(printf '%s' "$resp" | putbytes)
@@ -380,6 +393,8 @@ cmd_mint() {
     printf 'kind=%s\n' "$KIND"
     printf 'subject=%s\n' "$SUBJECT"
     printf 'assertion=%s\n' "$ASSERTION"
+    printf 'server_rev=%s\n' "$rev"
+    [ -n "$target" ] && printf 'target=%s\n' "$target"
     printf 'program=%s\n' "$ph"
     printf 'inputs=%s\n' "$(printf '%s' "$inputs" | tr '\n' ',' | sed 's/,$//')"
     printf 'run-record=%s\n' "$run_art"
@@ -412,9 +427,43 @@ cmd_mint() {
   [ -n "$NARR_HASH" ] && echo "note=$base.note-$n12"
   printf '%s' "$enc" | cstr_decode
 }
+# --- the verdict: a claim's correction lives beside it ----------------------
+#
+# A claim path is write-once, so a correction is a new claim or a verdict.
+# A verdict is a small record stored at <target>.verdict-<hash12> — the
+# same write-once discipline, listed by the registry census, gated by the
+# floor: you need a covering grant over the target's prefix, so you speak
+# about a garden from inside it (or hold adjudicator grants).
+# Word choice: confirmed | stale | refuted.
+
+cmd_verdict() {
+  local target="$1" word="$2" note="${3:-}" rev p hash enc h12
+  case "$word" in
+    confirmed|stale|refuted) : ;;
+    *) die "verdict must be confirmed, stale or refuted (got '$word')" ;;
+  esac
+  rev=$(fetch /health | jstr rev)
+  [ -n "$rev" ] || rev=unknown
+  enc=$( { printf 'tuna-claim-verdict-v1\n'
+           printf 'target=%s\n' "$target"
+           printf 'verdict=%s\n' "$word"
+           printf 'server_rev=%s\n' "$rev"
+           printf 'note=%s\n' "$note"
+           printf 'minted_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ; } | cstr_encode )
+  [ "${#enc}" -le 14000 ] || die "verdict encodes to ${#enc} ternary digits; the PUT surface 500s above ~15000"
+  hash=$(printf '%s' "$enc" | sha256hex)
+  h12=${hash%${hash#????????????}}
+  p="$target.verdict-$h12"
+  claim_write "$p" "$hash" "$enc"
+  echo "verdict=$p"
+  printf '%s' "$enc" | cstr_decode
+}
+
 case "${1:-}" in
-  mint)   shift; [ $# -ge 2 ] || die "usage: claims.sh mint <claim-base-path> <run-id> [--narrative FILE|--narrative-hash HASH]"; cmd_mint "$@" ;;
-  cite)   shift; [ $# -eq 1 ] || die "usage: claims.sh cite <claim-path|value-hash>";   cmd_cite "$1" ;;
-  verify) shift; [ $# -eq 1 ] || die "usage: claims.sh verify <claim-path|value-hash>"; cmd_verify "$1" ;;
-  *) echo "usage: claims.sh mint|cite|verify ..." >&2; exit 2 ;;
+  mint)    shift; [ $# -ge 2 ] || die "usage: claims.sh mint <claim-base-path> <run-id> [--narrative FILE|--narrative-hash HASH] [--target PATH]"; cmd_mint "$@" ;;
+  cite)    shift; [ $# -eq 1 ] || die "usage: claims.sh cite <claim-path|value-hash>";   cmd_cite "$1" ;;
+  verify)  shift; [ $# -eq 1 ] || die "usage: claims.sh verify <claim-path|value-hash>"; cmd_verify "$1" ;;
+  verdict) shift; [ $# -ge 2 ] || die "usage: claims.sh verdict <claim-path> <confirmed|stale|refuted> [note]"; cmd_verdict "$@" ;;
+  list)    shift; cmd_list "$@" ;;
+  *) echo "usage: claims.sh mint|cite|verify|verdict|list ..." >&2; exit 2 ;;
 esac
