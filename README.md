@@ -122,7 +122,7 @@ GET    /api/runs/verify?all=1      → replay-verification sweep over all runs
 POST   /api/runs/:id/gc            → retention GC: cited tombstone, verifier reports GONE never VERIFIED
 GET    /api/journals/:run_id       → full journal
 POST   /api/journals/:run_id/fork  {"edits":[{seq, result_ternary|error, ...}]} → counterfactual run (chain rebuilt, edited suffix re-executed)
-POST   /api/grants                 {"prim","args_attenuation"?} → grant id
+POST   /api/grants                 {"prim","args_attenuation"?,"path_prefix"?} → grant id ("*" = the wildcard prim; path_prefix scopes the capability, absent/null = unscoped; unknown prim 400)
 POST   /api/grants/:id/attenuate   {"prim"?,"args_attenuation"?,"path_prefix"?} → narrower derived grant (holder-only; lineage recorded; widening 400, dead lineage 409)
 GET    /api/grants/:id             → row + lineage (ancestors) + descendants
 POST   /api/grants/:id/revoke      → revoke (live at every prim call, and through the parent_grant chain: revoking a root kills its subtree's future use)

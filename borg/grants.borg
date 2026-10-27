@@ -61,6 +61,19 @@
          and attributable; the bearer trade (tamper-proof standalone
          tokens) buys nothing inside a habitat that always checks the row
          anyway.
+
+           MINT SURFACE (2026-10-26, g2 mint-time scoping): POST
+           /api/grants takes an optional path_prefix and stores it, so a
+           scoped capability is mintable in one call; absent/null is
+           unscoped, an explicit "" is REFUSED (prefix_match "" covers
+           every path, so an empty prefix reads as scope and means
+           everything), and prim must be a registered name or "*" (the
+           wildcard the route layer mints for program routes).  A
+           path_prefix is a raw string prefix, not a path segment: over
+           the dot-separated namespaces "u.agora." covers u.agora.hello,
+           while "u.agora/" covers nothing at all.  The floor a scoped
+           grant feeds is still path-only and prim-blind (g1); an unscoped
+           self-mint remains possible and covers everything.
     |))
    )
   )

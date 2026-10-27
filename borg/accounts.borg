@@ -81,11 +81,22 @@
         admins bypass - the same rule as route publish/delete
         (api.ml tree_allowed/deny_tree).  Denials are journaled op rows.
         verify-1 [1.6] pins the floor: grantless 403s journaled, a
-        covering grant opens exactly its prefix, admin bypass.  Open
-        teeth: the public mint ignores path_prefix (noted in
-        board_probe), so a member can self-mint an unscoped grant and
-        cover everything - pre-existing grant-model law; g2/identity
-        work may tighten it.|) *)
+          covering grant opens exactly its prefix, admin bypass.  OPEN
+          TOOTH CLOSED 2026-10-26 (mint-time scoping): the public mint
+          ignored path_prefix (noted in board_probe), so a member's
+          scoped-looking mint was really a store-wide one and only the
+          mint-then-attenuate dance reached a prefix.  POST /api/grants
+          now stores a validated path_prefix (an explicit "" is REFUSED -
+          prefix_match "" covers everything) and checks prim against the
+          registry ("*" is the wildcard); /grants/mint shares the same
+          rules.  verify-1 [1.6] keeps pinning the floor through the
+          attenuate route.  REMAINING TOOTH, not touched here: the
+          tree-op floor is path-only and prim-blind (has_covering_grant
+          never looks at prim), and an unscoped self-mint still covers
+          everything - so the floor cannot tell a store-wide capability
+          from a garden one, and least privilege needs the floor to stop
+          honoring NULL-prefix rows.  That is a law change, not an
+          interface one.|) *)
 
 (* agent note (|2026-10-16 g2 RUNNER TOKENS (the glochid issue-token
         precedent, PP run-primitive.borg §identity + POLICY-5; board card

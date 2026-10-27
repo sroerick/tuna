@@ -1029,43 +1029,79 @@ let post_repl pool auth req =
 
 (* -- grants (JSON surface; the M8 UI admin page sits on top) ---------- *)
 
-let post_grant pool auth req =
-  body_json req >>= function
-  | Error msg ->  (j_err msg)
-  | Ok j -> (
-      let prim = get_string_opt j "prim" in
-      (* attenuation is a JSON predicate stored as text.  Accept BOTH
-         shapes: an object ({"max_ternary":1}) is inlined verbatim; a
-         string is used as-is (pre-M10 callers).  An object is what the
-         docs and the UI show, and silently defaulting an object to the
-         admit-all "{}" would mint a WEAKER-LOOKING grant that is
-         actually STRONGER — never do that. *)
-      let attenuation =
-        match List.assoc_opt "args_attenuation" (match j with `Assoc kvs -> kvs | _ -> [])
-        with
-        | Some (`String s) -> Some s
-        | Some v -> Some (J.to_string v)
-        | None -> None
-      in
-      match prim with
-      | None ->  (j_err "missing \"prim\"")
-      | Some prim ->
+(* path_prefix on the JSON mint/attenuate surface: absent or null =
+   unscoped (the mint's None) / inherit the parent's scope (the
+   attenuate's None).  Any other shape is refused rather than coerced -
+   a coerced field would widen silently, which is the bug this field
+   exists to fix. *)
+let grant_prefix_of_json (j : J.t) : (string option, string) result =
+  match
+    List.assoc_opt "path_prefix" (match j with `Assoc kvs -> kvs | _ -> [])
+  with
+  | None | Some `Null -> Ok None
+  | Some (`String s) -> Tree_prims.grant_prefix "path_prefix" (Some s)
+  | Some _ -> Error "path_prefix must be a string or null"
+
+(* the mint surface as a (code, json) core, so tests drive it without
+   Web (the value prims' shape).  Two interface laws live here:
+   - the prim is checked against the registry ("*" is the wildcard the
+     route layer mints), so a typo cannot be stored as a capability no
+     boundary will ever answer;
+   - path_prefix is HONORED, which is what makes a scoped capability
+     mintable in one call instead of mint-unscoped-then-attenuate. *)
+let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
+  let err msg = return (400, `Assoc [ ("error", `String msg) ]) in
+  (* attenuation is a JSON predicate stored as text.  Accept BOTH
+     shapes: an object ({"max_ternary":1}) is inlined verbatim; a
+     string is used as-is (pre-M10 callers).  An object is what the
+     docs and the UI show, and silently defaulting an object to the
+     admit-all "{}" would mint a WEAKER-LOOKING grant that is
+     actually STRONGER — never do that. *)
+  let attenuation =
+    match
+      List.assoc_opt "args_attenuation"
+        (match j with `Assoc kvs -> kvs | _ -> [])
+    with
+    | Some (`String s) -> Some s
+    | Some v -> Some (J.to_string v)
+    | None -> None
+  in
+  match get_string_opt j "prim" with
+  | None -> err "missing \"prim\""
+  | Some prim when not (Prims.mintable prim) ->
+      err
+        (Printf.sprintf
+           "unknown prim %S (registered: %s; \"*\" is the wildcard)" prim
+           (String.concat ", " Prims.names))
+  | Some prim -> (
+      match grant_prefix_of_json j with
+      | Error e -> err e
+      | Ok path_prefix -> (
           let attenuation =
             Option.value attenuation ~default:"{}" (* jsonb: admit-all *)
           in
-          (try
-             J.from_string attenuation |> ignore;
-             Store.mint_grant pool ~prim ~args_attenuation:attenuation
-               ~caller:auth.auth_id ~minted_by:(Some auth.auth_id) ()
-             >>= fun g ->
-              (j_ok ~code:201
-                 (`Assoc
-                   [ ("id", `String g.Store.g_id)
-                   ; ("prim", `String g.Store.g_prim)
-                   ; ("caller", `String g.Store.g_caller)
-                   ; ("args_attenuation", `String g.Store.g_args_attenuation) ]))
-           with Yojson.Json_error _ ->
-             (j_err "args_attenuation must be JSON")))
+          match J.from_string attenuation with
+          | exception Yojson.Json_error _ ->
+              err "args_attenuation must be JSON"
+          | _ ->
+                Store.mint_grant pool ~prim ~args_attenuation:attenuation
+                ~path_prefix:path_prefix ~caller:auth.auth_id
+                ~minted_by:(Some auth.auth_id) ()
+              >>= fun g ->
+              return
+                ( 201
+                , `Assoc
+                    [ ("id", `String g.Store.g_id)
+                    ; ("prim", `String g.Store.g_prim)
+                    ; ("path_prefix", opt_str g.Store.g_path_prefix)
+                    ; ("caller", `String g.Store.g_caller)
+                    ; ("args_attenuation", `String g.Store.g_args_attenuation)
+                    ] ) ))
+
+let post_grant pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> grant_mint_core pool auth j >>= fun (code, j) -> (j_ok ~code j)
 
 let revoke_grant pool auth req =
   let id = Web.param req "id" in
@@ -1236,43 +1272,47 @@ let attenuate_grant pool auth req =
   body_json req >>= function
   | Error msg -> (j_err msg)
   | Ok j -> (
-      let prim =
-        match get_string_opt j "prim" with
-        | Some p -> Some p
-        | None -> None (* inherit the parent's *)
-      in
+      let prim = get_string_opt j "prim" in
       let attenuation =
-        (* same shapes as post_grant: object inlined, "null" string
+        (* same shapes as the mint: object inlined, "null" string
            admit-all, absent = the parent's own predicate *)
-        match List.assoc_opt "args_attenuation" (match j with `Assoc kvs -> kvs | _ -> [])
+        match
+          List.assoc_opt "args_attenuation"
+            (match j with `Assoc kvs -> kvs | _ -> [])
         with
         | Some (`String s) -> Some s
         | Some v -> Some (J.to_string v)
         | None -> None
       in
-      let path_prefix = get_string_opt j "path_prefix" in
-      Store.fetch_grant pool parent_id
-      >>= (function
-            | None -> (j_err ~code:404 "unknown grant id")
-            | Some parent ->
-                let prim = Option.value prim ~default:parent.Store.g_prim in
-                let attenuation =
-                  Option.value attenuation ~default:parent.Store.g_args_attenuation
-                in
-                Store.attenuate_grant pool ~parent_id ~prim ~args_attenuation:attenuation
-                  ~path_prefix ~caller:auth.auth_id ()
-                >>= function
-                | `Ok g ->
-                    (j_ok ~code:201
-                       (`Assoc
-                         [ ("grant", grant_json g)
-                         ; ("parent_grant", `String parent_id) ]))
-                | `Unknown -> (j_err ~code:404 "unknown grant id")
-                | `Revoked ->
-                    (j_err ~code:409 "grant (or its lineage) is revoked")
-                | `Wrong_caller ->
-                    (j_err ~code:403 "grant belongs to another identity")
-                | `Not_narrower reason -> (j_err ~code:400 reason)))
+      match (prim, grant_prefix_of_json j) with
+      | Some p, _ when not (Prims.mintable p) ->
+          (j_err (Printf.sprintf "unknown prim %S (\"*\" is the wildcard)" p))
+      | _, Error e -> (j_err e)
+      | prim, Ok path_prefix -> (
+          Store.fetch_grant pool parent_id
+          >>= (function
+                | None -> (j_err ~code:404 "unknown grant id")
+                | Some parent ->
+                    let prim = Option.value prim ~default:parent.Store.g_prim in
+                    let attenuation =
+                      Option.value attenuation
+                        ~default:parent.Store.g_args_attenuation
+                    in
+                    Store.attenuate_grant pool ~parent_id ~prim
+                      ~args_attenuation:attenuation ~path_prefix
+                      ~caller:auth.auth_id ()
+                    >>= function
+                    | `Ok g ->
+                        (j_ok ~code:201
+                           (`Assoc
+                             [ ("grant", grant_json g)
+                             ; ("parent_grant", `String parent_id) ]))
+                    | `Unknown -> (j_err ~code:404 "unknown grant id")
+                    | `Revoked ->
+                        (j_err ~code:409 "grant (or its lineage) is revoked")
+                    | `Wrong_caller ->
+                        (j_err ~code:403 "grant belongs to another identity")
+                      | `Not_narrower reason -> (j_err ~code:400 reason))))
 
 (* grant detail + lineage (audit surface: "what was this narrowed from,
    what was narrowed from it") *)

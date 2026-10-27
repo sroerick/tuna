@@ -70,6 +70,26 @@ let validate_prefix what s =
 let check_path what s =
   match validate_path what s with Some e -> Error e | None -> Ok s
 
+(* the mint surface's path_prefix field (the JSON API and the /grants
+   form share this policy).  Absent/null = unscoped (None).  An explicit
+   "" is REFUSED rather than normalized: prefix_match "" covers every
+   path, so an empty prefix reads as scope while meaning everything -
+   the exact widening this field exists to stop.  Otherwise a plain
+   string prefix, validated.  Note the prefix is a raw string prefix,
+   not a path segment: over the dot-separated namespaces "u.agora."
+   covers u.agora.hello, while "u.agora/" covers nothing at all. *)
+let grant_prefix what = function
+  | None -> Ok None
+  | Some "" ->
+      Error
+        (Printf.sprintf
+           "%s: must not be empty - omit the field to mint an unscoped grant"
+           what)
+  | Some s -> (
+      match validate_prefix what s with
+      | Some e -> Error e
+      | None -> Ok (Some s))
+
 (* best-effort path candidate from a call's args (first element as a
    string tree): what the denial op row records when the boundary
    answers an error.  Undecodable args give "". *)

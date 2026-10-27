@@ -58,6 +58,14 @@ let names =
 
 let exists name = List.mem name names
 
+(* the mint surface's prim vocabulary: a registered prim, or the "*"
+   wildcard the route layer mints for program routes.  An unknown name
+   is refused at mint time instead of stored as a capability no boundary
+   can ever answer. *)
+let wildcard = "*"
+
+let mintable name = exists name || String.equal name wildcard
+
 (* Journal payload cap: a prim call whose inline payload (args or
    result ternary) exceeds this is journaled as an error instead of a
    blob spill (journal.row-schema's growth open question, v0 stance). *)

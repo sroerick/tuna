@@ -228,6 +228,56 @@ let test_grant_prefix_boundary () =
    | n -> Alcotest.failf "expected one denial row, got %d" (List.length n));
    return ()
 
+
+(* -- mint surface: scope and prim are interface facts ------------------ *)
+
+(* The mint is the only place a non-admin obtains a tree capability, so
+   these are the asserts that would have failed while POST /api/grants
+   dropped path_prefix: a scoped mint must leave every path outside its
+   prefix uncovered. *)
+let test_grant_mint_scope () =
+  setup () >>= fun p ->
+  S.bootstrap_identity p ~name:"mint-root" ~token:"mint-token" () >>= fun me ->
+  let auth =
+    { Api.auth_id = me.S.i_id
+    ; Api.auth_name = me.S.i_name
+    ; Api.auth_is_admin = me.S.i_is_admin }
+  in
+  let body s = Yojson.Basic.from_string s in
+  let jfield k (j : Yojson.Basic.t) : Yojson.Basic.t =
+    match j with
+    | `Assoc kvs -> (
+        match List.assoc_opt k kvs with Some v -> v | None -> `Null)
+    | _ -> `Null
+  in
+  let str k j = match jfield k j with `String s -> s | _ -> "" in
+  Api.grant_mint_core p auth
+    (body {|{"prim":"tree/put","path_prefix":"t6/ok"}|})
+  >>= fun (code, j) ->
+  Alcotest.(check int) "scoped mint answers 201" 201 code;
+  Alcotest.(check string) "prefix stored" "t6/ok" (str "path_prefix" j);
+  S.has_covering_grant p me.S.i_id "t6/ok/x" >>= fun inside ->
+  Alcotest.(check bool) "in-prefix path covered" true inside;
+  S.has_covering_grant p me.S.i_id "t6/no/x" >>= fun outside ->
+  Alcotest.(check bool) "out-of-prefix path not covered" false outside;
+  (* unscoped stays expressible: by omission, not by an empty field *)
+  Api.grant_mint_core p auth (body {|{"prim":"echo"}|}) >>= fun (code, j) ->
+  Alcotest.(check int) "unscoped mint answers 201" 201 code;
+  Alcotest.(check bool) "unscoped mints a null prefix" true
+    (jfield "path_prefix" j = `Null);
+  (* an explicit "" is refused, never normalized into everything *)
+  Api.grant_mint_core p auth (body {|{"prim":"tree/put","path_prefix":""}|})
+  >>= fun (code, j) ->
+  Alcotest.(check int) "empty prefix refused" 400 code;
+  Alcotest.(check bool) "refusal names the field" true
+    (String.length (str "error" j) > 0);
+  (* the prim vocabulary is checked at the surface; "*" is the wildcard *)
+  Api.grant_mint_core p auth (body {|{"prim":"tree/putt"}|}) >>= fun (code, _) ->
+  Alcotest.(check int) "unknown prim refused" 400 code;
+  Api.grant_mint_core p auth (body {|{"prim":"*","path_prefix":"t6/ok"}|})
+  >>= fun (code, _) ->
+  Alcotest.(check int) "wildcard prim accepted" 201 code;
+  return ()
 (* -- op log: fork + chain ---------------------------------------------- *)
 
 let test_ns_fork () =
@@ -381,6 +431,7 @@ let () =
              ; lwt "cas create/conflict/absent" test_cas
              ; lwt "prefix list ordering" test_prefix_list ] )
          ; ("boundary", [ lwt "grant prefix allow + journaled denial" test_grant_prefix_boundary ])
+         ; ("mint", [ lwt "scoped mint + prim vocabulary" test_grant_mint_scope ])
          ; ( "log"
            , [ lwt "ns_fork copies + fork op row" test_ns_fork
              ; lwt "chain verify + tamper detection" test_ops_chain ] )
