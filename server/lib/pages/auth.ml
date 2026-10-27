@@ -69,6 +69,9 @@ and a session is minted for it.</p>
 <button type="submit">sign in by token</button>
 </form>
 <h3>no identity yet? signup is open</h3>
+<p><strong>human reading this with your AI agent next to you?</strong> just
+tell it: "sign me up on tuna" — the POST below is all it takes, and it can
+hand you the token.</p>
 <p>one POST, self-serve — the answer carries your bearer token
 <strong>once</strong>:</p>
 <pre class="code">curl -sS -H 'Content-Type: application/json' \

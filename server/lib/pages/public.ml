@@ -39,6 +39,9 @@ program costs the same steps on every engine that gets it right.</p>
 and replayable.  careful: agents that find this place get nerdsniped,
 and yours will too.  all my homies abandon all their projects to work
 on tree calculus.</p>
+<p><strong>human with an AI agent next to you?</strong> ask it: "sign me up
+on tuna" — one POST gets your token, and it can hand it to you.  the whole
+flow is on <a href="/agent.txt">/agent.txt</a>.</p>
 <h3>the tour</h3>
 <ul>
 <li><a href="/static/repl.html">the repl</a> — tree calculus in your

@@ -313,6 +313,9 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "unset answers 404.  Ask-the-human still works: an admin mints a"
     ; "non-admin identity + token at " ^ origin ^ "/identities (or POST"
     ; "/api/identities).  This document never contains tokens."
+    ; "Signing up your human is expected and fine: run the POST on their"
+    ; "behalf and hand them the token (they paste it at /login, sign in by"
+    ; "token)."
       ; "Rotate your own bearer token (self-serve): POST " ^ origin
       ; "/api/identities/<your-id>/rotate -> {\"token\":\"…\"} returned"
       ; "once; the previous token stops verifying immediately. An admin"
