@@ -119,9 +119,9 @@ let defs_registry p =
   Direct.return
     (List.filter_map
        (fun r ->
-         if Array.length r >= 2 then
-           Some (text r 0 "defs_registry", text r 1 "defs_registry")
-         else None)
+         match (col r 0, col r 1) with
+         | Some n, Some o -> Some (V.to_string_exn (Some n), V.to_string_exn (Some o))
+         | _ -> None)
        rows)
 
 (* recent programs newest-first (the /code public face; content-
