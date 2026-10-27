@@ -297,6 +297,9 @@ let claims pool _user _req =
   in
   L.page ~title:"tuna — claims"
     (Printf.sprintf {|<h2>claims</h2>
+<p class="muted">a claim is what an identity said — an append-only journal
+entry, hash-chained, refutable.  grants are the other noun:
+<a href="/grants">what an identity may do</a>.</p>
 <p>a claim is a tree path (the assertion) plus the citation value at
 that path — a self-contained record of one run: program hash, inputs,
 fuel and size caps, result hash, step count, claimant.  anyone who can
@@ -604,6 +607,9 @@ projection it belongs to is <a href="/claims/%s">%s</a>.</p>
             (Printf.sprintf
               {|<h2>claim</h2>
 <p class="muted"><code>%s</code></p>
+<p class="muted">a claim is what an identity said — an append-only journal
+entry, hash-chained, refutable.  grants are what an identity may do:
+<a href="/grants">/grants</a>.</p>
 <section><h3>what it asserts</h3>
 <p class="muted">a prose assertion — the claimant's words stand alone, no
 key=value projection was filed.  verdicts below are corrections.</p>
@@ -620,6 +626,9 @@ key=value projection was filed.  verdicts below are corrections.</p>
             (Printf.sprintf
               {|<h2>claim</h2>
 <p class="muted"><code>%s</code></p>
+<p class="muted">a claim is what an identity said — an append-only journal
+entry, hash-chained, refutable.  grants are what an identity may do:
+<a href="/grants">/grants</a>.</p>
 <section><h3>what it asserts</h3>
 <table>
 <tr><th>kind</th><td><code>%s</code></td></tr>

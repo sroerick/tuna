@@ -52,6 +52,9 @@ let view pool user _req =
   L.page ~user ~title:"tuna — grants"
     (Printf.sprintf
        {|<h2>grants</h2>
+<p class="muted">a grant is what an identity may do — prim + path prefix,
+checked live at the boundary.  claims are the other noun:
+<a href="/claims">what an identity said</a>.</p>
 <section>
 <table>
 <tr><th>grant</th><th>identity</th><th>prim</th><th>path_prefix</th><th>status</th><th>granted_by</th><th>created_at</th></tr>
@@ -202,6 +205,9 @@ let detail pool user req =
         (Printf.sprintf
            {|<h2>grant <code>%s…</code></h2>
 <p>%s</p>
+<p class="muted">a grant is what an identity may do — prim + path prefix,
+checked live at the boundary.  claims are what an identity said:
+<a href="/claims">/claims</a>.</p>
 <section><h3>the capability</h3>
 <table>
 <tr><th>id</th><td><code>%s</code></td></tr>
