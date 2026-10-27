@@ -71,9 +71,22 @@
            wildcard the route layer mints for program routes).  A
            path_prefix is a raw string prefix, not a path segment: over
            the dot-separated namespaces "u.agora." covers u.agora.hello,
-           while "u.agora/" covers nothing at all.  The floor a scoped
-           grant feeds is still path-only and prim-blind (g1); an unscoped
-           self-mint remains possible and covers everything.
+           while "u.agora/" covers nothing at all.
+
+           TENANCY (2026-10-27, the floor law the g1 note left open): a
+           grant's path_prefix must COVER the path a call touches, and a
+           NULL prefix covers NO path.  A store-wide row is therefore a
+           PATHLESS capability, not a master key: has_covering_grant
+           ignores NULL rows, check_grant answers Prefix_denied for any
+           call that carries paths, and attenuation refuses to derive path
+           scope from a NULL parent.  The mint surface completes it - a
+           non-admin mint of a path-addressed prim (tree/*, ns/fork, "*")
+           requires an explicit prefix INSIDE a prefix the caller already
+           covers, and an admin may mint FOR another identity
+           ({"identity": "<id>"}), which is how an operator seeds a garden
+           without SQL surgery; the member then narrows inside it.  Scope
+           can only ever narrow.  The tree-op floor stays path-only and
+           prim-blind (g1): a garden is a prefix, not a per-prim allowlist.
     |))
    )
   )

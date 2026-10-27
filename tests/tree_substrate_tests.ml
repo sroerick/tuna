@@ -231,13 +231,16 @@ let test_grant_prefix_boundary () =
 
 (* -- mint surface: scope and prim are interface facts ------------------ *)
 
-(* The mint is the only place a non-admin obtains a tree capability, so
-   these are the asserts that would have failed while POST /api/grants
-   dropped path_prefix: a scoped mint must leave every path outside its
-   prefix uncovered. *)
+(* The mint is where a non-admin obtains a tree capability, so these are
+   the tenancy asserts (2026-10-27): a path-addressed prim needs an
+   explicit prefix, the prefix must sit inside authority the caller
+   already covers, an operator seeds that authority on behalf of a
+   member, and a NULL row covers NO path - the last one is why one
+   store-wide row can no longer stand in for a garden. *)
 let test_grant_mint_scope () =
   setup () >>= fun p ->
-  S.bootstrap_identity p ~name:"mint-root" ~token:"mint-token" () >>= fun me ->
+  S.bootstrap_identity p ~is_admin:false ~name:"mint-root" ~token:"mint-token" ()
+  >>= fun me ->
   let auth =
     { Api.auth_id = me.S.i_id
     ; Api.auth_name = me.S.i_name
@@ -251,32 +254,56 @@ let test_grant_mint_scope () =
     | _ -> `Null
   in
   let str k j = match jfield k j with `String s -> s | _ -> "" in
-  Api.grant_mint_core p auth
-    (body {|{"prim":"tree/put","path_prefix":"t6/ok"}|})
-  >>= fun (code, j) ->
-  Alcotest.(check int) "scoped mint answers 201" 201 code;
-  Alcotest.(check string) "prefix stored" "t6/ok" (str "path_prefix" j);
-  S.has_covering_grant p me.S.i_id "t6/ok/x" >>= fun inside ->
-  Alcotest.(check bool) "in-prefix path covered" true inside;
-  S.has_covering_grant p me.S.i_id "t6/no/x" >>= fun outside ->
-  Alcotest.(check bool) "out-of-prefix path not covered" false outside;
-  (* unscoped stays expressible: by omission, not by an empty field *)
+  (* a pathless capability mints unscoped, and covers no path *)
   Api.grant_mint_core p auth (body {|{"prim":"echo"}|}) >>= fun (code, j) ->
-  Alcotest.(check int) "unscoped mint answers 201" 201 code;
-  Alcotest.(check bool) "unscoped mints a null prefix" true
+  Alcotest.(check int) "pathless mint answers 201" 201 code;
+  Alcotest.(check bool) "pathless mint stores a null prefix" true
     (jfield "path_prefix" j = `Null);
-  (* an explicit "" is refused, never normalized into everything *)
-  Api.grant_mint_core p auth (body {|{"prim":"tree/put","path_prefix":""}|})
-  >>= fun (code, j) ->
-  Alcotest.(check int) "empty prefix refused" 400 code;
-  Alcotest.(check bool) "refusal names the field" true
-    (String.length (str "error" j) > 0);
-  (* the prim vocabulary is checked at the surface; "*" is the wildcard *)
-  Api.grant_mint_core p auth (body {|{"prim":"tree/putt"}|}) >>= fun (code, _) ->
-  Alcotest.(check int) "unknown prim refused" 400 code;
-  Api.grant_mint_core p auth (body {|{"prim":"*","path_prefix":"t6/ok"}|})
+  S.has_covering_grant p me.S.i_id "t6/ok/x" >>= fun covered ->
+  Alcotest.(check bool) "a NULL row covers no path" false covered;
+  (* a path capability needs scope, and scope must already be authority *)
+  Api.grant_mint_core p auth (body {|{"prim":"tree/put"}|}) >>= fun (code, _) ->
+  Alcotest.(check int) "path-addressed mint without a prefix is refused" 400 code;
+  Api.grant_mint_core p auth (body {|{"prim":"tree/put","path_prefix":"t6/ok/"}|})
   >>= fun (code, _) ->
-  Alcotest.(check int) "wildcard prim accepted" 201 code;
+  Alcotest.(check int) "a prefix outside the caller's authority is refused" 403 code;
+  (* the operator seeds the garden; the member then narrows inside it *)
+  S.mint_identity p ~is_admin:true ~name:"mint-seed-root" ~token:"mint-seed-token"
+    ()
+  >>= fun op ->
+  let op_auth =
+    { Api.auth_id = op.S.i_id
+    ; Api.auth_name = op.S.i_name
+    ; Api.auth_is_admin = true }
+  in
+  Api.grant_mint_core p op_auth
+    (body
+       (Printf.sprintf
+          {|{"prim":"tree/put","path_prefix":"t6/","identity":"%s"}|} me.S.i_id))
+  >>= fun (code, j) ->
+  Alcotest.(check int) "an admin seeds a garden on behalf" 201 code;
+  Alcotest.(check string) "the seeded row belongs to the member" me.S.i_id
+    (str "caller" j);
+  Api.grant_mint_core p auth (body {|{"prim":"tree/put","path_prefix":"t6/ok/"}|})
+  >>= fun (code, j) ->
+  Alcotest.(check int) "a member narrows inside its own authority" 201 code;
+  Alcotest.(check string) "the narrowed prefix is stored" "t6/ok/"
+    (str "path_prefix" j);
+  S.has_covering_grant p me.S.i_id "t6/ok/x" >>= fun inside ->
+  Alcotest.(check bool) "in-garden path covered" true inside;
+  S.has_covering_grant p me.S.i_id "t7/x" >>= fun beyond ->
+  Alcotest.(check bool) "a path beyond the garden is not covered" false beyond;
+  (* a member may not mint for anyone else; "" is never normalized *)
+  Api.grant_mint_core p auth
+    (body {|{"prim":"echo","identity":"00000000-0000-0000-0000-000000000000"}|})
+  >>= fun (code, _) ->
+  Alcotest.(check int) "a member may not mint for another identity" 403 code;
+  Api.grant_mint_core p auth (body {|{"prim":"tree/put","path_prefix":""}|})
+  >>= fun (code, _) ->
+  Alcotest.(check int) "empty prefix refused" 400 code;
+  Api.grant_mint_core p auth (body {|{"prim":"tree/putt","path_prefix":"t6/ok/"}|})
+  >>= fun (code, _) ->
+  Alcotest.(check int) "unknown prim refused" 400 code;
   return ()
 (* -- op log: fork + chain ---------------------------------------------- *)
 

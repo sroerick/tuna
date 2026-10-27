@@ -838,11 +838,13 @@ let revoke_grant p id =
    escape revocation), and belong to the claiming caller.  Recorded
    runs never re-check (the journal answers, not the grant table).
 
-   M10 path scoping: when the call carries tree paths (the substrate
-   prims + ns/fork pass every path it would read or write), the grant's
-   path_prefix must cover ALL of them (simple string prefix; NULL
-   matches everything).  A path-scoped grant cannot authorize a
-   pathless call - the narrowing is the grant. *)
+   M10 path scoping + the tenancy law (2026-10-27): when the call
+   carries tree paths (the substrate prims + ns/fork pass every path it
+   would read or write), the grant's path_prefix must cover ALL of them
+   (simple string prefix) - and a NULL prefix covers NO path, so a
+   pathless capability authorizes only pathless calls.  A path-scoped
+   grant cannot authorize a pathless call either: the narrowing is the
+   grant. *)
 let prefix_match prefix path =
   String.length path >= String.length prefix
   && String.sub path 0 (String.length prefix) = prefix
@@ -881,9 +883,10 @@ let check_grant p ~id ~caller ?(paths = []) () :
       >>= function
       | false -> Direct.return `Revoked
       | true -> (
-          match (g.g_path_prefix, paths) with
-          | None, _ -> Direct.return `Ok
-          | Some _, [] -> Direct.return `Prefix_denied
+            match (g.g_path_prefix, paths) with
+            | None, [] -> Direct.return `Ok (* pathless capability, pathless call *)
+            | None, _ -> Direct.return `Prefix_denied
+            | Some _, [] -> Direct.return `Prefix_denied
           | Some prefix, ps ->
               if List.for_all (prefix_match prefix) ps then Direct.return `Ok
               else Direct.return `Prefix_denied))
@@ -952,11 +955,15 @@ let attenuation_narrower ~prim ~args_attenuation ~path_prefix
     match r with
     | Error e -> Error e
     | Ok () -> (
-        (* path: parent NULL covers anything; a prefixed parent only
-           admits prefixes OF itself (a NULL child would widen) *)
-        match (parent.g_path_prefix, path_prefix) with
-        | None, _ -> Ok ()
-        | Some _, None -> Error "dropping path_prefix widens the parent"
+          (* path: a parent must HAVE a prefix to lend scope, and scope
+             can only ever narrow.  A NULL parent is a pathless
+             capability, so it cannot mint path scope out of nothing; a
+             prefixed parent only admits prefixes OF itself. *)
+          match (parent.g_path_prefix, path_prefix) with
+          | None, None -> Ok ()
+          | None, Some _ ->
+              Error "a NULL-prefix parent authorizes no path scope"
+          | Some _, None -> Error "dropping path_prefix widens the parent"
         | Some pp, Some cp ->
             if prefix_match pp cp then Ok ()
             else
@@ -1604,8 +1611,11 @@ let has_live_grant p caller =
           (Printexc.to_string e);
         Direct.return false)
 
-(* M11 route publish/delete capability: an unrevoked grant of [caller]
-   whose prefix covers [path] (NULL prefix covers everything) *)
+(* the tenancy law (2026-10-27): an unrevoked grant of [caller] whose
+   NON-NULL path_prefix covers [path].  A NULL prefix is a PATHLESS
+   capability - it authorizes no path at all, so a row can no longer
+   cover a garden it was never given (it used to cover every path,
+   silently overriding every narrower row in the holder's set). *)
 let has_covering_grant p caller path =
   Direct.catch
     (fun () ->
@@ -1616,13 +1626,13 @@ let has_covering_grant p caller path =
         (List.exists
            (fun r ->
              match opt_text r 0 with
-             | None -> true
+             | None -> false
              | Some pfx -> prefix_match pfx path)
            rows))
-      (fun e ->
-        Printf.eprintf "[tuna] probe has_covering_grant failed: %s\n%!"
-          (Printexc.to_string e);
-        Direct.return false)
+    (fun e ->
+      Printf.eprintf "[tuna] probe has_covering_grant failed: %s\n%!"
+        (Printexc.to_string e);
+      Direct.return false)
 
 (* a6 (todo/a6-rim-batch): the reusable live grant id for a service
    capability (same prim, prefix, caller), if one exists - anonymous

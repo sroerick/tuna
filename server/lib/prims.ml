@@ -66,6 +66,17 @@ let wildcard = "*"
 
 let mintable name = exists name || String.equal name wildcard
 
+(* prims whose calls address TREE PATHS.  A grant for one of these is a
+   path capability, so the mint surface requires an explicit prefix the
+   minter already covers (Api.grant_mint_core) and both the host floor
+   and the run boundary honor only that prefix.  "*" is included: the
+   wildcard the route layer mints answers path-addressed calls too. *)
+let path_addressed = function
+  | "tree/get" | "tree/put" | "tree/cas" | "tree/list" | "tree/del"
+  | "ns/fork" | "*" ->
+      true
+  | _ -> false
+
 (* Journal payload cap: a prim call whose inline payload (args or
    result ternary) exceeds this is journaled as an error instead of a
    blob spill (journal.row-schema's growth open question, v0 stance). *)

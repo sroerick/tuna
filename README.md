@@ -122,7 +122,7 @@ GET    /api/runs/verify?all=1      → replay-verification sweep over all runs
 POST   /api/runs/:id/gc            → retention GC: cited tombstone, verifier reports GONE never VERIFIED
 GET    /api/journals/:run_id       → full journal
 POST   /api/journals/:run_id/fork  {"edits":[{seq, result_ternary|error, ...}]} → counterfactual run (chain rebuilt, edited suffix re-executed)
-POST   /api/grants                 {"prim","args_attenuation"?,"path_prefix"?} → grant id ("*" = the wildcard prim; path_prefix scopes the capability, absent/null = unscoped; unknown prim 400)
+POST   /api/grants                 {"prim","args_attenuation"?,"path_prefix"?,"identity"?} → grant id ("*" = wildcard; a path-addressed prim requires a path_prefix INSIDE authority the caller already covers, "identity" is admin-only issuance for another identity, unknown prim 400)
 POST   /api/grants/:id/attenuate   {"prim"?,"args_attenuation"?,"path_prefix"?} → narrower derived grant (holder-only; lineage recorded; widening 400, dead lineage 409)
 GET    /api/grants/:id             → row + lineage (ancestors) + descendants
 POST   /api/grants/:id/revoke      → revoke (live at every prim call, and through the parent_grant chain: revoking a root kills its subtree's future use)
@@ -255,8 +255,11 @@ Admin-only: minting identities (`POST /api/identities` or the
 `/identities` page).  A minted identity is **non-admin** by default and
 may run/compile, keep its own REPL dictionary, mint/attenuate/revoke
 its own grants, and read public pages.  It cannot mint identities,
-revoke others' grants, or touch other identities' namespaces (path-
-prefix grants garden the tree names).  `TUNA_BOOTSTRAP_PASSWORD`
+revoke others' grants, or touch other identities' namespaces: a
+path-addressed grant must be minted inside authority the caller already
+covers (an operator seeds a garden with `"identity":"<id>"`; the member
+narrows inside it), an unscoped grant authorizes only pathless prims,
+and no identity may mint a grant for another.  `TUNA_BOOTSTRAP_PASSWORD`
 (optional) ensures root's password credential each boot; unset means
 root signs in with its bearer token at the login page's token form.
 

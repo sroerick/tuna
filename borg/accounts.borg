@@ -90,13 +90,12 @@
           prefix_match "" covers everything) and checks prim against the
           registry ("*" is the wildcard); /grants/mint shares the same
           rules.  verify-1 [1.6] keeps pinning the floor through the
-          attenuate route.  REMAINING TOOTH, not touched here: the
-          tree-op floor is path-only and prim-blind (has_covering_grant
-          never looks at prim), and an unscoped self-mint still covers
-          everything - so the floor cannot tell a store-wide capability
-          from a garden one, and least privilege needs the floor to stop
-          honoring NULL-prefix rows.  That is a law change, not an
-          interface one.|) *)
+          attenuate route.  TOOTH CLOSED 2026-10-27 (the tenancy law; the
+          note at the end of this file): a NULL prefix now covers NO path,
+          so a store-wide row is a pathless capability, not a master key.
+          What remains is the refinement the tenancy note records - the
+          floor is still path-only and prim-blind, so a garden is a prefix
+          rather than a per-prim allowlist.|) *)
 
 (* agent note (|2026-10-16 g2 RUNNER TOKENS (the glochid issue-token
         precedent, PP run-primitive.borg §identity + POLICY-5; board card
@@ -228,3 +227,31 @@
       code), the code list follows in the same commit, and a
       regression test pins the collision denial. |)))))
 )
+
+(* agent note (|2026-10-27 TENANCY (the floor law the g1 note left open;
+     live-box scoping pass 2026-10-27): a grant's path_prefix must COVER
+     the path a call touches, and a NULL prefix covers NO path.  Three
+     consumers, one law: has_covering_grant (store.ml) ignores NULL rows,
+     so a holder's capability is the union of its SCOPED rows - one
+     store-wide row no longer stands in for every garden; check_grant's
+     NULL arm answers Prefix_denied for any call that carries paths, so a
+     pathless capability authorizes only pathless calls at the prim
+     boundary too; attenuation_narrower refuses to derive path scope from
+     a NULL parent, so scope can only ever narrow.  The mint completes it
+     (Api.grant_mint_core): a non-admin mint of a path-addressed prim
+     (tree/*, ns/fork, "*") needs an explicit prefix INSIDE a prefix the
+     caller already covers, and an admin may mint FOR another identity
+     ({"identity": "<id>"}) - the operator seeds a garden, the member
+     narrows inside it, and neither can mint into somebody else's space
+     or hand a capability to somebody else.  /api/tree/log and
+     /api/tree/state now answer to the floor with the requested prefix as
+     the path (both took _auth and folded the whole substrate for any
+     bearer).  verify-1 [1.6]/[1.7] and verify-14 [14.1] pin: NULL rows
+     deny, a seeded garden opens exactly its prefix, a member cannot mint
+     outside its own or for another identity, "" is 400.  STILL OPEN: the
+     floor stays path-only and prim-blind, so a garden is a prefix and not
+     a per-prim allowlist (no read-without-write row shape); raw-string
+     prefix matching aliases siblings (u.notes covers u.notes-writer),
+     and separator-aware matching must keep the garden-root listing
+     working, since tree/list gates on the request's prefix string
+     itself.|) *)

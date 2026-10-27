@@ -154,21 +154,25 @@ let test_narrowing_relation () =
   att "*" "echo" "{}" () >>= expect_ok_grant "star -> echo" >>= fun _ ->
   return ()
   >>= fun () ->
-  (* path narrowing: child under the parent prefix ok; escape rejected;
-     dropping the prefix rejected; NULL parent admits any prefix *)
-  att "tree/get" "tree/get" "{}" ~ppath:(Some "ns/") ~path:(Some "ns/sub/") ()
-  >>= expect_ok_grant "ns/ -> ns/sub/" >>= fun _ -> return ()
-  >>= fun () ->
-  att "tree/get" "tree/get" "{}" ~ppath:(Some "ns/") ~path:(Some "other/") ()
-  >>= expect_rejected "ns/ -> other/"
-  >>= fun () ->
-  att "tree/get" "tree/get" "{}" ~ppath:(Some "ns/") ~path:None ()
-  >>= expect_rejected "ns/ -> NULL"
-  >>= fun () ->
-  att "tree/get" "tree/get" "{}" ~ppath:None ~path:(Some "any/") ()
-  >>= expect_ok_grant "NULL -> any/" >>= fun _ -> return ()
-  >>= fun () ->
-  (* malformed child JSON and unknown predicate shapes refused *)
+    (* path narrowing: a child under the parent prefix is ok, an escape or a
+       dropped prefix is rejected, and a NULL parent lends NO scope (the
+       tenancy law) - a pathless capability cannot mint path authority *)
+    att "tree/get" "tree/get" "{}" ~ppath:(Some "ns/") ~path:(Some "ns/sub/") ()
+    >>= expect_ok_grant "ns/ -> ns/sub/" >>= fun _ -> return ()
+    >>= fun () ->
+    att "tree/get" "tree/get" "{}" ~ppath:(Some "ns/") ~path:(Some "other/") ()
+    >>= expect_rejected "ns/ -> other/"
+    >>= fun () ->
+    att "tree/get" "tree/get" "{}" ~ppath:(Some "ns/") ~path:None ()
+    >>= expect_rejected "ns/ -> NULL"
+    >>= fun () ->
+    att "tree/get" "tree/get" "{}" ~ppath:None ~path:(Some "any/") ()
+    >>= expect_rejected "NULL -> any/"
+      >>= fun () ->
+      att "tree/get" "tree/get" "{}" ~ppath:None ~path:None ()
+      >>= expect_ok_grant "NULL -> NULL" >>= fun _ -> return ()
+      >>= fun () ->
+      (* malformed child JSON and unknown predicate shapes refused *)
   att "echo" "echo" "not json" () >>= expect_rejected "malformed child"
   >>= fun () ->
   att "echo" "echo" "{\"weird\": true}" ()

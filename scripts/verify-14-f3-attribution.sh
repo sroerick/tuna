@@ -38,14 +38,18 @@ PID=$(echo "$MINT" | jget "d['id']")
 PAUTH="Authorization: Bearer $(echo "$MINT" | jget "d['token']")"
 
 echo "[14.1] peer's own write attributes to the peer (ops chain actor)"
-# the g1 floor applies to the peer too: it writes only behind its own
-# covering grant, minted by itself, scoped to its own namespace
-PG=$(curl -sf -X POST -H "$PAUTH" -H 'Content-Type: application/json' \
-  --data-binary '{"prim":"tree/put"}' $BASE/api/grants | jget "d['id']")
-curl -sf -X POST -H "$PAUTH" -H 'Content-Type: application/json' \
-  --data-binary "{\"path_prefix\":\"$NS\"}" \
-  $BASE/api/grants/$PG/attenuate > /dev/null \
-  || fail "peer attenuate to its own namespace"
+# the g1 floor applies to the peer too: it writes only behind a covering
+# grant scoped to its own namespace - and since scope can only ever be
+# NARROWED, the operator seeds that namespace ON BEHALF of the peer
+PG=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$NS\",\"identity\":\"$PID\"}" \
+  $BASE/api/grants) || fail "operator seeds the peer namespace"
+[ "$(echo "$PG" | jget "d['caller']")" = "$PID" ] \
+  || fail "seeded peer row must belong to the peer"
+# the peer cannot widen: a prefix outside its namespace is refused
+[ "$(curl_code -X POST -H "$PAUTH" -H 'Content-Type: application/json' \
+    --data-binary '{"prim":"tree/put","path_prefix":"elsewhere/"}' \
+    $BASE/api/grants)" = 403 ] || fail "peer must not mint outside its namespace"
 [ "$(curl_code -X POST -H "$PAUTH" -H 'Content-Type: application/json' \
     --data-binary "{\"path\":\"${NS}attr-a\",\"value_ternary\":\"10\"}" \
     $BASE/api/tree/put)" = 201 ] || fail "peer's covered in-ns put must 201"

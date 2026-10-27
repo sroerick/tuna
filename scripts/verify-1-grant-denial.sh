@@ -59,17 +59,23 @@ for TRY in 1 2 3 4 5; do
   [ "$N" -ge 1 ] || OK=1
   curl -sf -m 60 -X POST -H "$AUTH" $BASE/api/grants/$G2/revoke >/dev/null \
     || OK=1
-  if [ -z "$OK" ]; then
-    wait $RUN_PID 2>/dev/null || true
-    rm -f "$TMP"
-    break
-  fi
-  kill $RUN_PID 2>/dev/null; wait $RUN_PID 2>/dev/null || true; rm -f "$TMP"
-done
-# find the run by its journaled denial (the audit query is criterion 6's surface)
-D_ID=$(psql_q -tAc \
-  "SELECT DISTINCT run_id::text FROM journals WHERE grant_id='$G2'::uuid AND error LIKE 'grant denial (revoked)%' LIMIT 1")
-[ -n "$D_ID" ] || fail "mid-run revocation denial was not journaled (tried $TRY times)"
+    if [ -n "$OK" ]; then
+      kill $RUN_PID 2>/dev/null; wait $RUN_PID 2>/dev/null || true; rm -f "$TMP"
+    else
+      wait $RUN_PID 2>/dev/null || true
+      rm -f "$TMP"
+      # the denial must be IN THE JOURNAL before this attempt counts.  On a
+      # fast host the whole n=120 run takes ~100ms (measured: 120 rows in
+      # 106ms, revoke landing 143us before the last row), so an attempt can
+      # race to a complete, denial-free run.  That is a race in the
+      # experiment, not a boundary failure: retry the whole experiment
+      # (mint, run, revoke, look) instead of demanding one attempt win it.
+      D_ID=$(psql_q -tAc \
+        "SELECT DISTINCT run_id::text FROM journals WHERE grant_id='$G2'::uuid AND error LIKE 'grant denial (revoked)%' LIMIT 1")
+      if [ -n "$D_ID" ]; then break; fi
+    fi
+  done
+  [ -n "$D_ID" ] || fail "mid-run revocation denial was not journaled in $TRY attempts"
 D_RUN=$(curl -sf -H "$AUTH" $BASE/api/runs/$D_ID)
 echo "$D_RUN" | grep -q '"status":"normal"' \
   || fail "denied run must still be normal (denial is data, not an exception)"
@@ -142,46 +148,50 @@ NJ=$(psql_q -tAc \
   | tr -d ' ')
 [ "$NJ" -ge 3 ] || fail "denied tree ops must be journaled (got $NJ rows)"
 echo "  deny-all holds: grantless 403 x3, denials journaled ($NJ rows)"
-# an explicit covering grant opens exactly the prefix (mint + attenuate;
-# the unscoped parent stays alive - revoking it would kill the child)
-MG=$(curl -sf -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
-  --data-binary '{"prim":"tree/put"}' $BASE/api/grants | jget "d['id']")
+# a member holds NO path authority until the operator seeds a garden: a
+# path-addressed mint needs a prefix (400), and a prefix outside the
+# member's authority is refused (403) - scope can only ever NARROW
+[ "$(curl_code -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
+    --data-binary '{"prim":"tree/put"}' $BASE/api/grants)" = 400 ] \
+  || fail "path-addressed mint without a prefix must 400"
+[ "$(curl_code -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
+    --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$FLOOR/\"}" \
+    $BASE/api/grants)" = 403 ] || fail "ungranted prefix must 403 (tenancy)"
+# the operator seeds the member's garden ON BEHALF of the member; the row
+# belongs to the member and the member narrows inside it (attenuation)
+GG=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$FLOOR/\",\"identity\":\"$MEM_ID\"}" \
+  $BASE/api/grants) || fail "operator seeds the member garden"
+[ "$(echo "$GG" | jget "d['caller']")" = "$MEM_ID" ] \
+  || fail "seeded row must belong to the member"
 SC=$(curl -sf -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
-  --data-binary "{\"path_prefix\":\"$FLOOR/\",\"args_attenuation\":\"null\"}" \
-  $BASE/api/grants/$MG/attenuate | jget "d['grant']['id']") \
-  || fail "member attenuate to a covering prefix"
+  --data-binary "{\"path_prefix\":\"$FLOOR/sub/\",\"args_attenuation\":\"null\"}" \
+  $BASE/api/grants/$(echo "$GG" | jget "d['id']")/attenuate | jget "d['grant']['id']") \
+  || fail "member attenuate inside its own garden"
 [ -n "$SC" ] || fail "attenuate returned no child grant"
 [ "$(tj put  "{\"path\":\"$FLOOR/x\",\"value_ternary\":\"10\"}")" = 201 ] \
-  || fail "covered in-prefix put must 201"
+  || fail "seeded garden put must 201"
 [ "$(tj get  "{\"path\":\"$FLOOR/x\"}")" = 200 ] \
-  || fail "covered in-prefix get must 200"
+  || fail "seeded garden get must 200"
 [ "$(tj list "{\"prefix\":\"$FLOOR/\"}")" = 200 ] \
-  || fail "covered in-prefix list must 200"
-echo "  explicit grant opens the prefix (put 201 / get 200 / list 200)"
-# mint-time scoping (2026-10-26): the MINT carries the prefix, and a
-# fresh identity holding only a scoped mint is confined to it.  A fresh
-# identity is required because the member above now holds an unscoped
-# parent too, and has_covering_grant scans EVERY live row of the caller -
-# one unscoped row anywhere in a holder's set covers everything.
-SM_NAME="$FLOOR-scoped-member"
-SM=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-  --data-binary "{\"name\":\"$SM_NAME\"}" $BASE/api/identities) \
-  || fail "mint scoped member"
-SAUTH="Authorization: Bearer $(echo "$SM" | jget "d['token']")"
-stj() { curl_code -X POST -H "$SAUTH" -H 'Content-Type: application/json' \
-  --data-binary "$2" "$BASE/api/tree/$1"; }
-SG=$(curl -sf -X POST -H "$SAUTH" -H 'Content-Type: application/json' \
-  --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$FLOOR/\"}" \
-  $BASE/api/grants | jget "d['id']") || fail "member scoped mint"
-[ -n "$SG" ] || fail "scoped mint returned no id"
-[ "$(stj put "{\"path\":\"$FLOOR/scoped\",\"value_ternary\":\"10\"}")" = 201 ] \
-  || fail "scoped mint must open its own prefix (201)"
-[ "$(stj put "{\"path\":\"$FLOOR-outside/x\",\"value_ternary\":\"10\"}")" = 403 ] \
-  || fail "scoped mint must not open a sibling prefix (403)"
-[ "$(curl_code -X POST -H "$SAUTH" -H 'Content-Type: application/json' \
+  || fail "seeded garden list must 200"
+echo "  operator-seeded garden opens the prefix (put 201 / get 200 / list 200)"
+# a member narrows inside its own authority; it cannot mint into anybody
+# else's space, cannot mint FOR anybody else, and "" is never normalized
+SN=$(curl -sf -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$FLOOR/narrow/\"}" \
+  $BASE/api/grants | jget "d['id']") || fail "member narrows inside its garden"
+[ -n "$SN" ] || fail "narrowed mint returned no id"
+[ "$(curl_code -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
+    --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$FLOOR-outside/x\"}" \
+    $BASE/api/grants)" = 403 ] || fail "a prefix outside the garden must 403"
+[ "$(curl_code -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
+    --data-binary "{\"prim\":\"echo\",\"identity\":\"$MEM_ID\"}" \
+    $BASE/api/grants)" = 403 ] || fail "a member may not mint for another identity"
+[ "$(curl_code -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
     --data-binary '{"prim":"tree/put","path_prefix":""}' \
     $BASE/api/grants)" = 400 ] || fail "empty path_prefix must be refused (400)"
-echo "  scoped mint opens exactly its prefix; empty path_prefix refused 400"
+echo "  member narrows inside its garden; outside/on-behalf/empty refused"
 # the admin tier bypasses the floor (same rule as route publish)
 [ "$(curl_code -X POST -H "$AUTH" -H 'Content-Type: application/json' \
   --data-binary "{\"path\":\"$FLOOR/root\",\"value_ternary\":\"10\"}" \
@@ -205,13 +215,21 @@ curl -sf -H "$RTAUTH" $BASE/api/runs > /dev/null \
 [ "$(curl_code -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
     --data-binary "{\"path\":\"$FLOOR/runner\",\"value_ternary\":\"10\"}" \
     $BASE/api/tree/put)" = 403 ] || fail "runner token inherits the tree-op floor"
-# a covering grant the runner mints itself opens exactly its prefix
-RG=$(curl -sf -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
-  --data-binary '{"prim":"tree/put"}' $BASE/api/grants | jget "d['id']")
-RSC=$(curl -sf -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
-  --data-binary "{\"path_prefix\":\"$FLOOR/\"}" \
-  $BASE/api/grants/$RG/attenuate | jget "d['grant']['id']")
-[ -n "$RSC" ] || fail "runner attenuate to a covering prefix"
+# the runner holds NO authority of its own: a path-addressed mint needs a
+# prefix (400) and a prefix outside its authority is refused (403)
+[ "$(curl_code -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
+    --data-binary '{"prim":"tree/put"}' $BASE/api/grants)" = 400 ] \
+  || fail "path-addressed mint without a prefix must 400"
+[ "$(curl_code -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
+    --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$FLOOR/\"}" \
+    $BASE/api/grants)" = 403 ] || fail "ungranted prefix must 403 (tenancy)"
+# the operator seeds the runner's garden ON BEHALF of the runner: the row
+# belongs to the runner, and the runner then writes inside it
+RGG=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$FLOOR/\",\"identity\":\"$RID\"}" \
+  $BASE/api/grants) || fail "operator seeds the runner garden"
+[ "$(echo "$RGG" | jget "d['caller']")" = "$RID" ] \
+  || fail "seeded runner row must belong to the runner"
 [ "$(curl_code -X POST -H "$RTAUTH" -H 'Content-Type: application/json' \
     --data-binary "{\"path\":\"$FLOOR/runner\",\"value_ternary\":\"10\"}" \
     $BASE/api/tree/put)" = 201 ] || fail "covered runner put must 201"

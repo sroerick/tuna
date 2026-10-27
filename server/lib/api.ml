@@ -1050,7 +1050,8 @@ let grant_prefix_of_json (j : J.t) : (string option, string) result =
    - path_prefix is HONORED, which is what makes a scoped capability
      mintable in one call instead of mint-unscoped-then-attenuate. *)
 let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
-  let err msg = return (400, `Assoc [ ("error", `String msg) ]) in
+  let err ?(code = 400) msg = return (code, `Assoc [ ("error", `String msg) ]) in
+  let jfield k = List.assoc_opt k (match j with `Assoc kvs -> kvs | _ -> []) in
   (* attenuation is a JSON predicate stored as text.  Accept BOTH
      shapes: an object ({"max_ternary":1}) is inlined verbatim; a
      string is used as-is (pre-M10 callers).  An object is what the
@@ -1058,45 +1059,82 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
      admit-all "{}" would mint a WEAKER-LOOKING grant that is
      actually STRONGER — never do that. *)
   let attenuation =
-    match
-      List.assoc_opt "args_attenuation"
-        (match j with `Assoc kvs -> kvs | _ -> [])
-    with
+    match jfield "args_attenuation" with
     | Some (`String s) -> Some s
     | Some v -> Some (J.to_string v)
     | None -> None
   in
-  match get_string_opt j "prim" with
-  | None -> err "missing \"prim\""
-  | Some prim when not (Prims.mintable prim) ->
-      err
-        (Printf.sprintf
-           "unknown prim %S (registered: %s; \"*\" is the wildcard)" prim
-           (String.concat ", " Prims.names))
-  | Some prim -> (
-      match grant_prefix_of_json j with
-      | Error e -> err e
-      | Ok path_prefix -> (
-          let attenuation =
-            Option.value attenuation ~default:"{}" (* jsonb: admit-all *)
-          in
+  let attenuation = Option.value attenuation ~default:"{}" (* jsonb: admit-all *) in
+  match jfield "identity" with
+  | Some _ when not auth.auth_is_admin ->
+      err ~code:403 "only an admin identity may mint a grant for another identity"
+  | _ -> (
+      match (get_string_opt j "prim", grant_prefix_of_json j) with
+      | None, _ -> err "missing \"prim\""
+      | _, Error e -> err e
+      | Some prim, Ok _ when not (Prims.mintable prim) ->
+          err
+            (Printf.sprintf
+               "unknown prim %S (registered: %s; \"*\" is the wildcard)" prim
+               (String.concat ", " Prims.names))
+      | Some prim, Ok path_prefix -> (
           match J.from_string attenuation with
-          | exception Yojson.Json_error _ ->
-              err "args_attenuation must be JSON"
+          | exception Yojson.Json_error _ -> err "args_attenuation must be JSON"
           | _ ->
-                Store.mint_grant pool ~prim ~args_attenuation:attenuation
-                ~path_prefix:path_prefix ~caller:auth.auth_id
-                ~minted_by:(Some auth.auth_id) ()
-              >>= fun g ->
-              return
-                ( 201
-                , `Assoc
-                    [ ("id", `String g.Store.g_id)
-                    ; ("prim", `String g.Store.g_prim)
-                    ; ("path_prefix", opt_str g.Store.g_path_prefix)
-                    ; ("caller", `String g.Store.g_caller)
-                    ; ("args_attenuation", `String g.Store.g_args_attenuation)
-                    ] ) ))
+              if
+                (not auth.auth_is_admin)
+                && Prims.path_addressed prim
+                && path_prefix = None
+              then
+                err
+                  (Printf.sprintf
+                     "%s addresses tree paths: supply \"path_prefix\" inside \
+                      your own authority" prim)
+              else
+                let on_behalf = get_string_opt j "identity" in
+                (match on_behalf with
+                 | None -> return (Ok auth.auth_id)
+                 | Some id -> (
+                     Store.fetch_identity pool id
+                     >>= function
+                     | None -> return (Error (Printf.sprintf "unknown identity %s" id))
+                     | Some i -> return (Ok i.Store.i_id)))
+                >>= (function
+                      | Error m -> err ~code:404 m
+                      | Ok caller -> (
+                          (* the tenancy rule: scope can only be NARROWED,
+                             never created.  Any claimed prefix must sit
+                             inside a prefix the caller already covers, and
+                             a NULL row provides none; an admin (the
+                             operator) is unrestricted. *)
+                          (if auth.auth_is_admin then return true
+                           else
+                             match path_prefix with
+                             | None -> return true (* pathless: no scope claimed *)
+                             | Some pfx -> Store.has_covering_grant pool caller pfx)
+                          >>= function
+                          | false ->
+                              err ~code:403
+                                (Printf.sprintf
+                                   "path_prefix %S is outside the caller's \
+                                    authority"
+                                   (Option.value path_prefix ~default:""))
+                          | true -> (
+                              Store.mint_grant pool ~prim
+                                ~args_attenuation:attenuation
+                                ~path_prefix:path_prefix ~caller
+                                ~minted_by:(Some auth.auth_id) ()
+                              >>= fun g ->
+                              return
+                                ( 201
+                                , `Assoc
+                                    [ ("id", `String g.Store.g_id)
+                                    ; ("prim", `String g.Store.g_prim)
+                                    ; ("path_prefix", opt_str g.Store.g_path_prefix)
+                                    ; ("caller", `String g.Store.g_caller)
+                                    ; ( "args_attenuation"
+                                      , `String g.Store.g_args_attenuation )
+                                    ] ))))))
 
 let post_grant pool auth req =
   body_json req >>= function
@@ -1563,20 +1601,27 @@ let post_tree_list pool auth req =
                [ ( "entries"
                  , `List (List.map entry_json entries) ) ]))))
 
-let get_tree_log pool _auth req =
-  (match (get_int64_query req "from_seq", get_int64_query req "to_seq") with
-   | Error e, _ | _, Error e -> return (Error e)
-     | Ok from_seq, Ok to_seq ->
-         let from_seq = Option.value from_seq ~default:0L in
-         let to_seq = Option.value to_seq ~default:Int64.max_int in
-         (match Web.query req "prefix" with
-          | Some p -> Store.ops_fold pool ?prefix:(Some p) ~from_seq ~to_seq ()
-          | None -> Store.ops_fold pool ~from_seq ~to_seq ())
-         >>= fun ops -> return (Ok ops))
-  >>= (function
-        | Error e -> (j_err e)
-        | Ok ops ->
-            (j_ok (`Assoc [ ("ops", `List (List.map tree_op_json ops)) ])))
+let get_tree_log pool auth req =
+  let prefix = Option.value (Web.query req "prefix") ~default:"" in
+  (* same floor as its siblings: the fold's PREFIX is the path, so
+     folding the whole log needs a capability no NULL row provides *)
+  tree_allowed pool auth prefix
+  >>= function
+  | false -> deny_tree pool auth ~op:"log" ~path:prefix
+  | true -> (
+      (match (get_int64_query req "from_seq", get_int64_query req "to_seq") with
+       | Error e, _ | _, Error e -> return (Error e)
+       | Ok from_seq, Ok to_seq ->
+           let from_seq = Option.value from_seq ~default:0L in
+           let to_seq = Option.value to_seq ~default:Int64.max_int in
+           (match Web.query req "prefix" with
+            | Some p -> Store.ops_fold pool ?prefix:(Some p) ~from_seq ~to_seq ()
+            | None -> Store.ops_fold pool ~from_seq ~to_seq ())
+           >>= fun ops -> return (Ok ops))
+      >>= function
+      | Error e -> (j_err e)
+      | Ok ops ->
+          (j_ok (`Assoc [ ("ops", `List (List.map tree_op_json ops)) ])))
 
 let post_ns_fork pool auth req =
   body_json req >>= function
@@ -1601,31 +1646,38 @@ let post_ns_fork pool auth req =
                    ; ("dst", `String dst)
                    ; ("copied", `Int copied) ])))))
 
-let get_tree_state pool _auth req =
-  (match get_int64_query req "at_seq" with
-   | Error e -> return (Error e)
-   | Ok at_seq ->
-       let prefix = Option.value (Web.query req "prefix") ~default:"" in
-       let at_seq = Option.value at_seq ~default:Int64.max_int in
-       (match Tree_prims.validate_prefix "prefix" prefix with
-        | Some e -> return (Error e)
-        | None -> (
-            Rewind.state pool ~prefix ~at_seq
-            >>= fun entries -> return (Ok (prefix, at_seq, entries)))))
-  >>= (function
-        | Error e -> (j_err e)
-        | Ok (prefix, at_seq, entries) ->
-            let e_json (e : Rewind.entry) =
-              `Assoc
-                [ ("path", `String e.Rewind.path)
-                ; ("value_hash", `String e.Rewind.value_hash)
-                ; ("version", `Int (Int64.to_int e.Rewind.version)) ]
-            in
-            (j_ok
-               (`Assoc
-                 [ ("prefix", `String prefix)
-                 ; ("at_seq", `Int (Int64.to_int at_seq))
-                 ; ("entries", `List (List.map e_json entries)) ])))
+let get_tree_state pool auth req =
+  let prefix = Option.value (Web.query req "prefix") ~default:"" in
+  match Tree_prims.validate_prefix "prefix" prefix with
+  | Some e -> (j_err e)
+  | None -> (
+      (* the rewind surface reads the substrate, so it answers to the same
+         g1 floor with the REQUESTED PREFIX as the path: no covering grant
+         means no fold, and a NULL row covers no prefix *) 
+      tree_allowed pool auth prefix
+      >>= function
+      | false -> deny_tree pool auth ~op:"state" ~path:prefix
+      | true -> (
+          (match get_int64_query req "at_seq" with
+           | Error e -> return (Error e)
+           | Ok at_seq ->
+               let at_seq = Option.value at_seq ~default:Int64.max_int in
+               Rewind.state pool ~prefix ~at_seq
+               >>= fun entries -> return (Ok (at_seq, entries)))
+          >>= function
+          | Error e -> (j_err e)
+          | Ok (at_seq, entries) ->
+              let e_json (e : Rewind.entry) =
+                `Assoc
+                  [ ("path", `String e.Rewind.path)
+                  ; ("value_hash", `String e.Rewind.value_hash)
+                  ; ("version", `Int (Int64.to_int e.Rewind.version)) ]
+              in
+              (j_ok
+                 (`Assoc
+                   [ ("prefix", `String prefix)
+                   ; ("at_seq", `Int (Int64.to_int at_seq))
+                   ; ("entries", `List (List.map e_json entries)) ]))))
 
 (* -- byte values (M11): JSON over the byte value store ----------------
 
