@@ -158,6 +158,30 @@ SC=$(curl -sf -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
 [ "$(tj list "{\"prefix\":\"$FLOOR/\"}")" = 200 ] \
   || fail "covered in-prefix list must 200"
 echo "  explicit grant opens the prefix (put 201 / get 200 / list 200)"
+# mint-time scoping (2026-10-26): the MINT carries the prefix, and a
+# fresh identity holding only a scoped mint is confined to it.  A fresh
+# identity is required because the member above now holds an unscoped
+# parent too, and has_covering_grant scans EVERY live row of the caller -
+# one unscoped row anywhere in a holder's set covers everything.
+SM_NAME="$FLOOR-scoped-member"
+SM=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"name\":\"$SM_NAME\"}" $BASE/api/identities) \
+  || fail "mint scoped member"
+SAUTH="Authorization: Bearer $(echo "$SM" | jget "d['token']")"
+stj() { curl_code -X POST -H "$SAUTH" -H 'Content-Type: application/json' \
+  --data-binary "$2" "$BASE/api/tree/$1"; }
+SG=$(curl -sf -X POST -H "$SAUTH" -H 'Content-Type: application/json' \
+  --data-binary "{\"prim\":\"tree/put\",\"path_prefix\":\"$FLOOR/\"}" \
+  $BASE/api/grants | jget "d['id']") || fail "member scoped mint"
+[ -n "$SG" ] || fail "scoped mint returned no id"
+[ "$(stj put "{\"path\":\"$FLOOR/scoped\",\"value_ternary\":\"10\"}")" = 201 ] \
+  || fail "scoped mint must open its own prefix (201)"
+[ "$(stj put "{\"path\":\"$FLOOR-outside/x\",\"value_ternary\":\"10\"}")" = 403 ] \
+  || fail "scoped mint must not open a sibling prefix (403)"
+[ "$(curl_code -X POST -H "$SAUTH" -H 'Content-Type: application/json' \
+    --data-binary '{"prim":"tree/put","path_prefix":""}' \
+    $BASE/api/grants)" = 400 ] || fail "empty path_prefix must be refused (400)"
+echo "  scoped mint opens exactly its prefix; empty path_prefix refused 400"
 # the admin tier bypasses the floor (same rule as route publish)
 [ "$(curl_code -X POST -H "$AUTH" -H 'Content-Type: application/json' \
   --data-binary "{\"path\":\"$FLOOR/root\",\"value_ternary\":\"10\"}" \
