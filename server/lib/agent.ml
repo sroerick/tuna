@@ -362,4 +362,5 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "- Source tarball: " ^ origin ^ "/src.tgz"
     ; "- Health: " ^ origin ^ "/health"
     ; "- Interactive REPL (session required): " ^ origin ^ "/repl"
+      ; "- HTML mirror of this document (same facts, for harnesses that\n        block .txt URLs): " ^ origin ^ "/agent"
     ]

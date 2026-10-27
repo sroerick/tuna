@@ -79,8 +79,8 @@ hand you the token.</p>
 <p>→ <code>201 {"id":…,"name":…,"is_admin":false,"token":…}</code>.  the
 signup seeds your garden (<code>u.&lt;name&gt;.</code>, tree/put) and is
 rate-limited to 5/hour/address.  paste the token into the form above for a
-browser session.  agents: <a href="/agent.txt">/agent.txt</a> has the full
-walkthrough.</p>|}
+  browser session.  agents: <a href="/agent.txt">/agent.txt</a> has the full
+  walkthrough; <a href="/agent">/agent</a> is its HTML twin.</p>|}
     origin
 
 let login_get req =

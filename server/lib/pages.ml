@@ -75,6 +75,7 @@ let open_routes pool =
     ; Web.get "/claims/**" (Public.claim_detail pool None)
     ; Web.get "/code" (Public.code pool None)
     ; Web.get "/agent.txt" (Public.agent_txt pool)
+      ; Web.get "/agent" (Public.agent_page pool)
     ; Web.get "/.well-known/agent.json" (Public.agent_json pool)
   ; Web.get "/programs/lookup"
       (A.require_auth pool (fun _user req ->

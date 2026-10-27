@@ -173,7 +173,7 @@ rows you can read, and neither one is ambient.</p>
 </section>
 <p><strong>human with an AI agent next to you?</strong> ask it: "sign me up
 on tuna" — one POST gets your token, and it can hand it to you.  the whole
-flow is on <a href="/agent.txt">/agent.txt</a>.</p>
+  flow is on <a href="/agent.txt">/agent.txt</a> or <a href="/agent">/agent</a>.</p>
 <section><h3>the tour</h3>
 <ul>
 <li><a href="/static/repl.html">the repl</a> — tree calculus in your
@@ -186,9 +186,10 @@ flow is on <a href="/agent.txt">/agent.txt</a>.</p>
 <li><a href="/code">/code</a> — the public program + run browser
     (read-only)</li>
 <li>agents + humans-in-a-hurry: <code>POST /api/signup</code> mints an
-    identity + bearer, self-serve — <a href="/agent.txt">/agent.txt</a>
+      identity + bearer, self-serve — <a href="/agent.txt">/agent.txt</a> or
+      <a href="/agent">/agent</a>
     shows the two curls</li>
-<li><a href="/agent.txt">/agent.txt</a> ·
+<li><a href="/agent.txt">/agent.txt</a> or <a href="/agent">/agent</a> ·
     <a href="/.well-known/agent.json">/.well-known/agent.json</a> — the
     agent-facing manifest (machines start here)</li>
 </ul>
@@ -250,7 +251,7 @@ never an exception.  the path-addressed prims (<code>tree/*</code>,
 <tr><th>prim</th><th>what it does</th></tr>
 %s
 </table>
-<p class="muted">request shapes live in <a href="/agent.txt">/agent.txt</a>;
+  <p class="muted">request shapes live in <a href="/agent.txt">/agent.txt</a> or <a href="/agent">/agent</a>;
 the claims a run's evidence supports live in <a href="/claims">/claims</a>.</p>|}
       P.contract (List.length P.names)
       (String.concat "" (List.map row P.names)))
@@ -305,7 +306,8 @@ verdicts, never in-place bumps.</p>
   <section><h3>mint one</h3>
   <p>you need a run of your own: <code>POST /api/programs</code> compiles
   an s-expression to a program hash, <code>POST /api/runs</code> executes
-  it (<a href="/agent.txt">/agent.txt</a> has the shapes, or poke the
+    it (<a href="/agent.txt">/agent.txt</a> or <a href="/agent">/agent</a>
+    have the shapes, or poke the
   <a href="/static/repl.html">browser repl</a> first).  then, from the
   server's source (<a href="/src.tgz">/src.tgz</a>):</p>
   <pre class="code">TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh mint 'u.you.claim.2026-10-27.observed.wall.slug' &lt;run-id&gt;
@@ -712,7 +714,8 @@ let code pool _user _req =
     (Printf.sprintf
        {|<h2>code</h2>
 <p class="muted">read-only public browser.  <a href="/welcome">welcome</a>
-· <a href="/agent.txt">agent.txt</a> · <a href="/src.tgz">src.tgz</a></p>
+· <a href="/agent.txt">agent.txt</a> · <a href="/agent">/agent</a> ·
+  <a href="/src.tgz">src.tgz</a></p>
 <section><h3>programs (newest 200)</h3>
 <table>
 <tr><th>hash</th><th>created by</th><th>ternary</th></tr>
@@ -739,3 +742,125 @@ let agent_txt _pool req =
   Web.respond
     ~headers:[ ("Content-Type", "text/plain; charset=utf-8") ]
     (Ag.agent_markdown ~base_url:base ())
+
+(* -- /agent: the HTML twin of /agent.txt (UI-SPEC S1) ----------------
+
+   Browser-Use-class harnesses block .txt URLs (net::ERR_BLOCKED_BY_CLIENT,
+   3x in the login transcript), which made /agent.txt invisible to the
+   exact agent it documents.  GET /agent renders the machine contract as
+   HTML: every section is generated from agent_json - the same source the
+   canonical /agent.txt and /.well-known/agent.json draw on - and the
+   canonical text itself rides along in a collapsed block, so no fact in
+   agent.txt can be absent from this page.  /agent.txt stays canonical
+   for agents that can fetch text. *)
+let yj_fields = function `Assoc fs -> fs | _ -> []
+
+let yj_str = function `String s -> s | _ -> ""
+
+let yj_census_row (_name, j) =
+  let kv = yj_fields j in
+  let f k = match List.assoc_opt k kv with Some v -> yj_str v | _ -> "" in
+  Printf.sprintf
+    {|<tr><td><code>%s</code></td><td><code>%s</code></td><td>%s</td></tr>|}
+    (L.esc (f "method")) (L.esc (f "path")) (L.esc (f "auth"))
+
+let agent_page _pool req =
+  let base = Ag.base_url_of_headers (Web.all_headers req) in
+    let json = Ag.agent_json ~base_url:base () in
+    let md = Ag.agent_markdown ~base_url:base () in
+  let fields = yj_fields json in
+  let sub k = match List.assoc_opt k fields with Some v -> yj_fields v | _ -> [] in
+  let str k = match List.assoc_opt k fields with Some v -> yj_str v | _ -> "" in
+  let child parent k =
+    match List.assoc_opt k (yj_fields parent) with
+    | Some v -> yj_str v
+    | _ -> ""
+  in
+  let list_at parent k =
+    match List.assoc_opt k (yj_fields parent) with
+    | Some (`List vs) -> List.map yj_str vs
+    | _ -> []
+  in
+  let origin = match base with Some b -> b | None -> "https://tuna.example" in
+  let endpoints = sub "endpoints" in
+  let auth_rows =
+    String.concat "\n"
+      (List.map
+         (fun (k, v) ->
+           Printf.sprintf {|<tr><th>%s</th><td>%s</td></tr>|} (L.esc k)
+             (L.esc (yj_str v)))
+         (sub "auth"))
+  in
+  let bootstrap = match List.assoc_opt "bootstrap" fields with
+    | Some b -> b
+    | None -> `Assoc []
+  in
+  let first_calls = String.concat "\n" (list_at bootstrap "first_calls") in
+  let rules =
+    String.concat "\n"
+      (List.map (fun r -> Printf.sprintf "<li>%s</li>" (L.esc r))
+         (list_at bootstrap "rules"))
+  in
+  let curl = child (match List.assoc_opt "examples" fields with
+      | Some e -> e | None -> `Assoc []) "curl"
+  in
+  let related =
+    String.concat "\n"
+      (List.map
+         (fun (k, v) ->
+           let target = yj_str v in
+           if target <> "" && target.[0] = '/' then
+             Printf.sprintf {|<li>%s: <a href="%s">%s</a></li>|} (L.esc k)
+               (L.esc target) (L.esc target)
+           else
+             Printf.sprintf {|<li>%s: <code>%s</code></li>|} (L.esc k)
+               (L.esc target))
+         (sub "related"))
+  in
+  L.page ~title:"tuna — agent"
+    (Printf.sprintf
+       {|<h2>agent</h2>
+<p class="muted">the agent doc, as HTML — for harnesses that block .txt
+URLs.  <a href="/agent.txt">/agent.txt</a> stays canonical; the machine
+contract is <a href="/.well-known/agent.json">/.well-known/agent.json</a>.</p>
+<section><h3>origin</h3>
+<p>base URL (this host): <code>%s</code></p></section>
+<section><h3>philosophy</h3>
+<p>%s</p></section>
+<section><h3>auth model</h3>
+<table>
+%s
+</table></section>
+<section><h3>request-shape census (%d endpoints)</h3>
+<table>
+<tr><th>method</th><th>path</th><th>auth</th></tr>
+%s
+</table>
+<p class="muted">generated from the machine contract, so /agent.txt, /agent
+and agent.json cannot drift.</p></section>
+<section><h3>first calls</h3>
+<pre class="code">%s</pre></section>
+<section><h3>rules</h3>
+<ol>
+%s
+</ol></section>
+<section><h3>curl example</h3>
+<pre class="code">%s</pre></section>
+<section><h3>related surfaces</h3>
+<ul>
+<li>canonical text: <a href="/agent.txt">/agent.txt</a></li>
+%s
+</ul></section>
+<section><h3>the canonical text</h3>
+<details><summary>/agent.txt, verbatim</summary>
+<pre class="code">%s</pre></details></section>|}
+       (L.esc origin)
+       (L.esc (str "philosophy"))
+       auth_rows
+       (List.length endpoints)
+       (String.concat "\n" (List.map yj_census_row endpoints))
+       (L.esc first_calls)
+       rules
+       (L.esc curl)
+       related
+       (L.esc md))
