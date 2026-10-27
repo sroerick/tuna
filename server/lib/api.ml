@@ -375,12 +375,15 @@ let post_program pool auth req =
             Option.value (get_int_opt j "compile_size_cap")
               ~default:B.default_compile_size_cap
           in
+          let resolved = ref [] in
           match
             (try
                Ok
                  (B.compile_source src ~fuel:compile_fuel
                     ~size_cap:compile_size_cap
-                    ~deadline:(Run.compile_deadline_now ()))
+                    ~deadline:(Run.compile_deadline_now ())
+                    ~on_resolve:(fun name off ->
+                        resolved := (name, off) :: !resolved))
              with
              | Tuna_compiler.Ir.Error (p, msg) ->
                  Error ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
@@ -388,7 +391,21 @@ let post_program pool auth req =
           with
             | Error msg ->  (j_err msg)
           | Ok art ->
-              let ir = J.to_string (ir_json_of_artifact art) in
+              (* fold the collector into name -> count, the same shape
+                 the REPL path lands in the ir column *)
+              let counts =
+                List.fold_left
+                  (fun acc (name, _) ->
+                    match List.assoc_opt name acc with
+                    | Some c ->
+                        List.remove_assoc name acc
+                        |> fun a -> (name, c + 1) :: a
+                    | None -> (name, 1) :: acc)
+                  [] !resolved
+                |> List.sort (fun (a, ca) (b, cb) ->
+                       if ca <> cb then cb - ca else compare a b)
+              in
+              let ir = J.to_string (ir_json_of_artifact ~resolved:counts art) in
               let hash = art.B.hash_hex in
               Store.upsert_program pool ~hash ~ternary:art.B.ternary ~ir:(Some ir)
                 ~created_by ~source:(Some src)
@@ -2508,6 +2525,88 @@ let gc_run pool auth req =
                               | None -> (j_err ~code:500 "gc lost the run row")
                               | Some r -> (j_ok ~code:200 (run_json r))))))
 
+(* -- /api/defs/usage (def-usage census) ------------------------------
+
+   The vocabulary census: which dictionary defs do the town's programs
+   compile against, how often, and by how many callers.  Aggregates the
+   resolved_defs tables the compiler threads into each program row's
+   ir JSON (parse-time resolution - the def usage is compile
+   adoption).  Counts are public to any authenticated identity; the
+   per-caller detail stays in the run rows where F3 already pins it.
+   defined_by lists every identity defining the name - shadowing is
+   legal, so the reader minds resolution order (lambda > identity dict
+   > sabralib > builtin). *)
+let defs_usage pool _auth _req =
+  S.list_programs pool ~limit:1000 ()
+  >>= fun progs ->
+  S.defs_registry pool
+  >>= fun registry ->
+  let acc = Hashtbl.create 32 in
+  List.iter
+    (fun (p : Store.program) ->
+      match p.Store.p_ir with
+      | None -> ()
+      | Some ir_s -> (
+          match J.from_string ir_s with
+          | `Assoc fields -> (
+              match List.assoc_opt "resolved_defs" fields with
+              | Some (`List defs) ->
+                  List.iter
+                    (fun d ->
+                      match d with
+                      | `Assoc [ ("name", `String n); ("count", `Int c) ] ->
+                          let progs, occ, callers =
+                            match Hashtbl.find_opt acc n with
+                            | Some v -> v
+                            | None -> (0, 0, Hashtbl.create 8)
+                          in
+                          (match p.Store.p_created_by with
+                           | Some cb -> Hashtbl.replace callers cb ()
+                           | None -> ());
+                          Hashtbl.replace acc n (progs + 1, occ + c, callers)
+                      | _ -> ())
+                    defs
+              | _ -> ())
+          | exception _ -> ()))
+    progs
+  >>= fun () ->
+  let rows =
+    Hashtbl.fold
+      (fun name (progs, occ, callers) acc2 ->
+        let cs = Hashtbl.fold (fun c _ a -> c :: a) callers [] in
+        let defined_by =
+          List.filter_map
+            (fun (n, owner) -> if n = name then Some owner else None)
+            registry
+        in
+        (`Assoc
+           [ ("name", `String name)
+           ; ( "defined_by"
+             , `List (List.map (fun o -> `String o) (List.sort compare defined_by)) )
+           ; ("programs", `Int progs)
+           ; ("occurrences", `Int occ)
+           ; ("callers", `Int (List.length cs)) ])
+        :: acc2)
+      acc []
+    |> List.sort (fun a b ->
+           let int_of key d =
+             match List.assoc_opt key d with
+             | Some (`Int n) -> n
+             | _ -> 0
+           in
+           let pa = int_of "occurrences" a and pb = int_of "occurrences" b in
+           if pa <> pb then pb - pa
+           else
+             compare
+               (match List.assoc_opt "name" a with
+                | Some (`String s) -> s
+                | _ -> "")
+               (match List.assoc_opt "name" b with
+                | Some (`String s) -> s
+                | _ -> ""))
+  in
+  j_ok (`Assoc [ ("defs", `List rows) ])
+
 (* -- router / server ------------------------------------------------- *)
 
 (* route list, mounted alongside the M8 page routes by bin/main.ml *)
@@ -2515,6 +2614,7 @@ let api_routes pool =
   [ Web.post "/api/programs" (with_auth pool (post_program pool))
     ; Web.get "/api/programs/:hash" (with_auth pool (get_program pool))
     ; Web.get "/api/whoami" (with_auth pool (whoami pool))
+    ; Web.get "/api/defs/usage" (with_auth pool (defs_usage pool))
     ; Web.post "/api/programs/:hash/patch"
         (with_auth pool (patch_program pool))
     ; Web.post "/api/runs" (with_auth pool (post_run pool))

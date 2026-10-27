@@ -47,7 +47,8 @@ module P = Patch
 (* The ir column (provenance-lite: tree path -> IR node id + span) for
    a compiled artifact.  LIVES HERE (not Api) so Run-boundary consumers
    don't pull the Api module in — Api delegates to this one. *)
-let ir_json_of_artifact (a : B.artifact) : J.t =
+let ir_json_of_artifact ?(resolved : (string * int) list = [])
+    (a : B.artifact) : J.t =
   let span_of_id id =
     match Tuna_compiler.Ir.find_id a.B.ir id with
     | None -> None
@@ -61,6 +62,15 @@ let ir_json_of_artifact (a : B.artifact) : J.t =
   `Assoc
     [ ("kind", `String "compiled")
     ; ("steps", `Int a.B.steps)
+    ; ( "resolved_defs"
+      , (match resolved with
+         | [] -> `Null
+         | _ ->
+             `List
+               (List.map
+                  (fun (name, count) ->
+                    `Assoc [ ("name", `String name); ("count", `Int count) ])
+                  resolved)) )
     ; ( "tags"
       , `List
           (List.map
@@ -168,16 +178,39 @@ let err_ msg : round_result = return (Error (400, msg))
 
 (* -- journaled rounds (eval / def) ------------------------------------ *)
 
+(* compile + the dictionary-usage census: every dictionary hit fires
+   on_resolve (def-usage, borg/call-sites.borg cousin).  The collector
+   rides the parse; the aggregate lands in the program row's ir JSON
+   (resolved_defs, name -> occurrence count) so /api/defs/usage can
+   answer 'which defs does the town speak, and who speaks them'
+   without a second write path. *)
 let compile_with_dict ?(fuel = B.default_compile_fuel)
     ?(size_cap = B.default_compile_size_cap) ?(deadline = Float.infinity)
     ~dictionary src =
-  B.compile_source ~fuel ~size_cap ~deadline ~dictionary src
+  let resolved = ref [] in
+  let artifact =
+    B.compile_source ~fuel ~size_cap ~deadline ~dictionary
+      ~on_resolve:(fun name off -> resolved := (name, off) :: !resolved)
+      src
+  in
+  (* fold (name, off) into name -> count, sorted by count then name *)
+  let counts =
+    List.fold_left
+      (fun acc (name, _) ->
+        match List.assoc_opt name acc with
+        | Some c -> List.remove_assoc name acc |> fun a -> (name, c + 1) :: a
+        | None -> (name, 1) :: acc)
+      [] !resolved
+    |> List.sort (fun (a, ca) (b, cb) ->
+           if ca <> cb then cb - ca else compare a b)
+  in
+  (artifact, counts)
 
 (* Compile the artifact, upsert it, run it through the run boundary,
    and chain the run row to the identity's previous round. *)
 let journaled_round pool ~caller ~artifact ~source ~input_trees ~grant_ids
-    ~fuel ~size_cap () =
-  let ir = J.to_string (ir_json_of_artifact artifact) in
+    ~fuel ~size_cap ?(resolved : (string * int) list = []) () =
+  let ir = J.to_string (ir_json_of_artifact ~resolved artifact) in
   S.upsert_program pool ~hash:artifact.B.hash_hex ~ternary:artifact.B.ternary
     ~ir:(Some ir) ~created_by:(Some caller) ~source
   >>= fun _ ->
@@ -211,9 +244,9 @@ let do_eval pool ~caller ~grant_ids ~dictionary ~input_trees ~fuel ~size_cap
     | exception Tuna_compiler.Ir.Error (p, msg) ->
         err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
     | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
-    | artifact -> (
+    | (artifact, resolved) -> (
         journaled_round pool ~caller ~artifact ~source:(Some src) ~input_trees
-          ~grant_ids ~fuel ~size_cap ()
+          ~grant_ids ~fuel ~size_cap ~resolved ()
         >>= (function
               | Error (code, msg) -> return (Error (code, msg))
               | Ok (row, _js, phash) ->
@@ -230,11 +263,11 @@ let do_def pool ~caller ~dictionary
   | exception Tuna_compiler.Ir.Error (p, msg) ->
       err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
   | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
-  | artifact -> (
+  | (artifact, resolved) -> (
       S.dict_set pool ~identity_id:caller ~name ~ternary:artifact.B.ternary
       >>= fun () ->
       journaled_round pool ~caller ~artifact ~source:(Some src) ~input_trees:[]
-        ~grant_ids:[] ~fuel:1_000_000 ~size_cap:1_000_000 ()
+        ~grant_ids:[] ~fuel:1_000_000 ~size_cap:1_000_000 ~resolved ()
       >>= (function
             | Error (code, msg) -> return (Error (code, msg))
             | Ok (row, _js, phash) ->

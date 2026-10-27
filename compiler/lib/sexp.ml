@@ -169,7 +169,9 @@ type pending_unbound = { var_id : int; name : string; off : int }
    lambda parameter that shadows the name is already in [scope] when
    the occurrence is parsed (it becomes a Var, not a literal).  A free
    occurrence NOT in the dictionary is still a pending unbound error. *)
-let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t =
+let parse ?(dictionary : (string * Tuna.Tree.t) list = [])
+    ?(on_resolve : (string -> int -> unit) option)
+    (src : string) : Ir.t =
   let dict = Hashtbl.create 8 in
   List.iter (fun (n, t) -> Hashtbl.replace dict n t) dictionary;
   let toks = Array.of_list (lex src) in
@@ -206,6 +208,9 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = []) (src : string) : Ir.t
     else
       try
         let tree = Hashtbl.find dict a in
+        (match on_resolve with
+         | Some f -> f a off
+         | None -> ());
         Tree_lit ({ id = fresh (); span = { off; len = String.length a }; tree })
       with Not_found -> (
         match builtin_tree a with

@@ -260,5 +260,7 @@ let compile ?(fuel = default_compile_fuel) ?(size_cap = default_compile_size_cap
 (* Convenience: compile surface source directly.  ?dictionary threads
    the REPL's name->tree bindings into the reader (M9). *)
 let compile_source ?fuel ?size_cap ?deadline
-    ?(dictionary : (string * Tuna.Tree.t) list = []) src =
-  compile ?fuel ?size_cap ?deadline (Sexp.parse ~dictionary src)
+    ?(dictionary : (string * Tuna.Tree.t) list = [])
+    ?(on_resolve : (string -> int -> unit) option) src =
+  compile ?fuel ?size_cap ?deadline
+    (Sexp.parse ~dictionary ?on_resolve src)

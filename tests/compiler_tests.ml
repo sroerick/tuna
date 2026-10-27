@@ -450,5 +450,52 @@ let () =
         ("compile", compile_tests);
       ("extensional", extensional_tests);
       ("provenance", provenance_tests);
+      ("def usage", def_usage_tests);
       ("compile budget", compile_budget_tests);
     ]
+
+(* ---------- def usage: the on_resolve census ----------
+   The dictionary seam records every name that resolves at parse
+   time (name, offset).  The census answers 'which defs does a
+   program compile against' - compile adoption, the package-count
+   view of the vocabulary.  These pins hold the contract: dict hits
+   recorded with their source offsets, lambda params never recorded
+   (shadowing wins), builtins never recorded, no dictionary = empty. *)
+let resolved_of ?dictionary src =
+  let names = ref [] in
+  let _art =
+    Bracket.compile_source ?dictionary
+      ~on_resolve:(fun name off -> names := (name, off) :: !names)
+      src
+  in
+  List.rev !names
+
+let def_usage_tests =
+  [
+    Alcotest.test_case "dictionary hit records name and offset" `Quick
+      (fun () ->
+        let dictionary = [ ("bump", Tuna.Cstr.encode "stub") ] in
+        let r = resolved_of ~dictionary "(bump 0)" in
+        Alcotest.(check int) "one hit" 1 (List.length r);
+        (match r with
+         | [ (name, off) ] ->
+             Alcotest.(check string) "name" "bump" name;
+             Alcotest.(check int) "offset at the atom" 1 off
+         | _ -> Alcotest.fail "expected a single (name, off)"));
+    Alcotest.test_case "lambda param shadows the dictionary and is not recorded" `Quick
+      (fun () ->
+        let dictionary = [ ("x", Tuna.Cstr.encode "stub") ] in
+        let r = resolved_of ~dictionary "((lambda (x) x) (bump 0))" in
+        (* the bound x never resolves; the dictionary bump does *)
+        Alcotest.(check int) "only the dictionary hit" 1 (List.length r);
+        (match r with [ (name, _) ] -> Alcotest.(check string) "name" "bump" name | _ -> ()));
+    Alcotest.test_case "no dictionary, no census" `Quick
+      (fun () ->
+        let r = resolved_of "((lambda (x) x) 7)" in
+        Alcotest.(check int) "empty" 0 (List.length r));
+    Alcotest.test_case "two occurrences count twice" `Quick
+      (fun () ->
+        let dictionary = [ ("bump", Tuna.Cstr.encode "stub") ] in
+        let r = resolved_of ~dictionary "(bump (bump 0))" in
+        Alcotest.(check int) "two hits" 2 (List.length r));
+  ]
