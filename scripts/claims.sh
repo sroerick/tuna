@@ -241,6 +241,19 @@ cmd_verify() {
   got_res=$(printf '%s' "$resp" | jstr result_hash)
   got_st=$(printf '%s' "$resp" | jint step_count)
   got_status=$(printf '%s' "$resp" | jstr status)
+  rr=$(printf '%s\n' "$cit" | sed -n 's/^run-record=//p')
+  if [ -n "$rr" ]; then
+    rec=$(fetch "/api/value/$rr?kind=bytes" || true)
+    rp=$(printf '%s' "$rec" | jstr program_hash)
+    rres=$(printf '%s' "$rec" | jstr result_hash)
+    rst=$(printf '%s' "$rec" | jint step_count)
+    rstat=$(printf '%s' "$rec" | jstr status)
+    echo "record  program=$rp result=$rres steps=$rst status=$rstat"
+    if [ "$rp" != "$ph" ] || [ "$rres" != "$res" ] || [ "$rst" != "$st" ] || [ "$rstat" != "$status" ]; then
+      echo "MISMATCH the projection disagrees with the run record it names"
+      return 1
+    fi
+  fi
   echo "claim   result=$res steps=$st status=$status"
   echo "re-run  result=$got_res steps=$got_st status=$got_status"
   if [ "$got_res" = "$res" ] && [ "$got_st" = "$st" ] && [ "$got_status" = "$status" ]; then
@@ -251,8 +264,156 @@ cmd_verify() {
   return 1
 }
 
+# --- the split mint: an audit projection, plus optional provenance ----------
+#
+# A claim is two content-addressed values under one base path:
+#
+#   <base>.audit-<p12>   the projection: only DERIVED facts, each one checkable
+#                        against the run record named inside it
+#   <base>.note-<n12>    the narrative: authored prose, named BY the projection
+#                        so a reader reaches it from the audit side
+#
+# <base> must follow the agreed grammar
+#   u.<identity>.claim.<YYYY-MM-DD>.<kind>.<subject>.<assertion-slug>
+# The kind is read out of the path and checked against the frozen vocabulary, so
+# the path and the projection cannot drift apart.  Kinds a human has to read
+# (interpreted, asserted) require a narrative; the other kinds may omit it.
+#
+# The narrative is a Cstr string tree, the house convention for prose, and it is
+# the one part of a claim that is authored rather than derived: context, never
+# evidence, and nothing in the projection depends on its content.
+
+CLAIM_KINDS=' observed computed cited interpreted asserted axiom verdict '
+LEAF_HASH=5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
+
+seg() { printf '%s' "$1" | cut -d. -f"$2"; }
+
+claim_base_check() {
+  local base="$1" dots
+  dots=$(printf '%s' "$base" | tr -cd '.' | wc -c | tr -d ' ')
+  [ "$dots" = 6 ] || die "claim path needs 7 dot segments (u.<identity>.claim.<date>.<kind>.<subject>.<slug>), got $((dots+1)): $base"
+  [ "$(seg "$base" 1)" = u ] || die "claim path must start u.<identity>: $base"
+  [ "$(seg "$base" 3)" = claim ] || die "claim path must carry the claim segment: $base"
+  case "$(seg "$base" 4)" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+    *) die "claim date segment must be YYYY-MM-DD: $base" ;;
+  esac
+  KIND=$(seg "$base" 5)
+  SUBJECT=$(seg "$base" 6)
+  ASSERTION=$(seg "$base" 7)
+  case "$CLAIM_KINDS" in *" $KIND "*) : ;; *) die "unknown claim kind '$KIND'; vocabulary:$CLAIM_KINDS" ;; esac
+  case "$KIND" in
+    interpreted|asserted) [ -n "$NARR_HASH" ] || die "kind $KIND needs a narrative (--narrative FILE or --narrative-hash HASH): prose is context, not evidence, so it cannot stand in for one" ;;
+  esac
+}
+
+claim_write() {   # $1 path, $2 wanted value hash, $3 ternary (idempotent write-once)
+  local path="$1" want="$2" tern="$3" prev code back
+  prev=$(post /api/tree/get "{\"path\":\"$path\"}" | jstr value_hash)
+  if [ -n "$prev" ] && [ "$prev" != "$want" ] && [ "$prev" != "$LEAF_HASH" ]; then
+    die "$path already holds a different claim ($prev); write-once: mint a new claim path, or a retraction verdict"
+  fi
+  code=$(postcode /api/tree/put "{\"path\":\"$path\",\"value_ternary\":\"$tern\"}")
+  [ "$code" = 201 ] || die "tree/put of $path answered $code"
+  back=$(post /api/tree/get "{\"path\":\"$path\"}" | jstr value_hash)
+  [ "$back" = "$want" ] || die "stored value hash $back != expected $want at $path"
+}
+
+cmd_mint() {
+  local base="" runid="" resp ph res st fuel cap sem status caller inputs h jrn
+  local enc hash run_art jrn_art narr_enc p12 n12
+  NARR_HASH=''
+
+  [ $# -ge 2 ] || die "usage: claims.sh mint <claim-base-path> <run-id> [--narrative FILE|--narrative-hash HASH]"
+  base="$1"
+  runid="$2"
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --narrative)      [ $# -ge 2 ] || die "--narrative needs a file"; narr_file="$2"; shift 2 ;;
+      --narrative-hash) [ $# -ge 2 ] || die "--narrative-hash needs a hash"; NARR_HASH="$2"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+
+  resp=$(fetch "/api/runs/$runid" || true)
+  [ -n "$resp" ] || die "cannot fetch run $runid"
+  ph=$(printf '%s' "$resp" | jstr program_hash)
+  res=$(printf '%s' "$resp" | jstr result_hash)
+  st=$(printf '%s' "$resp" | jint step_count)
+  fuel=$(printf '%s' "$resp" | jint fuel)
+  cap=$(printf '%s' "$resp" | jint size_cap)
+  sem=$(printf '%s' "$resp" | jstr semantics)
+  status=$(printf '%s' "$resp" | jstr status)
+  caller=$(printf '%s' "$resp" | jstr caller)
+  inputs=$(printf '%s' "$resp" | jlist input_hashes)
+  [ -n "$ph" ] || die "run $runid carries no program_hash (unknown run?)"
+  [ "$status" = normal ] || die "run $runid finished $status; only a normal run can be cited"
+  [ -n "$res" ] || die "run $runid is normal but carries no result_hash"
+  for h in $inputs; do
+    [ "$(getcode "/api/value/$h?kind=tree")" = 200 ] ||
+      die "input $h is not published as a value: POST /api/value/put {\"ternary\":...} first"
+  done
+
+  # the cited computation becomes a public artifact
+  run_art=$(printf '%s' "$resp" | putbytes)
+  jrn=$(fetch "/api/journals/$runid" || true)
+  [ -n "$jrn" ] || jrn='{"journal":[]}'
+  jrn_art=$(printf '%s' "$jrn" | putbytes)
+  { [ -n "$run_art" ] && [ -n "$jrn_art" ]; } || die "could not publish the run record or its journal"
+
+  # provenance, resolved before the projection so the projection can name it
+  if [ -n "${narr_file:-}" ]; then
+    [ -f "$narr_file" ] || die "no such narrative file: $narr_file"
+    narr_enc=$(cstr_encode < "$narr_file")
+    [ "${#narr_enc}" -le 14000 ] || die "narrative encodes to ${#narr_enc} ternary digits; the PUT surface 500s above ~15000, so split it (gregor's chunked-claim convention slices at 600 chars)"
+    NARR_HASH=$(printf '%s' "$narr_enc" | sha256hex)
+  elif [ -n "$NARR_HASH" ]; then
+    narr_enc=$(fetch "/api/value/$NARR_HASH?kind=tree" || true)
+    [ -n "$narr_enc" ] || die "narrative $NARR_HASH is not published as a tree"
+  fi
+
+  claim_base_check "$base"
+
+  proj() {
+    printf 'tuna-claim-projection-v1\n'
+    printf 'kind=%s\n' "$KIND"
+    printf 'subject=%s\n' "$SUBJECT"
+    printf 'assertion=%s\n' "$ASSERTION"
+    printf 'program=%s\n' "$ph"
+    printf 'inputs=%s\n' "$(printf '%s' "$inputs" | tr '\n' ',' | sed 's/,$//')"
+    printf 'run-record=%s\n' "$run_art"
+    printf 'journal=%s\n' "$jrn_art"
+    [ -n "$NARR_HASH" ] && printf 'narrative=%s\n' "$NARR_HASH"
+    printf 'fuel=%s\n' "$fuel"
+    printf 'size_cap=%s\n' "$cap"
+    printf 'semantics=%s\n' "$sem"
+    printf 'result=%s\n' "$res"
+    printf 'steps=%s\n' "$st"
+    printf 'status=%s\n' "$status"
+    printf 'claimant=%s\n' "$caller"
+    printf 'run=%s\n' "$runid"
+    printf 'minted_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  }
+  enc=$(proj | cstr_encode)
+  [ "${#enc}" -le 14000 ] || die "projection encodes to ${#enc} ternary digits; the PUT surface 500s above ~15000"
+  hash=$(printf '%s' "$enc" | sha256hex)
+  p12=${hash%${hash#????????????}}
+
+  # note first, so a peer never finds a projection whose prose is missing
+  if [ -n "$NARR_HASH" ]; then
+    n12=${NARR_HASH%${NARR_HASH#????????????}}
+    claim_write "$base.note-$n12" "$NARR_HASH" "$narr_enc"
+  fi
+  claim_write "$base.audit-$p12" "$hash" "$enc"
+
+  echo "audit=$base.audit-$p12"
+  echo "projection=$hash"
+  [ -n "$NARR_HASH" ] && echo "note=$base.note-$n12"
+  printf '%s' "$enc" | cstr_decode
+}
 case "${1:-}" in
-  mint)   shift; [ $# -eq 2 ] || die "usage: claims.sh mint <claim-path[%h]> <run-id>"; cmd_mint "$1" "$2" ;;
+  mint)   shift; [ $# -ge 2 ] || die "usage: claims.sh mint <claim-base-path> <run-id> [--narrative FILE|--narrative-hash HASH]"; cmd_mint "$@" ;;
   cite)   shift; [ $# -eq 1 ] || die "usage: claims.sh cite <claim-path|value-hash>";   cmd_cite "$1" ;;
   verify) shift; [ $# -eq 1 ] || die "usage: claims.sh verify <claim-path|value-hash>"; cmd_verify "$1" ;;
   *) echo "usage: claims.sh mint|cite|verify ..." >&2; exit 2 ;;
