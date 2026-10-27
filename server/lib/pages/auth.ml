@@ -53,7 +53,15 @@ let start_session pool resp req ~identity_id =
   set_session resp req token;
   return resp
 
-let login_body origin =
+let login_body ~chatgpt_enabled origin =
+  let chatgpt_button =
+    if chatgpt_enabled then
+      {|<p>— or —</p>
+<p><a href="/login/chatgpt">Sign in with ChatGPT</a> — tuna mints your
+identity and browser session itself; no agent needed.</p>
+|}
+    else ""
+  in
   Printf.sprintf {|<h2>login</h2>
 <p>sign in with username + password.  Or paste an identity bearer token
 (the credential accepted as an API <code>Authorization: Bearer</code>)
@@ -68,6 +76,7 @@ and a session is minted for it.</p>
 <label>bearer token<br/><input type="password" name="token" style="width:32rem"/></label><br/><br/>
 <button type="submit">sign in by token</button>
 </form>
+%s
 <h3>no identity yet? signup is open</h3>
 <p><strong>human reading this with your AI agent next to you?</strong> just
 tell it: "sign me up on tuna" — the POST below is all it takes, and it can
@@ -81,15 +90,16 @@ signup seeds your garden (<code>u.&lt;name&gt;.</code>, tree/put) and is
 rate-limited to 5/hour/address.  paste the token into the form above for a
 browser session.  agents: <a href="/agent.txt">/agent.txt</a> has the full
 walkthrough.</p>|}
+    chatgpt_button
     origin
 
-let login_get req =
+let login_get ?(chatgpt_enabled = false) req =
   let origin =
     match Agent.base_url_of_headers (Web.all_headers req) with
     | Some b -> b
     | None -> "http://localhost:18090"
   in
-  L.page ~title:"tuna — login" (login_body origin)
+  L.page ~title:"tuna — login" (login_body ~chatgpt_enabled origin)
 
 let login_post pool req =
   Web.form ~csrf:false req

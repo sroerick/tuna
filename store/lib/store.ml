@@ -1304,6 +1304,80 @@ let signup_identity p ~name ~token () : (identity * grant, name_error) result =
                   store_error "signup_identity: grant insert gave %d rows"
                       (List.length rows))))
 
+(* -- oidc sign-in (0018, "Sign in with ChatGPT") ---------------------
+
+   The browser tier's agentless path: a human signs in with their
+   ChatGPT account and tuna provisions the identity itself — no
+   agent-minted credential in the middle.  oidc_logins carries the
+   one-shot flow state (nonce + PKCE verifier; only sha256 of the state
+   token is stored); oidc_identities links a provider subject to the ONE
+   identity store.  Provisioning reuses the signup path: name law +
+   garden grant, one transaction, exactly signup_identity's shape plus
+   the link row. *)
+
+let put_oidc_login p ~state ~nonce ~code_verifier ~ttl_seconds =
+  Db.q_unit
+    ~params:
+      [ p_str (Tuna.Hash.hex_of_string state)
+      ; p_str nonce
+      ; p_str code_verifier
+      ; p_int64 (Int64.of_int ttl_seconds) ]
+    p
+    "INSERT INTO oidc_logins (state_hash, nonce, code_verifier, expires_at) \
+     VALUES ($1, $2, $3, now() + ($4::text || ' seconds')::interval)"
+  >>= fun () -> Direct.return ()
+
+(* One-shot state consume: the UPDATE fires only for a live, unused row,
+   so replay and expiry answer the same "no such login". *)
+let take_oidc_login p ~state =
+  Db.q ~params:[ p_str (Tuna.Hash.hex_of_string state) ] p
+    "UPDATE oidc_logins SET used_at = now() \
+     WHERE state_hash = $1 AND used_at IS NULL AND expires_at > now() \
+     RETURNING nonce, code_verifier"
+  >>= function
+  | [ r ] ->
+      Direct.return (Some (text r 0 "oidc.nonce", text r 1 "oidc.verifier"))
+  | [] -> Direct.return None
+  | _ -> store_error "take_oidc_login: unexpected row count"
+
+let find_oidc_identity p ~provider ~subject =
+  Db.q ~params:[ p_str provider; p_str subject ] p
+    "SELECT identity_id::text FROM oidc_identities \
+     WHERE provider = $1 AND subject = $2"
+  >>= function
+  | [ r ] -> Direct.return (Some (text r 0 "oidc.identity"))
+  | [] -> Direct.return None
+  | _ -> store_error "find_oidc_identity: unexpected row count"
+
+(* signup over OIDC: identity + garden grant + provider link in ONE
+   transaction — the same shape as signup_identity, plus the link row
+   (ON CONFLICT DO NOTHING: a replayed callback races nothing new). *)
+let signup_oidc_identity p ~provider ~subject ~name ~token () :
+    (identity, name_error) result =
+  Db.with_tx p (fun c ->
+      claim_name_tx c ~candidate:name
+      >>= function
+      | Error e -> Direct.return (Error e)
+      | Ok name -> (
+          insert_identity_tx c ~name ~token ~is_admin:false
+          >>= function
+          | None -> Direct.return (Error `Exists)
+          | Some i -> (
+              Db.q_conn_unit
+                ~params:[ p_str i.i_id; p_str (garden_prefix_of_name name) ]
+                c
+                "INSERT INTO grants (prim, args_attenuation, path_prefix, \
+                 caller, minted_by, parent_grant) \
+                 VALUES ('tree/put', '{}'::jsonb, $2, $1::uuid, NULL, NULL)"
+              >>= fun () ->
+              Db.q_conn_unit
+                ~params:[ p_str provider; p_str subject; p_str i.i_id ]
+                c
+                "INSERT INTO oidc_identities (provider, subject, identity_id) \
+                 VALUES ($1, $2, $3::uuid) \
+                 ON CONFLICT (provider, subject) DO NOTHING"
+              >>= fun () -> Direct.return (Ok i))))
+
 (* the identities roster (admin page/API): never carries token hashes *)
 let list_identities p () =
   Db.q p

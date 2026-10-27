@@ -250,6 +250,12 @@ tiers:
   (`auth_sessions`, migration 0013); the `tuna_session` cookie is
   HttpOnly + SameSite=Lax and carries only the session token (14-day
   TTL, revoked on logout).
+- **OIDC sign-in** (dormant, migration 0018) — when
+  `TUNA_CHATGPT_CLIENT_ID` and `TUNA_CHATGPT_CLIENT_SECRET` are set, the
+  login page offers "Sign in with ChatGPT": `/login/chatgpt` (code +
+  PKCE S256, one-shot server-side state) provisions the identity itself
+  (name law + garden grant) and mints the same 14-day session.  Unset
+  env keeps the routes 404 and the button hidden.
 
 Admin-only: minting identities (`POST /api/identities` or the
 `/identities` page).  A minted identity is **non-admin** by default and
@@ -347,8 +353,9 @@ Recorded, not hidden:
   `TUNA_COOKIE_SECURE` (set it in the deploy env file behind the TLS
   edge).  Bearer-only agents are unaffected.  A real CSRF token is the
   named future fix.
-- **No OAuth/JWT**, no password reset, no login throttling.  `auth_log`
-  rows exist so a throttle/forensics pass has data instead of guesses.
+- **No password reset, no login throttling.**  `auth_log` rows exist so
+  a throttle/forensics pass has data instead of guesses.  (The API tier
+  itself has no OAuth/JWT; the browser OIDC tier is dormant 0018.)
 - **TLS is at the reverse proxy**; tuna speaks plain HTTP on loopback.
 - **`/src.tgz` reflects HEAD at the last `build-public.sh` run**, not
   necessarily the running binary; re-run `serve.sh start` after a pull.

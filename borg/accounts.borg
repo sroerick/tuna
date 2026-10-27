@@ -46,6 +46,24 @@
       BOOT.  `TUNA_BOOTSTRAP_PASSWORD` (optional) ensures root's
       password credential each boot; setting a new value rotates it.
       Unset means no insecure default - root signs in by its bearer
+      OIDC (chatgpt sign-in, 0018, DORMANT).  The browser tier's
+      agentless path: `GET /login/chatgpt` stores a one-shot state row
+      (`oidc_logins`: only sha256(state) stored, with the PKCE verifier
+      + nonce it guards, 10-minute expiry), then 303s to OpenAI's
+      authorize endpoint (code + PKCE S256).  The callback consumes the
+      state atomically, exchanges the code at the token endpoint over
+      TLS (client_secret_post), validates the id_token claims
+      (iss/aud/exp/iat/nonce - signature NOT verified in v1, named
+      follow-up like the interim password hashing), cross-checks the
+      userinfo sub, and provisions the identity over the SAME signup
+      path (name law + garden grant, one transaction; filler bearer
+      token never revealed).  14-day session mint; `auth_log` kind
+      'chatgpt'.  Dormant unless TUNA_CHATGPT_CLIENT_ID+SECRET are set:
+      routes answer 404, login page shows no button.
+      TUNA_CHATGPT_ISSUER overrides the issuer (default
+      https://auth.openai.com); TUNA_CHATGPT_REDIRECT_URI overrides the
+      derived redirect (<origin>/login/chatgpt/callback).
+
       token at the login page's token form. |))))
   (subsection identity-minting
    (status implemented)

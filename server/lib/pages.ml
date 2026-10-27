@@ -6,6 +6,8 @@
 
       GET  /                    dashboard (session); anonymous / -> /welcome
      GET  /login   POST /login GET /logout
+          (+ /login/chatgpt: oidc sign-in, 0018 — dormant unless the
+           ChatGPT client env is set)
      GET  /frag/runs           runs-table fragment (htmx tick / no-JS view)
      GET  /programs/lookup?hash=…
      GET  /programs/:hash
@@ -54,9 +56,13 @@ let routes pool =
     ; (`Post, "/todo/:id/del", Todo.del pool) ]
 
 let open_routes pool =
-  [ Web.get "/login" A.login_get
+  [ Web.get "/login" (A.login_get ~chatgpt_enabled:(Chatgpt.enabled ()))
   ; Web.post "/login" (A.login_post pool)
   ; Web.get "/logout" (A.logout_get pool)
+      (* oidc sign-in (0018, "Sign in with ChatGPT"): the browser tier's
+         agentless path; 404 unless TUNA_CHATGPT_CLIENT_ID+SECRET set *)
+    ; Web.get "/login/chatgpt" (Chatgpt.start pool)
+    ; Web.get "/login/chatgpt/callback" (Chatgpt.callback pool)
     (* pp-slice T3: the hard-public face (no session).  Reserved
        surfaces match before the route dispatcher (routes.borg law 2).
        2026-10-27 revamp: the anonymous front door (/), the prim
