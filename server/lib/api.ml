@@ -331,7 +331,17 @@ let health pool _req =
       (`Assoc
         [ ("status", `String "ok")
         ; ("db", `Bool up)
-        ; ("rev", `String Web.build_rev) ]))
+  ; ("rev", `String Web.build_rev) ]))
+
+(* whoami: the bearer's identity.  claims.sh names a claimant in its
+   paths from this when there is no run record to read a caller from
+   (deploy receipts, verdicts minted without a cited computation). *)
+let whoami _pool auth _req =
+  j_ok
+    (`Assoc
+      [ ("identity", `String auth.auth_id)
+      ; ("name", `String auth.auth_name)
+      ; ("admin", `Bool auth.auth_is_admin) ])
 
 (* -- programs -------------------------------------------------------- *)
 
@@ -2446,6 +2456,7 @@ let gc_run pool auth req =
 let api_routes pool =
   [ Web.post "/api/programs" (with_auth pool (post_program pool))
     ; Web.get "/api/programs/:hash" (with_auth pool (get_program pool))
+    ; Web.get "/api/whoami" (with_auth pool (whoami pool))
     ; Web.post "/api/programs/:hash/patch"
         (with_auth pool (patch_program pool))
     ; Web.post "/api/runs" (with_auth pool (post_run pool))

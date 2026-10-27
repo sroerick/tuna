@@ -30,3 +30,12 @@ claims.sh mint records `server_rev=` in its projection - a citation
 names the server rev it observed. An unset value answers "unknown":
 the binary predates the convention. The manual hook-entry path must
 set the line too, or the next /health says unknown.
+
+## Deploy receipts (10-27)
+
+tuna-promote mints an observation claim after a green health check
+(`claims.sh deploy <rev12> "battery summary"`, TUNA_BOOTSTRAP_TOKEN,
+non-fatal on failure): it lands at
+u.<claimant>.claim.<date>.observed.deploy.<rev12>.audit-<p12>, so the
+registry lists every deploy with its battery receipt and a peer can
+check the floor against the rev it names.

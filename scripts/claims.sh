@@ -45,6 +45,7 @@
 #   TUNA_TOKEN=<bearer> claims.sh verify  <claim-path | value-hash>
 #   TUNA_TOKEN=<bearer> claims.sh verdict <claim-path> <confirmed|stale|refuted> [note]
 #   TUNA_TOKEN=<bearer> claims.sh list    [glob]
+#   TUNA_TOKEN=<bearer> claims.sh deploy  <rev12> [battery summary]
 #
 # Env: TUNA_BASE (default http://127.0.0.1:18090), TUNA_TOKEN (required).
 # Needs curl, awk, sed and a sha256 tool; a production box ships no jq/python3.
@@ -474,11 +475,41 @@ cmd_list() {
       done
 }
 
+# --- the deploy receipt: an observation claim, no run required --------------
+#
+# tuna-promote mints one after a green health check: the promoted rev, the
+# server rev /health answers (should agree), and the battery summary.  It
+# lands at u.<claimant>.claim.<date>.observed.deploy.<rev12>.audit-<p12>,
+# write-once like every claim - the registry then lists each deploy with
+# its receipt, and a peer can check the floor against the rev it names.
+
+cmd_deploy() {
+  local rev="$1" battery="${2:-}" claimant rev_live enc hash p12 p
+  [ -n "$rev" ] || die "usage: claims.sh deploy <rev12> [battery summary]"
+  claimant=$(fetch /api/whoami | jstr name)
+  [ -n "$claimant" ] || die "cannot resolve the bearer's identity (/api/whoami)"
+  rev_live=$(fetch /health | jstr rev)
+  [ -n "$rev_live" ] || rev_live=unknown
+  enc=$( { printf 'tuna-deploy-receipt-v1\n'
+           printf 'rev=%s\n' "$rev"
+           printf 'server_rev=%s\n' "$rev_live"
+           printf 'battery=%s\n' "$battery"
+           printf 'minted_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ; } | cstr_encode )
+  [ "${#enc}" -le 14000 ] || die "receipt encodes to ${#enc} ternary digits"
+  hash=$(printf '%s' "$enc" | sha256hex)
+  p12=${hash%${hash#????????????}}
+  p="u.$claimant.claim.$(date -u +%Y-%m-%d).observed.deploy.$rev.audit-$p12"
+  claim_write "$p" "$hash" "$enc"
+  echo "receipt=$p"
+  printf '%s' "$enc" | cstr_decode
+}
+
 case "${1:-}" in
   mint)    shift; [ $# -ge 2 ] || die "usage: claims.sh mint <claim-base-path> <run-id> [--narrative FILE|--narrative-hash HASH] [--target PATH]"; cmd_mint "$@" ;;
   cite)    shift; [ $# -eq 1 ] || die "usage: claims.sh cite <claim-path|value-hash>";   cmd_cite "$1" ;;
   verify)  shift; [ $# -eq 1 ] || die "usage: claims.sh verify <claim-path|value-hash>"; cmd_verify "$1" ;;
   verdict) shift; [ $# -ge 2 ] || die "usage: claims.sh verdict <claim-path> <confirmed|stale|refuted> [note]"; cmd_verdict "$@" ;;
   list)    shift; cmd_list "$@" ;;
-  *) echo "usage: claims.sh mint|cite|verify|verdict|list ..." >&2; exit 2 ;;
+  deploy)  shift; [ $# -ge 1 ] || die "usage: claims.sh deploy <rev12> [battery summary]"; cmd_deploy "$@" ;;
+  *) echo "usage: claims.sh mint|cite|verify|verdict|list|deploy ..." >&2; exit 2 ;;
 esac
