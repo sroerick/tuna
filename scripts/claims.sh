@@ -113,6 +113,17 @@ jlist() { sed -n "s/.*\"$1\":\[\([^]]*\)\].*/\1/p" | tr -d '"' | tr ',' '\n' | s
 
 fetch()    { $CURL -H "$AUTH" "$BASE$1"; }
 post()     { $CURL -H "$AUTH" -H 'Content-Type: application/json' --data-binary "$2" "$BASE$1"; }
+# base64 for publishing byte artifacts (OpenBSD ships openssl, not base64)
+b64() {
+  if   command -v base64  >/dev/null 2>&1; then base64 | tr -d '\n'
+  elif command -v openssl >/dev/null 2>&1; then openssl base64 -A
+  else die "no base64 tool on PATH"; fi
+}
+putbytes() {   # payload on stdin -> content-addressed byte-value hash on stdout
+  local b
+  b=$(b64) || die "base64 of the payload failed"
+  post /api/value/put "{\"bytes_b64\":\"$b\"}" | jstr hash
+}
 postcode() { $CURL -o /dev/null -w '%{http_code}' -H "$AUTH" -H 'Content-Type: application/json' --data-binary "$2" "$BASE$1"; }
 getcode()  { $CURL -o /dev/null -w '%{http_code}' -H "$AUTH" "$BASE$1"; }
 
@@ -158,10 +169,20 @@ cmd_mint() {
     [ "$(getcode "/api/value/$h?kind=tree")" = 200 ] ||
       die "input $h is not published as a value: POST /api/value/put {\"ternary\":...} first, or no peer can re-execute this citation"
   done
+  # publish the run record and its journal as content-addressed artifacts, so
+  # the computation a claim links to is inspectable by any peer (claim paths are
+  # floor-gated; values are readable by hash by any authenticated identity)
+  run_art=$(printf '%s' "$resp" | putbytes)
+  jrn=$(fetch "/api/journals/$runid" || true)
+  [ -n "$jrn" ] || jrn='{"journal":[]}'
+  jrn_art=$(printf '%s' "$jrn" | putbytes)
+  { [ -n "$run_art" ] && [ -n "$jrn_art" ]; } || die "could not publish the run record or its journal as values"
   enc=$( { printf 'tuna-claim-citation-v1\n'
           printf 'assertion=%s\n' "$(printf '%s' "$path" | sed 's|\.citation-%h$||; s|%h||g')"
           printf 'program=%s\n' "$ph"
           printf 'inputs=%s\n' "$(printf '%s' "$inputs" | tr '\n' ',' | sed 's/,$//')"
+          printf 'run-record=%s\n' "$run_art"
+          printf 'journal=%s\n' "$jrn_art"
           printf 'fuel=%s\n' "$fuel"
           printf 'size_cap=%s\n' "$cap"
           printf 'semantics=%s\n' "$sem"
@@ -174,6 +195,13 @@ cmd_mint() {
   hash=$(printf '%s' "$enc" | sha256hex)
   [ "${#enc}" -le 14000 ] || die "citation encodes to ${#enc} ternary digits; the PUT surface 500s above ~15000, so keep the citation short (gregor's chunked-claim convention slices at 600 chars)"
   p=$(printf '%s' "$path" | sed "s/%h/${hash%??????????????????????????????????????????????}/")
+  # write-once: a claim path is written once; a correction is a new claim or a
+  # retraction verdict, never an in-place bump, because a bump silently orphans
+  # the verdicts and citations that pinned the previous revision
+  prev=$(post /api/tree/get "{\"path\":\"$p\"}" | jstr value_hash)
+  if [ -n "$prev" ] && [ "$prev" != "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9" ]; then
+    die "$p already holds a claim ($prev); write-once: mint a new claim path, or a retraction verdict"
+  fi
   case "$p" in
     *"${hash%??????????????????????????????????????????????}"*) : ;;
     *) say "warning: $p does not name the citation hash ${hash%??????????????????????????????????????????????} - a peer cannot find the citation from the path alone" ;;
