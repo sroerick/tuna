@@ -1,4 +1,4 @@
-#!/usr/local/bin/env bash
+#!/usr/bin/env bash
 # claims.sh - mint and verify a claim against a running tuna instance.
 #
 # A claim is a tree path (the assertion) plus the value at that path (the
