@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/local/bin/env bash
 # claims.sh - mint and verify a claim against a running tuna instance.
 #
 # A claim is a tree path (the assertion) plus the value at that path (the
@@ -457,6 +457,20 @@ cmd_verdict() {
   claim_write "$p" "$hash" "$enc"
   echo "verdict=$p"
   printf '%s' "$enc" | cstr_decode
+}
+
+# discovery: the registry page (GET /claims, open) is the feed; list pulls
+# the paths out of it and matches each against an optional shell glob.
+cmd_list() {
+  local pat="${1:-*}" p
+  $CURL "$BASE/claims" \
+    | sed -n 's#^<tr><td><code>\([^<]*\)</code></td><td>.*#\1#p' \
+    | while read -r p; do
+        [ -n "$p" ] || continue
+        case "$p" in
+          $pat) printf '%s\n' "$p" ;;
+        esac
+      done
 }
 
 case "${1:-}" in
