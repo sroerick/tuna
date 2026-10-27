@@ -1887,7 +1887,7 @@ let path_list p ?(limit = 1000) ?(after = "") ~prefix () =
   >>= fun rows -> Direct.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
 
 
-(* the claims census (pages/claims): tree paths carrying a claim.  THREE
+(* the claims census (pages/claims): tree paths carrying a claim.  FOUR
    naming conventions exist and ALL must be counted:
 
      citation-<h12>   the original mint: a %h in the path expands to the
@@ -1898,6 +1898,10 @@ let path_list p ?(limit = 1000) ?(after = "") ~prefix () =
                       .note-<n12>.
      .verdict-<h12>   a verdict correction: a small record minted by
                       claims.sh verdict beside the claim it judges.
+     .claim.<date>    the bare base path itself: early minters (agora)
+                      wrote claims straight onto u.<id>.claim.<date>...
+                      with no split marker, and hiding their work is how
+                      the census drifted in the first place.
 
    Counting only "citation-" silently hid every split-minted claim: the
    mint succeeded, tree/get returned the value, and the registry showed
@@ -1918,7 +1922,8 @@ let list_citation_paths p ?(limit = 200) () =
   Db.q ~params:[ p_int limit ] p
     "SELECT path, value_hash, version, owner, updated_at::text FROM tree_paths \
      WHERE path LIKE '%citation-%' OR path LIKE '%.audit-%' \
-     OR path LIKE '%.verdict-%' ORDER BY path COLLATE \"C\" LIMIT $1"
+     OR path LIKE '%.verdict-%' OR path LIKE '%.claim.%' \
+     ORDER BY path COLLATE \"C\" LIMIT $1"
   >>= fun rows -> Direct.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
 (* -- the op log (sha256-chained; rewind folds it) --------------------- *)
 

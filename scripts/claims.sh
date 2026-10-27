@@ -464,7 +464,8 @@ cmd_verdict() {
 cmd_list() {
   local pat="${1:-*}" p
   $CURL "$BASE/claims" \
-    | sed -n 's#^<tr><td><code>\([^<]*\)</code></td><td>.*#\1#p' \
+    | grep -o '<tr><td><code>[^<]*</code>' \
+    | sed 's#^<tr><td><code>\(.*\)</code>$#\1#' \
     | while read -r p; do
         [ -n "$p" ] || continue
         case "$p" in
