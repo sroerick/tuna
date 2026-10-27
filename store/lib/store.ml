@@ -1886,6 +1886,17 @@ let path_list p ?(limit = 1000) ?(after = "") ~prefix () =
      ORDER BY path COLLATE \"C\" LIMIT $2"
   >>= fun rows -> Direct.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
 
+
+(* the claims census (pages/claims): tree paths carrying the citation
+   convention (claims.sh expands a %h in a minted claim path to
+   citation-<hash12>, so a path naming "citation-" holds a claim).
+   Host-side page read, not a prim: the whole-namespace scan path_list
+   refuses is fine here as a bounded LIKE census. *)
+let list_citation_paths p ?(limit = 200) () =
+  Db.q ~params:[ p_int limit ] p
+    "SELECT path, value_hash, version, owner, updated_at::text FROM tree_paths \
+     WHERE path LIKE '%citation-%' ORDER BY path COLLATE \"C\" LIMIT $1"
+  >>= fun rows -> Direct.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
 (* -- the op log (sha256-chained; rewind folds it) --------------------- *)
 
 type tree_op = {

@@ -24,8 +24,12 @@
          (2026-09-18: +view, +todo - the value viewer page and the
          store-backed todo board, both under session auth.)
          (2026-10-02: +welcome, +code, +agent.txt, +src.tgz, +.well-known
-         - the pp-slice hard-public face, borg/accounts.borg; anonymous
-         by design, so they must never be shadowable by a route record.)
+           - the pp-slice hard-public face, borg/accounts.borg; anonymous
+           by design, so they must never be shadowable by a route record.)
+          (2026-10-27: +prims, +claims - the public-face revamp: the prim
+           registry page and the claims registry + minting guide, both
+           anonymous by design.  Same commit: anonymous / lands on
+           /welcome; a session still gets the dashboard.)
       3. THE ROUTE RECORD IS THE CAPABILITY. Template routes serve
          bytes to any caller, anonymous included - a public site needs
          it. Program routes execute the stored program as a

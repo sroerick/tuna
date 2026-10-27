@@ -53,7 +53,10 @@ let reserved =
   ; "identities"
     (* pp-slice hard-public face (borg/accounts.borg); anonymous by
        design, so they must never be shadowable by a route record *)
-  ; "welcome"; "code"; "agent.txt"; "src.tgz"; ".well-known" ]
+    ; "welcome"; "code"; "agent.txt"; "src.tgz"; ".well-known"
+      (* 2026-10-27 public-face revamp: prim registry + claims
+         registry/minting guide (routes.borg law 2 book change) *)
+    ; "prims"; "claims" ]
 
 let reserved_site_path sp =
   match String.index_opt sp '/' with

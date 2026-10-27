@@ -4,7 +4,7 @@
 
    Routes (session auth; login/logout are open):
 
-     GET  /                    dashboard (runs table, auto-refresh)
+      GET  /                    dashboard (session); anonymous / -> /welcome
      GET  /login   POST /login GET /logout
      GET  /frag/runs           runs-table fragment (htmx tick / no-JS view)
      GET  /programs/lookup?hash=…
@@ -36,8 +36,7 @@ let routes pool =
       (match method_ with
        | `Get -> Web.get path (A.require_auth pool handler)
        | `Post -> Web.post path (A.require_auth pool handler)))
-    [ (`Get, "/", Dashboard.view pool)
-    ; (`Get, "/frag/runs", Dashboard.frag_runs pool)
+      [ (`Get, "/frag/runs", Dashboard.frag_runs pool)
     ; (`Get, "/programs/:hash", Program.view pool)
     ; (`Post, "/programs/:hash/patch", Program.patch_post pool)
     ; (`Post, "/programs/:hash/run", Program.run_post pool)
@@ -62,12 +61,17 @@ let open_routes pool =
   [ Web.get "/login" A.login_get
   ; Web.post "/login" (A.login_post pool)
   ; Web.get "/logout" (A.logout_get pool)
-  (* pp-slice T3: the hard-public face (no session).  Reserved
-     surfaces match before the route dispatcher (routes.borg law 2). *)
-  ; Web.get "/welcome" (Public.welcome pool None)
-  ; Web.get "/code" (Public.code pool None)
-  ; Web.get "/agent.txt" (Public.agent_txt pool)
-  ; Web.get "/.well-known/agent.json" (Public.agent_json pool)
+    (* pp-slice T3: the hard-public face (no session).  Reserved
+       surfaces match before the route dispatcher (routes.borg law 2).
+       2026-10-27 revamp: the anonymous front door (/), the prim
+       registry, and the claims registry + minting guide. *)
+    ; Web.get "/" (Public.home pool)
+    ; Web.get "/welcome" (Public.welcome pool None)
+    ; Web.get "/prims" (Public.prims pool None)
+    ; Web.get "/claims" (Public.claims pool None)
+    ; Web.get "/code" (Public.code pool None)
+    ; Web.get "/agent.txt" (Public.agent_txt pool)
+    ; Web.get "/.well-known/agent.json" (Public.agent_json pool)
   ; Web.get "/programs/lookup"
       (A.require_auth pool (fun _user req ->
            let hash =

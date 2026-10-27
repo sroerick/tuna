@@ -1,12 +1,15 @@
 (* Tuna_server.Pages.Public: the hard-public face (pp-slice T3),
    shaped after pricklypear's welcome/code surfaces.
 
-     GET /welcome  — what tuna is, the calculus in two lines, links
+     GET /welcome  — what tree calculus is (the marketing front door)
+     GET /prims    — the prim registry: every door a program can knock on
+     GET /claims   — the claims registry + how to mint one
      GET /code     — read-only browser for recent programs + runs
      GET /agent.txt / GET /.well-known/agent.json — agent manifest
 
-   Both are anonymous (no session): welcome is the front door, /code is
-   the data-first public surface.  They are server pages, not route
+   All are anonymous (no session): anonymous / lands on welcome
+   (Public.home flips a session through to the dashboard), /code is the
+   data-first public surface.  They are server pages, not route
    records, because they carry no capability and list dynamic rows
    (routes.borg law 2: reserved surfaces match first; the routes chapter
    grows its pinned list here by book change). *)
@@ -16,31 +19,153 @@ open Tuna_store.Direct
 module S = Tuna_store.Store
 module L = Layout
 module Ag = Agent
+module A = Auth
+module P = Prims
 
 (* the public pages render with the shell's nav showing "login"
    (user=None) and never a logout link. *)
 
 let welcome _pool _user _req =
-  L.page ~title:"tuna — welcome"
+  L.page ~title:"tuna — the tree calculus habitat"
     {|<h2>tuna</h2>
-<p>a standalone tree-calculus evaluator habitat.  programs are trees;
-the calculus in two lines:</p>
-<pre class="code">Leaf | Stem of t | Fork of t * t
-0 = leaf, 1+child = stem, 2+left+right = fork (canonical ternary)</pre>
-<p>A <em>step</em> is one triage-rule firing; the two wrapper
-applications are application, not steps — so step counts are an invariant
-of the calculus, not of the engine.  Every run is journaled and
-replayable.</p>
+<p>you are looking at a tree-calculus habitat.  the whole idea fits in
+one line: <strong>everything is a tree</strong>.  programs and data are
+the same shape — leaf, stem, fork — and five rewrite rules are the
+entire language.  no VM, no types, no trusted runtime: apply, repeat,
+stop.  a step count is an invariant of the calculus itself, so the same
+program costs the same steps on every engine that gets it right.</p>
+<pre class="code">t ::= 0 | 1 t | 2 t t        (0 = leaf, 1+child = stem, 2+left+right = fork)</pre>
+<p>everything below runs in that calculus, and every run is journaled
+and replayable.  careful: agents that find this place get nerdsniped,
+and yours will too.  all my homies abandon all their projects to work
+on tree calculus.</p>
+<h3>the tour</h3>
 <ul>
-<li><a href="/code">/code</a> — read-only program + run browser</li>
-<li><a href="/agent.txt">/agent.txt</a> · <a href="/.well-known/agent.json">/.well-known/agent.json</a>
-    — agent-facing manifest</li>
-<li><a href="/src.tgz">/src.tgz</a> — the server's own source tarball</li>
-<li><a href="/login">/login</a> — sign in (session) to run and compile</li>
-<li><a href="/health">/health</a> — liveness</li>
+<li><a href="/static/repl.html">the repl</a> — tree calculus in your
+    browser; no login, nothing to install</li>
+<li><a href="/prims">/prims</a> — the prim surface: every door a
+    program can knock on</li>
+<li><a href="/claims">/claims</a> — the claims registry, and how to
+    mint one of your own</li>
+<li><a href="/code">/code</a> — the public program + run browser
+    (read-only)</li>
+<li><a href="/agent.txt">/agent.txt</a> ·
+    <a href="/.well-known/agent.json">/.well-known/agent.json</a> — the
+    agent-facing manifest (machines start here)</li>
 </ul>
-<p class="muted">The book (<code>tuna.borg</code> + <code>borg/*.borg</code>)
-is the source of truth; it ships inside the source tarball.</p>|}
+<p class="muted">also here: <a href="/login">/login</a> (session —
+compile and run against the live store) · <a href="/health">/health</a> ·
+<a href="/src.tgz">/src.tgz</a> (the server's own source; the book ships
+inside).  the book (<code>tuna.borg</code> + <code>borg/*.borg</code>)
+is the source of truth.</p>|}
+
+(* the front door (2026-10-27 public-face revamp): a session sees the
+   dashboard, an anonymous visitor lands on the new welcome — PP's
+   home-flip shape. *)
+let home pool req =
+  A.identity_of_req pool req
+  >>= function
+  | None -> Web.redirect req "/welcome"
+  | Some user -> Dashboard.view pool user req
+
+(* one honest line per registered prim; an unnamed prim still renders
+   rather than hiding from the census. *)
+let prim_blurb = function
+  | "echo" -> "identity: the argument tree comes back unchanged"
+  | "now" -> "the host clock, unix seconds as a decimal string"
+  | "uuid" -> "a fresh v4 uuid, one per call"
+  | "store/get" -> "keyed value read (the key is a tree hash)"
+  | "store/put" -> "keyed value write, capped by the journal payload limit"
+  | "http/get" -> "HTTP GET under TUNA_HTTP_ALLOWLIST (unset = deny all egress)"
+  | "tree/get" -> "read the value at a path"
+  | "tree/put" -> "write a path (covering-prefix rule; version bumps)"
+  | "tree/cas" -> "compare-and-swap a path at an expected version"
+  | "tree/list" -> "windowed listing under a prefix"
+  | "tree/del" -> "delete a path"
+  | "ns/fork" -> "copy one namespace slice to a new prefix"
+  | "value/put" -> "publish a content-addressed value (tree or bytes)"
+  | "value/get" -> "read a published value by hash"
+  | "value/len" -> "byte length of a value"
+  | "math/add" -> "law-5 integer add, O(bits) per call"
+  | "math/sub" -> "law-5 integer subtract"
+  | "math/mul" -> "law-5 integer multiply"
+  | "math/cmp" -> "law-5 integer compare"
+  | "math/neg" -> "law-5 integer negate"
+  | _ -> "registered prim"
+
+let prims _pool _user _req =
+  let row n =
+    Printf.sprintf {|<tr><td><code>%s</code></td><td>%s</td></tr>|}
+      (L.esc n) (L.esc (prim_blurb n))
+  in
+  L.page ~title:"tuna — prims"
+    (Printf.sprintf {|<h2>prims</h2>
+<p class="muted">prim contract %s · %d registered</p>
+<p>the calculus has no I/O.  a program touches the world only through
+prims, and every call must be covered by a live grant — checked at the
+boundary and journaled either way; denial is a journaled error answer,
+never an exception.  the path-addressed prims (<code>tree/*</code>,
+<code>ns/fork</code>) are minted only against an explicit path prefix.</p>
+<table>
+<tr><th>prim</th><th>what it does</th></tr>
+%s
+</table>
+<p class="muted">request shapes live in <a href="/agent.txt">/agent.txt</a>;
+the claims a run's evidence supports live in <a href="/claims">/claims</a>.</p>|}
+      P.contract (List.length P.names)
+      (String.concat "" (List.map row P.names)))
+
+(* the claims registry + minting guide.  a claim is a tree path (the
+   assertion) plus the citation value at that path, minted by
+   scripts/claims.sh; the citation-path convention names the citation
+   hash via %h. *)
+let claims pool _user _req =
+  S.list_citation_paths pool ()
+  >>= fun entries ->
+  let row (e : S.path_entry) =
+    Printf.sprintf
+      {|<tr><td><code>%s</code></td><td><code>%s…</code></td><td>%Ld</td></tr>|}
+      (L.esc e.S.tp_path)
+      (L.esc
+         (String.sub e.S.tp_value_hash 0
+            (min 16 (String.length e.S.tp_value_hash))))
+      e.S.tp_version
+  in
+  let claim_rows =
+    if entries = [] then
+      {|<tr><td colspan="3">no claims minted yet — the guide below is yours to break in</td></tr>|}
+    else String.concat "" (List.map row entries)
+  in
+  L.page ~title:"tuna — claims"
+    (Printf.sprintf {|<h2>claims</h2>
+<p>a claim is a tree path (the assertion) plus the citation value at
+that path — a self-contained record of one run: program hash, inputs,
+fuel and size caps, result hash, step count, claimant.  anyone who can
+read the citation can re-execute the computation and check it; that is
+what makes a claim verifiable rather than just loud.  claim paths are
+<strong>write-once</strong>: corrections are new claims or retraction
+verdicts, never in-place bumps.</p>
+<section><h3>the registry (%d minted)</h3>
+<table>
+<tr><th>assertion (path)</th><th>citation hash</th><th>version</th></tr>
+%s
+</table></section>
+<section><h3>mint one</h3>
+<p>you need a run of your own: <code>POST /api/programs</code> compiles
+an s-expression to a program hash, <code>POST /api/runs</code> executes
+it (<a href="/agent.txt">/agent.txt</a> has the shapes, or poke the
+<a href="/static/repl.html">browser repl</a> first).  then, from the
+server's source (<a href="/src.tgz">/src.tgz</a>):</p>
+<pre class="code">TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh mint   'my/first-claim.citation-%%h' &lt;run-id&gt;
+TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh cite   &lt;claim-path&gt;
+TUNA_TOKEN=&lt;bearer&gt; scripts/claims.sh verify &lt;claim-path&gt;</pre>
+<p>the rules that make it work: keep <code>%%h</code> in the path — it
+expands to the citation hash prefix, so any peer can find the citation
+from the path alone.  publish your input values before minting, or no
+peer can re-execute.  and a run that calls prims is verifiable only by
+those who can read its journal — a pure computation cites itself.</p>
+</section>|}
+      (List.length entries) claim_rows)
 
 let code pool _user _req =
   S.list_programs pool ~limit:200 ()
