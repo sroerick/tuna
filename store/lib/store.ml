@@ -1887,15 +1887,36 @@ let path_list p ?(limit = 1000) ?(after = "") ~prefix () =
   >>= fun rows -> Direct.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
 
 
-(* the claims census (pages/claims): tree paths carrying the citation
-   convention (claims.sh expands a %h in a minted claim path to
-   citation-<hash12>, so a path naming "citation-" holds a claim).
+(* the claims census (pages/claims): tree paths carrying a claim.  TWO
+   naming conventions exist and BOTH must be counted:
+
+     citation-<h12>   the original mint: a %h in the path expands to the
+                      citation hash prefix.
+     .audit-<p12>     the split mint (the current shape): the base path
+                      carries a projection under .audit-<p12> and, when
+                      the kind needs prose, a narrative under
+                      .note-<n12>.
+
+   Counting only "citation-" silently hid every split-minted claim: the
+   mint succeeded, tree/get returned the value, and the registry showed
+   nothing (observed 2026-10-27 against pricklypear.club -- 5 citation
+   rows listed, 5 audit rows present, 0 of the split ones visible).  A
+   claim nobody can find is not published, so this is the page's bug and
+   not the minter's.
+
+   The census keys on the AUDIT segment because the projection is the
+   row a reader verifies; note- rows are authored prose and are reached
+   THROUGH the projection's narrative= field.  Matching ".audit-" rather
+   than "audit-" keeps a subject that merely contains the word from
+   being mistaken for one.
+
    Host-side page read, not a prim: the whole-namespace scan path_list
    refuses is fine here as a bounded LIKE census. *)
 let list_citation_paths p ?(limit = 200) () =
   Db.q ~params:[ p_int limit ] p
     "SELECT path, value_hash, version, owner, updated_at::text FROM tree_paths \
-     WHERE path LIKE '%citation-%' ORDER BY path COLLATE \"C\" LIMIT $1"
+     WHERE path LIKE '%citation-%' OR path LIKE '%.audit-%' \
+     ORDER BY path COLLATE \"C\" LIMIT $1"
   >>= fun rows -> Direct.return (List.map (fun r -> path_entry_of_row r "tree_paths") rows)
 (* -- the op log (sha256-chained; rewind folds it) --------------------- *)
 
