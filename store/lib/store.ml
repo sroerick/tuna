@@ -1738,7 +1738,10 @@ let has_live_grant p caller =
         Direct.return false)
 
 (* the tenancy law (2026-10-27): an unrevoked grant of [caller] whose
-   NON-NULL path_prefix covers [path].  A NULL prefix is a PATHLESS
+   NON-NULL path_prefix covers [path], and whose lineage is live - a
+   narrowed capability does not outlive its ancestors, the same walk
+   check_grant does at the run/prim boundary (agora's 10-27 tenancy-law
+   probe caught the floor arm skipping it).  A NULL prefix is a PATHLESS
    capability - it authorizes no path at all, so a row can no longer
    cover a garden it was never given (it used to cover every path,
    silently overriding every narrower row in the holder's set). *)
@@ -1746,15 +1749,20 @@ let has_covering_grant p caller path =
   Direct.catch
     (fun () ->
       Db.q ~params:[ p_str caller ] p
-        "SELECT path_prefix FROM grants WHERE caller = $1::uuid AND revoked_at IS NULL"
+        "SELECT path_prefix, parent_grant::text FROM grants \
+         WHERE caller = $1::uuid AND revoked_at IS NULL"
       >>= fun rows ->
-      Direct.return
-        (List.exists
-           (fun r ->
-             match opt_text r 0 with
-             | None -> false
-             | Some pfx -> prefix_match pfx path)
-           rows))
+      let rec seek = function
+        | [] -> Direct.return false
+        | r :: rest -> (
+            match (opt_text r 0, opt_text r 1) with
+            | Some pfx, parent when prefix_match pfx path -> (
+                match parent with
+                | None -> Direct.return true
+                | Some pid -> lineage_live p ~max_hops:64 pid)
+            | _ -> seek rest)
+      in
+      seek rows)
     (fun e ->
       Printf.eprintf "[tuna] probe has_covering_grant failed: %s\n%!"
         (Printexc.to_string e);

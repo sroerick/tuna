@@ -309,7 +309,31 @@ let test_grant_mint_scope () =
   Api.grant_mint_core p auth (body {|{"prim":"tree/putt","path_prefix":"t6/ok/"}|})
   >>= fun (code, _) ->
   Alcotest.(check int) "unknown prim refused" 400 code;
-  return ()
+    (* the floor arm of the lineage law (agora 10-27, tenancy-law claim):
+       a narrowed capability does not outlive its ancestors - the covering
+       probe walks parent_grant exactly like check_grant does at the run
+       boundary.  Fresh identity, no other grants: the dead child is the
+       only row that could cover, so nothing else masks the lineage death. *)
+    S.bootstrap_identity p ~is_admin:false ~name:"mint-lineage"
+      ~token:"mint-lineage-token" ()
+    >>= fun lp ->
+    S.mint_grant p ~prim:"tree/put" ~args_attenuation:"{}"
+      ~path_prefix:(Some "t9/lp/") ~caller:lp.S.i_id ()
+    >>= fun parent_row ->
+    S.mint_grant p ~prim:"tree/put" ~args_attenuation:"{}"
+      ~path_prefix:(Some "t9/lp/deep/") ~caller:lp.S.i_id
+      ~parent_grant:(Some parent_row.S.g_id) ()
+    >>= fun _ ->
+    S.has_covering_grant p lp.S.i_id "t9/lp/deep/y" >>= fun pre_c ->
+    Alcotest.(check bool) "narrowed child covers while lineage lives" true pre_c;
+    S.revoke_grant p parent_row.S.g_id >>= fun () ->
+    S.has_covering_grant p lp.S.i_id "t9/lp/deep/y" >>= fun post_c ->
+    Alcotest.(check bool) "child stops covering once an ancestor is revoked"
+      false post_c;
+    S.has_covering_grant p lp.S.i_id "t9/lp/x" >>= fun post_p ->
+    Alcotest.(check bool) "the revoked parent row itself covers nothing"
+      false post_p;
+    return ()
 (* -- op log: fork + chain ---------------------------------------------- *)
 
 let test_ns_fork () =
