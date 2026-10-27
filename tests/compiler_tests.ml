@@ -439,21 +439,6 @@ let compile_budget_tests =
           (art.Bracket.steps < 100_000_000));
   ]
 
-let () =
-  Alcotest.run "tuna compiler"
-    [
-        ("reader", reader_tests);
-        ("dialect", dialect_tests);
-        ("dialect sugar", sugar_tests);
-        ("keyed literals", keyed_tests);
-        ("int codec", int_codec_tests);
-        ("compile", compile_tests);
-      ("extensional", extensional_tests);
-      ("provenance", provenance_tests);
-      ("def usage", def_usage_tests);
-      ("compile budget", compile_budget_tests);
-    ]
-
 (* ---------- def usage: the on_resolve census ----------
    The dictionary seam records every name that resolves at parse
    time (name, offset).  The census answers 'which defs does a
@@ -499,3 +484,18 @@ let def_usage_tests =
         let r = resolved_of ~dictionary "(bump (bump 0))" in
         Alcotest.(check int) "two hits" 2 (List.length r));
   ]
+
+let () =
+  Alcotest.run "tuna compiler"
+    [
+        ("reader", reader_tests);
+        ("dialect", dialect_tests);
+        ("dialect sugar", sugar_tests);
+        ("keyed literals", keyed_tests);
+        ("int codec", int_codec_tests);
+        ("compile", compile_tests);
+      ("extensional", extensional_tests);
+      ("provenance", provenance_tests);
+      ("def usage", def_usage_tests);
+      ("compile budget", compile_budget_tests);
+    ]
