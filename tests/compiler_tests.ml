@@ -469,7 +469,9 @@ let def_usage_tests =
          | _ -> Alcotest.fail "expected a single (name, off)"));
     Alcotest.test_case "lambda param shadows the dictionary and is not recorded" `Quick
       (fun () ->
-        let dictionary = [ ("x", Tuna.Cstr.encode "stub") ] in
+        let dictionary =
+          [ ("x", Tuna.Cstr.encode "stub"); ("bump", Tuna.Cstr.encode "stub") ]
+        in
         let r = resolved_of ~dictionary "((lambda (x) x) (bump 0))" in
         (* the bound x never resolves; the dictionary bump does *)
         Alcotest.(check int) "only the dictionary hit" 1 (List.length r);
