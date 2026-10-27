@@ -34,7 +34,7 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18090/api/runs | head
 
 Point a browser at `http://127.0.0.1:18090/login` (same token) for the
 htmx UI: dashboard, program pages with provenance + patching, run
-journal views with replay-verify buttons, grants admin, REPL.
+  journal views with replay-verify buttons, a read-only grants view, REPL.
 
 ## The calculus
 

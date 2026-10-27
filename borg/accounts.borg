@@ -255,3 +255,13 @@
      and separator-aware matching must keep the garden-root listing
      working, since tree/list gates on the request's prefix string
      itself.|) *)
+
+(* agent note (|2026-10-27 GRANTS PAGE READ-ONLY: the human /grants page
+      is a read view of the grants table (short id, identity, prim,
+      path_prefix, status, granted_by, created_at) over the same
+      Store.list_grants the admin JSON list uses; the session-tier form
+      endpoints /grants/mint + /grants/:id/revoke are retired.  Minting
+      and revocation stay API-first - POST /api/grants,
+      /api/grants/:id/attenuate and /api/grants/:id/revoke are the
+      machine surface, and the page's muted note says so.  smoke-ui
+      [15] pins the read-only page (table renders, no forms ship). |) *)

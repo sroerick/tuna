@@ -171,16 +171,12 @@ curl -sf -b "$JAR" -H 'HX-Request: true' --data-urlencode 'source=undef neg' \
 curl -sf -b "$JAR" "$BASE/repl" | grep -q '<td>neg</td>' \
   && fail "undef must remove the dictionary entry" || true
 
-echo "[15] grants admin: page, mint (htmx), revoke (htmx), unknown prim 400"
-curl -sf -b "$JAR" "$BASE/grants" | grep -q 'args_attenuation' || fail "grants page"
-curl -sf -b "$JAR" -H 'HX-Request: true' -d 'prim=echo&args_attenuation={}' \
-  "$BASE/grants/mint" | grep -q 'minted' || fail "mint fragment"
-GID=$(curl -sf -b "$JAR" "$BASE/grants" | grep -o 'grant-[0-9a-f-]*' | head -1 | sed 's/grant-//')
-[ -n "$GID" ] || fail "no grant row listed"
-curl -sf -b "$JAR" -H 'HX-Request: true' -X POST "$BASE/grants/$GID/revoke" \
-  | grep -q 'revoked' || fail "revoke fragment"
-curl_code -b "$JAR" -H 'HX-Request: true' -d 'prim=nope&args_attenuation={}' \
-  "$BASE/grants/mint" | grep -q 400 || fail "unknown prim must 400"
+echo "[15] grants page: read-only human view of the grants table"
+curl -sf -b "$JAR" "$BASE/grants" | grep -q 'granted_by' || fail "grants page"
+curl -sf -b "$JAR" "$BASE/grants" | grep -q 'created_at' \
+  || fail "grants page created_at column"
+curl -sf -b "$JAR" "$BASE/grants" | grep -q 'hx-post' \
+  && fail "grants page must be read-only" || true
 
 echo "[16] verify button detects out-of-band journal tamper"
 TGRANT=$(curl -sf -X POST -H "Authorization: Bearer $TOKEN" -d '{"prim":"echo","args_attenuation":{}}' \

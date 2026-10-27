@@ -15,9 +15,7 @@
       GET  /runs/:id/journal       journal tick fragment
       GET  /runs/:id/trace         firing trace (borg/trace.borg)
       POST /runs/:id/verify         replay-verify button
-     GET  /grants
-     POST /grants/mint
-     POST /grants/:id/revoke
+       GET  /grants (read-only view; mint/revocation live on the /api/grants surface)
      GET  /repl       POST /repl/eval
       GET  /view/:hash             value viewer (tree/bytes/program)
       GET  /todo                   the todo board (store-backed)
@@ -45,8 +43,6 @@ let routes pool =
       ; (`Get, "/runs/:id/trace", Run_page.trace_page pool)
     ; (`Post, "/runs/:id/verify", Run_page.verify_post pool)
     ; (`Get, "/grants", Grants.view pool)
-    ; (`Post, "/grants/mint", Grants.mint pool)
-    ; (`Post, "/grants/:id/revoke", Grants.revoke pool)
     ; (`Get, "/identities", Identities.view pool)
     ; (`Post, "/identities/mint", Identities.mint pool)
     ; (`Get, "/repl", Repl.view pool)

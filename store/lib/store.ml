@@ -757,11 +757,12 @@ type grant = {
 ; g_minted_by : string option  (* the MINTING IDENTITY (0003) *)
 ; g_parent_grant : string option  (* the grant this row attenuates (0012) *)
 ; g_revoked_at : string option
+; g_created_at : string
 }
 
 let select_grant_by_id =
   "SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
-   minted_by::text, parent_grant::text, revoked_at::text FROM grants WHERE id = $1::uuid"
+   minted_by::text, parent_grant::text, revoked_at::text, created_at::text FROM grants WHERE id = $1::uuid"
 
 let grant_of_row r =
   { g_id = text r 0 "grant.id"
@@ -771,7 +772,8 @@ let grant_of_row r =
   ; g_caller = text r 4 "grant.caller"
   ; g_minted_by = opt_text r 5
   ; g_parent_grant = opt_text r 6
-  ; g_revoked_at = opt_text r 7 }
+; g_revoked_at = opt_text r 7
+; g_created_at = text r 8 "grant.created_at" }
 
 let mint_grant p ~prim ~args_attenuation ?(path_prefix = None) ~caller
     ?(minted_by = None) ?(parent_grant = None) () =
@@ -796,14 +798,14 @@ let mint_grant p ~prim ~args_attenuation ?(path_prefix = None) ~caller
                 )
   | n -> store_error "mint_grant: RETURNING gave %d rows" (List.length n) )
 
-(* newest-first listing for the UI admin page (M8) and the admin
+(* newest-first listing for the /grants read page and the admin
    JSON list (GET /api/grants).  ~author scopes to grants written by
    one identity: minted_by, with the caller as the fallback for
    pre-0003 rows that predate the author column. *)
 let list_grants p ?(limit = 100) ~author () =
   let select =
     "SELECT id::text, prim, args_attenuation::text, path_prefix, caller::text, \
-     minted_by::text, parent_grant::text, revoked_at::text FROM grants"
+     minted_by::text, parent_grant::text, revoked_at::text, created_at::text FROM grants"
   in
   let sql, params =
     match author with
