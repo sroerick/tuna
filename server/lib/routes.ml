@@ -56,8 +56,11 @@ let reserved =
     ; "welcome"; "code"; "agent.txt"; "src.tgz"; ".well-known"
       (* 2026-10-27 public-face revamp: prim registry + claims
          registry/minting guide (routes.borg law 2 book change) *)
-    ; "prims"; "claims" ]
-
+    ; "prims"; "claims"
+      (* 2026-10-28 operator-console homepage (SWARM-2 port; routes.borg
+         law 2 book change): the public console page + its /console/feed/*
+         htmx fragments, anonymous by design *)
+    ; "console" ]
 let reserved_site_path sp =
   match String.index_opt sp '/' with
   | Some i -> List.mem (String.sub sp 0 i) reserved

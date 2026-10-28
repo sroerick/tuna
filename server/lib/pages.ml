@@ -5,6 +5,8 @@
    Routes (session auth; login/logout are open):
 
       GET  /                    dashboard (session); anonymous / -> /welcome
+     GET  /console               operator console (SWARM-2, anonymous;
+                                 /console/feed/* htmx polling fragments)
      GET  /login   POST /login GET /logout
           (+ /login/chatgpt: oidc sign-in, 0018 — dormant unless the
            ChatGPT client env is set)
@@ -80,6 +82,14 @@ let open_routes pool =
        registry still wins its own request. *)
     ; Web.get "/claims/**" (Public.claim_detail pool None)
     ; Web.get "/code" (Public.code pool None)
+    (* 2026-10-28 operator-console homepage (SWARM-2 port): the public
+       console page + its htmx feed fragments, anonymous by design
+       (routes.borg law 2 book change). *)
+    ; Web.get "/console" (Console.console pool None)
+    ; Web.get "/console/feed/claims" (Console.feed_claims pool None)
+    ; Web.get "/console/feed/stats" (Console.feed_stats pool None)
+    ; Web.get "/console/feed/code" (Console.feed_code pool None)
+    ; Web.get "/console/feed/charts" (Console.feed_charts pool None)
     ; Web.get "/agent.txt" (Public.agent_txt pool)
       ; Web.get "/agent" (Public.agent_page pool)
     ; Web.get "/.well-known/agent.json" (Public.agent_json pool)
