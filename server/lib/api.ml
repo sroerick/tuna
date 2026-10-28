@@ -1730,6 +1730,13 @@ let post_tree_list pool auth req =
                [ ( "entries"
                  , `List (List.map entry_json entries) ) ]))))
 
+(* F3 (audit 10-28): ops_fold has no LIMIT, so the default tree-log
+   window (0L .. Int64.max_int) folds the entire tree_ops table and
+   JSON-encodes it - growth-linear.  The window is clamped server-side
+   to this many rows; the un-prefixed window goes through ops_window,
+   which takes a hard LIMIT.  Shape unchanged; older history pages by
+   from_seq. *)
+let log_row_cap = 1000L
 let get_tree_log pool auth req =
   let prefix = Option.value (Web.query req "prefix") ~default:"" in
   (* same floor as its siblings: the fold's PREFIX is the path, so
@@ -1741,11 +1748,26 @@ let get_tree_log pool auth req =
       (match (get_int64_query req "from_seq", get_int64_query req "to_seq") with
        | Error e, _ | _, Error e -> return (Error e)
        | Ok from_seq, Ok to_seq ->
-           let from_seq = Option.value from_seq ~default:0L in
+           let from_seq = max 0L (Option.value from_seq ~default:0L) in
            let to_seq = Option.value to_seq ~default:Int64.max_int in
+           (* F3: clamp the window span (see log_row_cap above). *)
+           let to_seq =
+             if Int64.sub to_seq from_seq < log_row_cap then to_seq
+             else Int64.add from_seq (Int64.pred log_row_cap)
+           in
            (match Web.query req "prefix" with
             | Some p -> Store.ops_fold pool ?prefix:(Some p) ~from_seq ~to_seq ()
-            | None -> Store.ops_fold pool ~from_seq ~to_seq ())
+            | None ->
+                Store.ops_window pool ~from_seq
+                  ~limit:(Int64.to_int log_row_cap)
+                >>= fun rows ->
+                return
+                  (List.map
+                     (fun (w : Store.ops_window_row) -> w.Store.w_op)
+                     (List.filter
+                        (fun (w : Store.ops_window_row) ->
+                           w.Store.w_op.Store.o_seq <= to_seq)
+                        rows)))
            >>= fun ops -> return (Ok ops))
       >>= function
       | Error e -> (j_err e)
