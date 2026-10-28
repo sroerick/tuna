@@ -2579,31 +2579,26 @@ let defs_usage pool _auth _req =
             (fun (n, owner) -> if n = name then Some owner else None)
             registry
         in
-        (`Assoc
-           [ ("name", `String name)
-           ; ( "defined_by"
-             , `List (List.map (fun o -> `String o) (List.sort compare defined_by)) )
-           ; ("programs", `Int progs)
-           ; ("occurrences", `Int occ)
-           ; ("callers", `Int (List.length cs)) ])
-        :: acc2)
+        (occ, name, progs, List.length cs, defined_by) :: acc2)
       acc []
-    |> List.sort (fun a b ->
-           let int_of key d =
-             match List.assoc_opt key d with
-             | Some (`Int n) -> n
-             | _ -> 0
-           in
-           let pa = int_of "occurrences" a and pb = int_of "occurrences" b in
-           if pa <> pb then pb - pa
-           else
-             compare
-               (match List.assoc_opt "name" a with
-                | Some (`String s) -> s
-                | _ -> "")
-               (match List.assoc_opt "name" b with
-                | Some (`String s) -> s
-                | _ -> ""))
+  in
+  let rows =
+    List.sort
+      (fun (oa, na, _, _, _) (ob, nb, _, _, _) ->
+        if oa <> ob then ob - oa else compare na nb)
+      rows
+  in
+  let rows =
+    List.map
+      (fun (occ, name, progs, callers, defined_by) ->
+        `Assoc
+          [ ("name", `String name)
+          ; ( "defined_by"
+            , `List (List.map (fun o -> `String o) defined_by) )
+          ; ("programs", `Int progs)
+          ; ("occurrences", `Int occ)
+          ; ("callers", `Int callers) ])
+      rows
   in
   j_ok (`Assoc [ ("defs", `List rows) ])
 
