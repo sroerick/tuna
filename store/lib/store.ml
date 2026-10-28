@@ -106,6 +106,24 @@ let upsert_program p ~hash ~ternary ~source ~ir ~created_by =
   | n -> store_error "program upsert: fetch after insert gave %d rows" (List.length n)
          )
 
+(* the defs registry: every dictionary row with its owner's name.
+   Feeds /api/defs/usage (def-usage): a resolved name may be defined
+   by several identities (shadowing is legal); the endpoint reports
+   the full set and lets the reader mind the resolution order
+   (lambda > identity dict > sabralib > builtin). *)
+let defs_registry p =
+  Db.q ~params:[] p
+    "SELECT d.name, i.name FROM repl_dict d \
+     JOIN identities i ON i.id = d.identity_id ORDER BY d.name, i.name"
+  >>= fun rows ->
+  Direct.return
+    (List.filter_map
+       (fun r ->
+         match (col r 0, col r 1) with
+         | Some n, Some o -> Some (V.to_string_exn (Some n), V.to_string_exn (Some o))
+         | _ -> None)
+       rows)
+
 (* recent programs newest-first (the /code public face; content-
    addressed, so created_by may be NULL for pre-identity rows) *)
 let list_programs p ?(limit = 200) () =
