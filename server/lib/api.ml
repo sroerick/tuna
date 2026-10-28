@@ -2537,9 +2537,9 @@ let gc_run pool auth req =
    legal, so the reader minds resolution order (lambda > identity dict
    > sabralib > builtin). *)
 let defs_usage pool _auth _req =
-  S.list_programs pool ~limit:1000 ()
+  Store.list_programs pool ~limit:1000 ()
   >>= fun progs ->
-  S.defs_registry pool
+  Store.defs_registry pool
   >>= fun registry ->
   let acc = Hashtbl.create 32 in
   List.iter
