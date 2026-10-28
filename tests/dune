@@ -261,3 +261,17 @@
  (action
   (bash
    "bash %{workspace_root}/scripts/test-store.sh %{exe:signup_garden_tests.exe} ../migrations tuna_test_signup")))
+
+; chatgpt sign-in (0018): pure law tests (b64url, PKCE, the name
+; sanitizer, id_token claims, HTTP parsing); the outbound HTTPS client
+; is exercised only with TUNA_TEST_NET=1.  No PG.
+(executable
+ (name chatgpt_tests)
+ (modules chatgpt_tests)
+ (libraries tuna_server alcotest eio eio.unix eio_main unix))
+
+(rule
+ (alias runtest)
+ (deps chatgpt_tests.exe)
+ (action
+  (run %{exe:chatgpt_tests.exe})))

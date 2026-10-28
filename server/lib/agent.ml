@@ -130,7 +130,7 @@ let agent_json ?(base_url : string option = None) () : Yojson.Basic.t =
             ; ( "notes"
               , `List
                   [ `String "Bearer is the agent tier; sessions are the browser tier."
-                  ; `String "No OAuth/JWT in v1."
+                  ; `String "The API tier has no OAuth; browsers may sign in via OIDC (ChatGPT) when the server configures it (dormant by default)."
                   ; `String "Never log or commit the token." ] )
             ] )
       ; ( "endpoints"

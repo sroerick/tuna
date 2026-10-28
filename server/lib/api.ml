@@ -2583,6 +2583,8 @@ let router ?(static_dir = "server/static") pool =
 (* Boot + serve under an ambient Eio context (the eio mainloop lives in
    bin/main.ml).  Direct style throughout: no Lwt_main, no promise. *)
 let serve ~env ~sw ~port ~bootstrap_token =
+  (* oidc sign-in (0018): the outbound HTTPS client needs the boot net *)
+  Chatgpt.boot ~net:(Eio.Stdenv.net env :> [ `Generic ] Eio.Net.ty Eio.Std.r);
   let cfg = Db.config_from_env () in
   Tuna_store.Pgx_eio.with_ctx (Tuna_store.Pgx_eio.Ctx.of_stdenv ~sw env) @@ fun () ->
   let pool = Db.init cfg in
