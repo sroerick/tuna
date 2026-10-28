@@ -158,10 +158,11 @@ let parse_url (u : string) : (string * int * string) option =
           | None -> None)
       | None -> Some (hostport, 80, path)
 
-(* Minimal HTTP/1.0 GET over Eio.Net.  http only (v0); DNS resolution
-   is a synchronous stdlib call — v0 accepts the fiber stall for
-   allowlisted dev hosts.  The ambient eio ctx (installed by the server
-   mainloop) supplies the switch + net. *)
+(* Minimal HTTP/1.0 GET over Eio.Net.  http only (v0).  DNS resolution
+   goes through Eio's getaddrinfo family, which eio_posix runs in a
+   systhread, so a slow or blackholed resolver can no longer stall the
+   whole Eio domain scheduler (F2, audit 10-28).  The ambient eio ctx
+   (installed by the server mainloop) supplies the switch + net. *)
 let http_get ~allowlist url : answer =
   match parse_url url with
   | None -> `Error "http/get: only http:// URLs are supported in v0"
@@ -169,15 +170,19 @@ let http_get ~allowlist url : answer =
       if not (List.exists (fun h -> String.equal h host) allowlist) then
         `Error "http/get: host not in allowlist"
       else
+        let ctx = Tuna_store.Pgx_eio.Ctx.get () in
         let addr =
-          (try Some (Unix.gethostbyname host).Unix.h_addr_list.(0)
-           with Not_found -> None)
+          match
+            Eio.Net.getaddrinfo_stream ~service:(string_of_int port)
+              ctx.Tuna_store.Pgx_eio.Ctx.net host
+          with
+          | addr :: _ -> Some addr
+          | [] -> None
+          | exception Eio.Io _ -> None
         in
         match addr with
         | None -> `Error ("http/get: cannot resolve host " ^ host)
-        | Some inet ->
-            let ctx = Tuna_store.Pgx_eio.Ctx.get () in
-            let sockaddr = `Tcp (Eio_unix.Net.Ipaddr.of_unix inet, port) in
+        | Some sockaddr ->
             let flow =
               (Eio.Net.connect ~sw:ctx.Tuna_store.Pgx_eio.Ctx.sw
                  ctx.Tuna_store.Pgx_eio.Ctx.net sockaddr
