@@ -41,16 +41,32 @@ let signup_on () = Sys.getenv_opt "TUNA_SIGNUP" = Some "1"
    baked-in literal used to be the whole problem: the copy-paste worked
    on the box it was written on and nowhere else. *)
 let base_url (req : Web.req) =
+  (* the forwarded host is CLIENT-CONTROLLED until the proxy overwrites
+     it, and it lands in page text - charset-validate before it reaches
+     a sink (review fixup, hollis: a reflected-host XSS needs only one
+     unescaped header).  a hostname is letters, digits, dots, dashes,
+     an optional port; anything else is treated as absent. *)
+  let host_ok h =
+    String.length h > 0
+    && String.for_all
+         (fun c ->
+           (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+           || (c >= '0' && c <= '9') || c = '.' || c = '-' || c = ':')
+         h
+  in
   let host =
     match Web.header req "x-forwarded-host" with
     | Some h when String.trim h <> "" -> Some (List.hd (String.split_on_char ',' h))
     | _ -> Web.header req "host"
   in
+  let host = match host with Some h -> Some (String.trim h) | None -> None in
+  let host = if Option.fold ~some:host_ok ~none:false host then host else None in
   let scheme =
     match Web.header req "x-forwarded-proto" with
     | Some p when String.trim p <> "" -> String.trim (List.hd (String.split_on_char ',' p))
     | _ -> "https"
   in
+  let scheme = if scheme = "http" || scheme = "https" then scheme else "https" in
   match host with
   | Some h when String.trim h <> "" ->
       let h = String.trim h in
