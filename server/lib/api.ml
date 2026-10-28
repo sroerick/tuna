@@ -2567,6 +2567,7 @@ let defs_usage pool _auth _req =
                       | _ -> ())
                     defs
               | _ -> ())
+          | _ -> ())
           | exception _ -> ()))
     progs
   >>= fun () ->
