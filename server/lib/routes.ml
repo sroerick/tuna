@@ -200,7 +200,7 @@ let publish pool ~caller_id ~caller_admin ~site_path ~(record : J.t)
   | Ok site_path -> (
       match parse_record record with
       | Error e -> return (400, `Assoc [ ("error", `String e) ])
-      | Ok _parsed -> (
+      | Ok parsed -> (
           let key = route_key site_path in
           if reserved_site_path site_path then
             deny key 400
@@ -209,9 +209,21 @@ let publish pool ~caller_id ~caller_admin ~site_path ~(record : J.t)
                  site_path)
           else
             allowed pool ~caller_id ~caller_admin ~path:key
-            >>= function
-            | false -> deny key 403 (Printf.sprintf "no covering grant for %s" key)
-            | true -> (
+            >>= fun key_ok ->
+            (* F1 (audit 10-28): the record's grant_prefix was checked
+               for syntax only; serve_program mints a live prim-"*"
+               grant on exactly this prefix, so the publisher must
+               cover it too (the same coverage check the route key
+               gets; admin bypass unchanged). *)
+            (match parsed.r_grant_prefix with
+             | None -> return true
+             | Some pfx -> allowed pool ~caller_id ~caller_admin ~path:pfx)
+            >>= fun prefix_ok ->
+            if not key_ok then
+              deny key 403 (Printf.sprintf "no covering grant for %s" key)
+            else if not prefix_ok then
+              deny key 403 "record grant_prefix exceeds publisher coverage"
+            else (
                 let bytes = J.to_string record in
                 let hash = S.byte_hash bytes in
                 S.byte_value_put pool ~hash ~bytes
