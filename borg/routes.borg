@@ -30,6 +30,10 @@
            registry page and the claims registry + minting guide, both
            anonymous by design.  Same commit: anonymous / lands on
            /welcome; a session still gets the dashboard.)
+          (2026-10-28: +console - the operator-console homepage (SWARM-2
+           port): the public console page + its /console/feed/* htmx
+           fragments, anonymous by design.  The anonymous-/ flip to the
+           console is a deploy decision left to hollis/roerick.)
       3. THE ROUTE RECORD IS THE CAPABILITY. Template routes serve
          bytes to any caller, anonymous included - a public site needs
          it. Program routes execute the stored program as a
