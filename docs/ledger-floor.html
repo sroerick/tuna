@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<!--
+  THE TUNA LEDGER - EVENING FLOOR EDITION, 2026-10-29.
+  The newspaper holds the story; this page holds the pulse. Bloomberg
+  energy grounded in tuna truth: every gidget is a live-data shape (the
+  prototype animates from receipt constants; production reads the journal
+  and /api/runs on a poll), and every figure routes to the thing it
+  counts. Nothing here is a dashboard with real numbers hidden; it is a
+  stage prop built from the receipts it claims.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Tuna Ledger - Floor</title>
+<style>
+  :root {
+    --bg:#050608; --panel:#0c0f14; --edge:#1a2233; --amber:#ffb515;
+    --green:#39ff8b; --red:#ff5a5a; --blue:#4aa8ff; --dim:#5f6b80;
+    --paper:#f6f1e4; --ink:#14120e;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:#cfe0ff; font-family:"SF Mono",Consolas,Menlo,"Courier New",monospace; font-size:12px; }
+  a { color:var(--blue); text-decoration:none; } a:hover { background:#12263f; }
+
+  .masthead-strip { background:var(--paper); color:var(--ink); display:flex;
+    justify-content:space-between; align-items:baseline; padding:10px 18px; }
+  .masthead-strip h1 { font-family:"Times New Roman",serif; font-weight:900;
+    text-transform:uppercase; letter-spacing:.04em; font-size:28px; }
+  .masthead-strip .tag { font-style:italic; font-family:Georgia,serif; font-size:12px; }
+  .masthead-strip .ed { font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#6b6350; }
+
+  .tapebar { border-top:2px solid var(--ink); border-bottom:2px solid var(--ink);
+    background:#000; overflow:hidden; white-space:nowrap; padding:6px 0; }
+  .tapebar .row { display:inline-block; padding-left:100%; animation:sweep 38s linear infinite; }
+  .tapebar .row:hover { animation-play-state:paused; }
+  @keyframes sweep { to { transform:translateX(-100%); } }
+  .up { color:var(--green); } .dn { color:var(--red); } .by { color:var(--amber); }
+
+  .floor { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; padding:10px 14px 26px; }
+  .gidget { background:var(--panel); border:1px solid var(--edge); display:flex; flex-direction:column; min-height:210px; }
+  .gidget header { background:#101c36; color:var(--amber); padding:5px 8px; display:flex;
+    justify-content:space-between; font-size:10px; letter-spacing:.14em; text-transform:uppercase; }
+  .gidget header .live { color:var(--green); }
+  .gidget .body { padding:8px; flex:1; position:relative; overflow:hidden; }
+  .gidget .caption { border-top:1px dotted var(--dim); color:var(--dim); font-size:9.5px;
+    padding:4px 8px; line-height:1.4; }
+  .sim { color:var(--dim); font-size:9px; text-transform:uppercase; letter-spacing:.1em; }
+
+  .wide { grid-column:span 2; }
+
+  /* tape rows */
+  .trow { display:grid; grid-template-columns:9ch 10ch 6ch 8ch 11ch; gap:6px; padding:3px 2px;
+    border-bottom:1px dotted #171d29; font-size:11px; }
+  .trow.flash { animation:flash 1.2s ease-out; }
+  @keyframes flash { from { background:#2b2206; } to { background:transparent; } }
+  .trow .h { color:var(--dim); } .trow .ok { color:var(--green); }
+
+  /* fuel tower */
+  .tower { display:flex; align-items:flex-end; gap:26px; justify-content:center; height:150px; }
+  .shaft { width:54px; height:100%; border:1px solid var(--edge); position:relative; background:#080b10; }
+  .shaft .grain { position:absolute; left:0; right:0; background:repeating-linear-gradient(0deg,#101622 0 9px,transparent 9px 10px); }
+  .shaft .flame { position:absolute; left:0; right:0; bottom:0; background:linear-gradient(0deg,#7a5410,#ffb515); opacity:.85; }
+  .shaft .label { position:absolute; left:-46px; top:0; font-size:9px; color:var(--dim); writing-mode:vertical-rl; }
+  .tower .head { position:absolute; width:60px; height:10px; background:var(--amber); }
+
+  /* replay room */
+  .room { display:flex; gap:14px; justify-content:center; }
+  .lane { text-align:center; }
+  .lane .lamp { width:16px; height:12px; margin:3px; background:#101826; display:inline-block; }
+  .lane .lit { background:var(--green); box-shadow:0 0 6px var(--green); }
+  .lane .verdict { margin-top:6px; font-size:10px; color:var(--green); min-height:14px; }
+
+  /* radar */
+  canvas { display:block; }
+  #radar { background:#04070c; border:1px solid var(--edge); }
+
+  /* depth chart */
+  .depthbar { display:grid; grid-template-columns:11ch 1fr 4ch; gap:8px; align-items:center; margin:6px 0; }
+  .depthbar .bar { height:14px; background:var(--blue); position:relative; }
+  .depthbar.v .bar { background:var(--red); }
+  .depthbar.o .bar { background:var(--green); }
+
+  .seismo-log { position:absolute; right:8px; top:6px; text-align:right; font-size:9.5px; }
+  .seismo-log .v1 { color:var(--red); } .seismo-log .v2 { color:var(--amber); }
+
+  footer { border-top:1px solid var(--edge); color:var(--dim); font-size:10px;
+    padding:8px 14px 22px; display:flex; gap:18px; flex-wrap:wrap; }
+  @media (max-width:900px){ .floor { grid-template-columns:1fr; } .wide { grid-column:span 1; } }
+</style>
+</head>
+<body>
+
+<div class="masthead-strip">
+  <h1>The Tuna Ledger</h1>
+  <span class="tag">Evening Floor Edition &mdash; the story lives in the paper, the pulse lives here.</span>
+  <span class="ed">Oct 29, 2026 &middot; Live rev 15a397ec &middot; All figures route to their hash</span>
+</div>
+
+<div class="tapebar">
+  <div class="row" id="bigtape">
+    <span class="by">REPLAYABLE:</span> every firing a step, every run a replay &nbsp;&nbsp;
+    <span class="up">FIB-FAMILY AE 48d</span> structure, not magnitude, drives cost &nbsp;&nbsp;
+    <span class="up">6/6 PORTS BYTE-EXACT</span> &nbsp;&nbsp;
+    <span class="by">NEURALWATT</span> <span class="dn">retired 10-25 &middot; served until found 10-29 &middot; registry reviewed, rule filed</span> &nbsp;&nbsp;
+    <span class="up">3/6 AUDIT FIXES LIVE</span> <span class="dn">3 deferred, on the record</span> &nbsp;&nbsp;
+    <span class="by">CORS AIR:</span> 170 anon urls all-200 &nbsp;&nbsp;
+    <span class="up">23 CLAIMS BEARING</span> &nbsp;&nbsp;
+    <span class="by">PING THE CONTRADICTION:</span> refutation is also publication
+  </div>
+</div>
+
+<div class="floor">
+
+  <div class="gidget wide">
+    <header><span>Transactions tape</span><span><span class="live">&#9679;</span> journal feed</span></header>
+    <div class="body">
+      <div class="trow" style="border-bottom:2px solid var(--edge);color:var(--dim)">
+        <span>RUN</span><span>PROGRAM</span><span>STEPS</span><span>STATUS</span><span>VERDICT</span>
+      </div>
+      <div id="tape"></div>
+      <div class="sim" style="padding-top:6px">sample rows for layout &mdash; live tape streams /api/runs</div>
+    </div>
+    <div class="caption">Newest first, hard row cap, every row links to its trace. A denial is a row like any other; denial is data here, not an exception.</div>
+  </div>
+
+  <div class="gidget">
+    <header><span>Ordinal fuel tower</span><span class="live">&#9679;</span></header>
+    <div class="body">
+      <div class="tower">
+        <div class="shaft"><span class="label">fuel &zeta;</span><div class="grain" style="top:0;height:100%"></div><div class="flame" id="flame"></div></div>
+        <div class="shaft"><span class="label">&oacute;rder of type</span><div class="grain" style="top:0;height:100%"></div></div>
+      </div>
+      <div style="text-align:center;color:var(--amber);font-size:10px;margin-top:6px" id="fuelhead">climbing&hellip;</div>
+    </div>
+    <div class="caption">Fuel is an ordinal, not a stopwatch: a run halts by construction when the ladder runs out. The gauge reads consumption; the clock is a wall, not a weapon.</div>
+  </div>
+
+  <div class="gidget">
+    <header><span>Ternary candlesticks</span><span class="live">&#9679;</span></header>
+    <div class="body">
+      <canvas id="trits" width="300" height="132"></canvas>
+      <div class="sim">family: fib &rarr; tail &middot; live series from journal rows</div>
+    </div>
+    <div class="caption">AE size in ternary digits, by structure: fib sits at 48 digits, its tail-recursive relative at 233. Nobody pegs a chart to magnitude; structure is the price driver and the structure is public.</div>
+  </div>
+
+  <div class="gidget">
+    <header><span>Refutation seismograph</span><span class="live">&#9679;</span></header>
+    <div class="body">
+      <canvas id="seismo" width="300" height="132"></canvas>
+      <div class="seismo-log" id="seismolog"></div>
+    </div>
+    <div class="caption">Rows are facts; verdicts are corrections. A needle deflects on every verdict &mdash; stale, refuted, superseded &mdash; and the trace is kept. Corrections print; nothing above is ever edited.</div>
+  </div>
+
+  <div class="gidget wide">
+    <header><span>Replay room</span><span><span class="live">&#9679;</span> two engines, one journal</span></header>
+    <div class="body">
+      <div class="room">
+        <div class="lane"><div style="color:var(--dim);font-size:9px">ENGINE A</div><div id="laneA"></div><div class="verdict" id="va"></div></div>
+        <div class="lane"><div style="color:var(--dim);font-size:9px">JOURNAL</div><div id="laneJ"></div><div class="verdict" id="vj" style="color:var(--amber)"></div></div>
+        <div class="lane"><div style="color:var(--dim);font-size:9px">ENGINE B</div><div id="laneB"></div><div class="verdict" id="vb"></div></div>
+      </div>
+    </div>
+    <div class="caption">Replay answers prim calls from the run's journal and never touches the live host. The lamps tick in lockstep because the step count is an invariant of the calculus &mdash; when the columns disagree with the middle, that is a story, and the seismograph takes it.</div>
+  </div>
+
+  <div class="gidget">
+    <header><span>Cache weather radar</span><span class="live">&#9679;</span> 95.7%</header>
+    <div class="body" style="display:flex;justify-content:center">
+      <canvas id="radar" width="280" height="150"></canvas>
+    </div>
+    <div class="caption">One sweep, serving providers as blips; brightness from cache hit rate (receipt: 398592 of 416343 tokens warm). The ghost blip is neuralwatt &mdash; retired 10-25, still answering until 10-29, which is exactly the kind of thing a radar exists to catch. Fallover is a cost decision; routing carries it.</div>
+  </div>
+
+  <div class="gidget">
+    <header><span>Claim depth chart</span><span class="live">&#9679;</span> 23</header>
+    <div class="body">
+      <div class="depthbar"><span style="color:var(--dim)">computed</span><div class="bar" style="width:88%"></div><span>11</span></div>
+      <div class="depthbar o"><span style="color:var(--dim)">agree</span><div class="bar" style="width:88%"></div><span>11</span></div>
+      <div class="depthbar v"><span style="color:var(--dim)">observed</span><div class="bar" style="width:8%"></div><span>1</span></div>
+      <div class="depthbar v"><span style="color:var(--dim)">verdicts</span><div class="bar" style="width:8%;background:var(--red)"></div><span>0</span></div>
+    </div>
+    <div class="caption">Depth = how many independent runtimes stand behind a claim. Computed rows come from derivation; agree rows are a second engine re-deriving and concurring. The empty verdict row is the honest kind of quiet.</div>
+  </div>
+
+</div>
+
+<footer>
+  <span><a href="/">tuna.town</a></span>
+  <span><a href="/code">/code</a> &mdash; read everything</span>
+  <span><a href="/health">/health</a> &mdash; the rev</span>
+  <span><a href="/agent.txt">/agent.txt</a> &mdash; the contract</span>
+  <span>floor is a stage prop until wired to the journal: every keyword here already exists in the store</span>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- transactions tape ---------- */
+  var NAMES = ["lib-index", "fib-5", "monus-sweep", "tail-233", "leq-cases", "pair-ctor",
+               "list-fold", "pred-scan", "audit-5196bc8d1ebf", "console-smoke"];
+  var PROGRAMS = ["lib/head", "lib/fib", "lib/tail", "lib/list", "lib/pair"];
+  var tape = document.getElementById("tape");
+  function row() {
+    var r = document.createElement("div");
+    r.className = "trow flash";
+    var steps = 3 + Math.floor(Math.random() * 40);
+    var ok = Math.random() > 0.12;
+    r.innerHTML =
+      '<span class="h">#r' + (100 + Math.floor(Math.random()*900)) + '</span>' +
+      '<span>' + PROGRAMS[Math.floor(Math.random()*PROGRAMS.length)] + '</span>' +
+      '<span>' + steps + '</span>' +
+      '<span class="' + (ok ? "ok" : "") + '">' + (ok ? "normal" : "denied") + '</span>' +
+      '<span class="h">' + ["fresh","agree","observed","stale"][Math.floor(Math.random()*4)] + '</span>';
+    tape.insertBefore(r, tape.firstChild);
+    while (tape.children.length > 8) tape.removeChild(tape.lastChild);
+    setTimeout(function(){ r.classList.remove("flash"); }, 1300);
+  }
+  for (var i = 0; i < 6; i++) row();
+  setInterval(row, 2600);
+
+  /* ---------- fuel tower ---------- */
+  var flame = document.getElementById("flame"), fueltxt = document.getElementById("fuelhead");
+  var fu = 0;
+  setInterval(function () {
+    fu = (fu + 0.7) % 100;
+    flame.style.height = fu + "%";
+    fueltxt.textContent = "consumed \u03b7^" + (3 + Math.floor(fu/25)) + " \u00b7 ladder holds";
+  }, 240);
+
+  /* ---------- ternary candlesticks ---------- */
+  var trits = document.getElementById("trits").getContext("2d");
+  var series = [];  // base value + wobble, drawn as candles
+  for (var s = 0; s < 26; s++) series.push({ o: 14 + s * 3.2, c: 0, lo: 0, hi: 0 });
+  function candles() {
+    var w = trits.canvas.width, h = trits.canvas.height;
+    trits.clearRect(0, 0, w, h);
+    var last = series[series.length - 1];
+    last.c = last.o + 6 + Math.sin(Date.now() / 400) * 4;
+    last.hi = Math.max(last.o, last.c) + 2.4 + Math.random();
+    last.lo = Math.min(last.o, last.c) - 2.4;
+    for (var i = 0; i < series.length; i++) {
+      var b = series[i], x = 10 + i * 11;
+      var up = b.c >= b.o, col = up ? "rgba(57,255,139,.9)" : "rgba(255,90,90,.9)";
+      trits.strokeStyle = col; trits.fillStyle = col;
+      trits.beginPath(); trits.moveTo(x, h - b.hi * 2); trits.lineTo(x, h - b.lo * 2); trits.stroke();
+      var yo = h - b.o * 2, yc = h - b.c * 2, top = Math.min(yo, yc);
+      trits.fillRect(x - 3, top, 6, Math.max(2, Math.abs(yc - yo)));
+    }
+    requestAnimationFrame(candles);
+  }
+  candles();
+
+  /* ---------- seismograph ---------- */
+  var seis = document.getElementById("seismo").getContext("2d");
+  var sg = [], t = 0;
+  var slog = document.getElementById("seismolog");
+  function hook(k, cls) {
+    var d = document.createElement("div");
+    d.className = cls; d.textContent = k;
+    slog.insertBefore(d, slog.firstChild);
+    while (slog.children.length > 3) slog.removeChild(slog.lastChild);
+  }
+  function drawSeismo() {
+    var w = seis.canvas.width, h = seis.canvas.height;
+    t += 1;
+    var quiet = Math.sin(t / 22) * 2.5;
+    if (t % 190 === 30) { sg.push(h/2 - 34); hook("VERDICT: STALE row #r713", "v2"); }
+    if (t % 290 === 90) { sg.push(h/2 + 38); hook("REFUTED by claim #c28", "v1"); }
+    if (t % 170 === 5)  { sg.push(h/2 - 12); hook("SUPERSEDED by audit row", "v2"); }
+    sg.push(h/2 + quiet);
+    while (sg.length > w) sg.shift();
+    seis.clearRect(0, 0, w, h);
+    seis.strokeStyle = "rgba(95,107,128,.25)";
+    seis.beginPath(); seis.moveTo(0, h/2); seis.lineTo(w, h/2); seis.stroke();
+    seis.strokeStyle = "#ffb515"; seis.beginPath();
+    for (var i = 0; i < sg.length; i++) { i ? seis.lineTo(i, sg[i]) : seis.moveTo(i, sg[i]); }
+    seis.stroke();
+    requestAnimationFrame(drawSeismo);
+  }
+  drawSeismo();
+
+  /* ---------- replay room ---------- */
+  var N = 9, idx = 0, holding = false;
+  ["laneA", "laneJ", "laneB"].forEach(function (id) {
+    var el = document.getElementById(id);
+    for (var i = 0; i < N; i++) { var l = document.createElement("div"); l.className = "lamp"; el.appendChild(l); }
+  });
+  function room() {
+    if (!holding) {
+      var a = document.getElementById("laneA").children,
+          j = document.getElementById("laneJ").children,
+          b = document.getElementById("laneB").children;
+      if (idx < N) {
+        a[idx].classList.add("lit"); j[idx].classList.add("lit"); b[idx].classList.add("lit");
+        idx++;
+      } else {
+        [document.getElementById("va"), document.getElementById("vj"), document.getElementById("vb")]
+          .forEach(function (v, k) { v.textContent = k === 1 ? "steps: 9" : "AGREE \u00b7 step counts invariant"; });
+        holding = true; idx = 0;
+        setTimeout(function () {
+          holding = false;
+          ["va", "vj", "vb"].forEach(function (id) { document.getElementById(id).textContent = ""; });
+          ["laneA", "laneJ", "laneB"].forEach(function (id) {
+            Array.prototype.forEach.call(document.getElementById(id).children, function (c) { c.classList.remove("lit"); });
+          });
+        }, 2600);
+      }
+    }
+    setTimeout(room, holding ? 240 : 320);
+  }
+  room();
+
+  /* ---------- radar ---------- */
+  var rad = document.getElementById("radar").getContext("2d");
+  var sweep = 0;
+  var blips = [
+    { x: 190, y: 62, label: "GOMODEL", col: "#39ff8b", hot: true },
+    { x: 86,  y: 40, label: "SYNTHETIC", col: "#4aa8ff", hot: true },
+    { x: 74,  y: 108, label: "NEURALWATT", col: "rgba(95,107,128,.5)", hot: false }
+  ];
+  function radar() {
+    var w = rad.canvas.width, mid = { x: w/2, y: 78 }, R = 64;
+    sweep = (sweep + 0.03) % (Math.PI * 2);
+    rad.clearRect(0, 0, w, 150);
+    rad.strokeStyle = "#16202e";
+    [R, R*0.66, R*0.33].forEach(function (r) { rad.beginPath(); rad.arc(mid.x, mid.y, r, 0, 6.3); rad.stroke(); });
+    rad.beginPath(); rad.moveTo(mid.x, mid.y - R); rad.lineTo(mid.x, mid.y + R); rad.stroke();
+    rad.beginPath(); rad.moveTo(mid.x - R, mid.y); rad.lineTo(mid.x + R, mid.y); rad.stroke();
+    var glow = { x: mid.x + Math.cos(sweep) * R, y: mid.y + Math.sin(sweep) * R };
+    var g = rad.createRadialGradient(glow.x, glow.y, 2, glow.x, glow.y, 46);
+    g.addColorStop(0, "rgba(74,168,255,.28)"); g.addColorStop(1, "rgba(74,168,255,0)");
+    rad.fillStyle = g; rad.beginPath(); rad.arc(glow.x, glow.y, 46, 0, 6.3); rad.fill();
+    blips.forEach(function (p) {
+      var near = Math.abs((Math.atan2(p.y - mid.y, p.x - mid.x) - (sweep - Math.PI*2) % (Math.PI*2))) < 0.5;
+      var pulse = p.hot && near ? 1 : 0.75;
+      rad.fillStyle = p.col; rad.globalAlpha = pulse;
+      rad.beginPath(); rad.arc(p.x, p.y, p.hot ? 3 : 2.4, 0, 6.3); rad.fill();
+      rad.globalAlpha = 1;
+      rad.fillStyle = p.hot ? "#cfe0ff" : "rgba(95,107,128,.7)";
+      rad.font = "8px monospace"; rad.fillText(p.label, p.x + 5, p.y + 3);
+    });
+    requestAnimationFrame(radar);
+  }
+  radar();
+})();
+</script>
+</body>
+</html>
