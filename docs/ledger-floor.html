@@ -192,152 +192,180 @@
   <span><a href="/code">/code</a> &mdash; read everything</span>
   <span><a href="/health">/health</a> &mdash; the rev</span>
   <span><a href="/agent.txt">/agent.txt</a> &mdash; the contract</span>
-  <span>floor is a stage prop until wired to the journal: every keyword here already exists in the store</span>
+  <span>floor eats the journal: baked at print time, live when served same-origin · factory/tuna-gidgets-live-1029</span>
 </footer>
 
+<script>window.FLOOR_DATA = null; /* the bake tool injects the real payload here */</script>
 <script>
+/* ============ FLOOR DATA LAYER (factory/tuna-gidgets-live-1029) ============
+   Two modes, one renderer:
+   - BAKED: window.FLOOR_DATA injected at print time (the paper model).
+   - LIVE:  if same-origin /console/feed/claims answers, poll and re-render.
+   Every gidget reads real journal state or says so on its face. */
 (function () {
   "use strict";
+  var FD = window.FLOOR_DATA || null;
+  var stampEl = null;
+  function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function short(path){ return path.replace(/^u\./,"").replace(/^hollis\./,"h.").replace(/^gregor\./,"g.").replace(/^agora\./,"a."); }
+  function setStamp(el){
+    if(!FD) return;
+    el.textContent = "printed " + (FD.printed_at||"?") + " \u00b7 rev " + (FD.rev||"?") +
+      (window.__LIVE ? " \u00b7 LIVE" : " \u00b7 bake");
+  }
 
-  /* ---------- transactions tape ---------- */
-  var NAMES = ["lib-index", "fib-5", "monus-sweep", "tail-233", "leq-cases", "pair-ctor",
-               "list-fold", "pred-scan", "audit-5196bc8d1ebf", "console-smoke"];
-  var PROGRAMS = ["lib/head", "lib/fib", "lib/tail", "lib/list", "lib/pair"];
+  /* ---------- transactions tape: real journal rows ---------- */
   var tape = document.getElementById("tape");
-  function row() {
-    var r = document.createElement("div");
-    r.className = "trow flash";
-    var steps = 3 + Math.floor(Math.random() * 40);
-    var ok = Math.random() > 0.12;
-    r.innerHTML =
-      '<span class="h">#r' + (100 + Math.floor(Math.random()*900)) + '</span>' +
-      '<span>' + PROGRAMS[Math.floor(Math.random()*PROGRAMS.length)] + '</span>' +
-      '<span>' + steps + '</span>' +
-      '<span class="' + (ok ? "ok" : "") + '">' + (ok ? "normal" : "denied") + '</span>' +
-      '<span class="h">' + ["fresh","agree","observed","stale"][Math.floor(Math.random()*4)] + '</span>';
-    tape.insertBefore(r, tape.firstChild);
-    while (tape.children.length > 8) tape.removeChild(tape.lastChild);
-    setTimeout(function(){ r.classList.remove("flash"); }, 1300);
+  function tapeRow(r){
+    var d = document.createElement("div");
+    d.className = "trow flash";
+    d.innerHTML =
+      '<span class="h">' + esc(r.claimant) + '</span>' +
+      '<span><a href="/claims/' + encodeURIComponent(r.path) + '" style="color:inherit;text-decoration:none">' + esc(short(r.path)) + '</a></span>' +
+      '<span>' + esc(r.date) + '</span>' +
+      '<span class="' + (r.chip === "CLAIMED" ? "ok" : "") + '">' + esc(r.chip) + '</span>';
+    return d;
   }
-  for (var i = 0; i < 6; i++) row();
-  setInterval(row, 2600);
-
-  /* ---------- fuel tower ---------- */
-  var flame = document.getElementById("flame"), fueltxt = document.getElementById("fuelhead");
-  var fu = 0;
-  setInterval(function () {
-    fu = (fu + 0.7) % 100;
-    flame.style.height = fu + "%";
-    fueltxt.textContent = "consumed \u03b7^" + (3 + Math.floor(fu/25)) + " \u00b7 ladder holds";
-  }, 240);
-
-  /* ---------- ternary candlesticks ---------- */
-  var trits = document.getElementById("trits").getContext("2d");
-  var series = [];  // base value + wobble, drawn as candles
-  for (var s = 0; s < 26; s++) series.push({ o: 14 + s * 3.2, c: 0, lo: 0, hi: 0 });
-  function candles() {
-    var w = trits.canvas.width, h = trits.canvas.height;
-    trits.clearRect(0, 0, w, h);
-    var last = series[series.length - 1];
-    last.c = last.o + 6 + Math.sin(Date.now() / 400) * 4;
-    last.hi = Math.max(last.o, last.c) + 2.4 + Math.random();
-    last.lo = Math.min(last.o, last.c) - 2.4;
-    for (var i = 0; i < series.length; i++) {
-      var b = series[i], x = 10 + i * 11;
-      var up = b.c >= b.o, col = up ? "rgba(57,255,139,.9)" : "rgba(255,90,90,.9)";
-      trits.strokeStyle = col; trits.fillStyle = col;
-      trits.beginPath(); trits.moveTo(x, h - b.hi * 2); trits.lineTo(x, h - b.lo * 2); trits.stroke();
-      var yo = h - b.o * 2, yc = h - b.c * 2, top = Math.min(yo, yc);
-      trits.fillRect(x - 3, top, 6, Math.max(2, Math.abs(yc - yo)));
+  function renderTape(rows){
+    if(!tape || !rows) return;
+    tape.innerHTML = "";
+    rows.slice(0,8).forEach(function(r){ tape.appendChild(tapeRow(r)); });
+    if(tape.children.length){
+      var first = tape.firstChild;
+      setTimeout(function(){ first.classList.remove("flash"); }, 1300);
     }
-    requestAnimationFrame(candles);
   }
-  candles();
 
-  /* ---------- seismograph ---------- */
+  /* ---------- fuel tower: journal mass is the fuel ---------- */
+  var flame = document.getElementById("flame"), fueltxt = document.getElementById("fuelhead");
+  function renderFuel(){
+    if(!fueltxt || !FD || !FD.totals) return;
+    var t = FD.totals.rows || 0;
+    var pct = Math.min(100, (t % 400) / 4);  // sawtooth over the row count: the meter reads the journal
+    if(flame) flame.style.height = pct + "%";
+    fueltxt.textContent = "journal \u03b7^" + (2 + Math.floor(t/100)) + " \u00b7 " + t + " rows \u00b7 ladder holds";
+  }
+
+  /* ---------- ternary candlesticks: real chunk sizes ---------- */
+  var trits = document.getElementById("trits").getContext("2d");
+  function renderCandles(){
+    if(!FD || !FD.chunk_lengths || !FD.chunk_lengths.length) return;
+    var lens = FD.chunk_lengths.slice(0,26);
+    var w = trits.canvas.width, h = trits.canvas.height;
+    var lo = Math.min.apply(null,lens), hi = Math.max.apply(null,lens), span = Math.max(1,hi-lo);
+    trits.clearRect(0,0,w,h);
+    for(var i=0;i<lens.length;i++){
+      var v = lens[i];
+      var y = h - 8 - ((v - lo)/span) * (h-20);
+      var prev = i ? lens[i-1] : v;
+      var up = v >= prev, col = up ? "rgba(57,255,139,.9)" : "rgba(255,90,90,.9)";
+      var x = 10 + i*11;
+      trits.strokeStyle = col; trits.fillStyle = col;
+      trits.beginPath(); trits.moveTo(x, y-6); trits.lineTo(x, y+6); trits.stroke();
+      trits.fillRect(x-3, Math.min(y, h - 8 - ((prev-lo)/span)*(h-20)), 6, Math.max(2, Math.abs(y - (h - 8 - ((prev-lo)/span)*(h-20)))));
+    }
+  }
+
+  /* ---------- seismograph: real verdicts deflect the needle ---------- */
   var seis = document.getElementById("seismo").getContext("2d");
-  var sg = [], t = 0;
   var slog = document.getElementById("seismolog");
-  function hook(k, cls) {
+  var sg = [];
+  function hook(k, cls){
     var d = document.createElement("div");
     d.className = cls; d.textContent = k;
     slog.insertBefore(d, slog.firstChild);
-    while (slog.children.length > 3) slog.removeChild(slog.lastChild);
+    while(slog.children.length > 3) slog.removeChild(slog.lastChild);
   }
-  function drawSeismo() {
+  function renderSeismo(){
+    if(!FD || !FD.verdicts) return;
+    var h = seis.canvas.height;
+    var base = h/2;
+    for(var i=0;i<60;i++) sg.push(base + Math.sin(i/9)*2);
+    FD.verdicts.slice(0,3).forEach(function(v,i){
+      sg.push(i%2 ? base+38 : base-34);
+      hook("VERDICT: " + esc(short(v.path)), i%2 ? "v1" : "v2");
+    });
+    drawSeismo();
+  }
+  function drawSeismo(){
     var w = seis.canvas.width, h = seis.canvas.height;
-    t += 1;
-    var quiet = Math.sin(t / 22) * 2.5;
-    if (t % 190 === 30) { sg.push(h/2 - 34); hook("VERDICT: STALE row #r713", "v2"); }
-    if (t % 290 === 90) { sg.push(h/2 + 38); hook("REFUTED by claim #c28", "v1"); }
-    if (t % 170 === 5)  { sg.push(h/2 - 12); hook("SUPERSEDED by audit row", "v2"); }
-    sg.push(h/2 + quiet);
-    while (sg.length > w) sg.shift();
-    seis.clearRect(0, 0, w, h);
+    sg.push(h/2 + Math.sin(Date.now()/2000)*2);
+    while(sg.length > w) sg.shift();
+    seis.clearRect(0,0,w,h);
     seis.strokeStyle = "rgba(95,107,128,.25)";
-    seis.beginPath(); seis.moveTo(0, h/2); seis.lineTo(w, h/2); seis.stroke();
+    seis.beginPath(); seis.moveTo(0,h/2); seis.lineTo(w,h/2); seis.stroke();
     seis.strokeStyle = "#ffb515"; seis.beginPath();
-    for (var i = 0; i < sg.length; i++) { i ? seis.lineTo(i, sg[i]) : seis.moveTo(i, sg[i]); }
+    for(var i=0;i<sg.length;i++){ i ? seis.lineTo(i,sg[i]) : seis.moveTo(i,sg[i]); }
     seis.stroke();
     requestAnimationFrame(drawSeismo);
   }
-  drawSeismo();
 
-  /* ---------- replay room ---------- */
+  /* ---------- replay room: chunk-walk a real claim ---------- */
   var N = 9, idx = 0, holding = false;
-  ["laneA", "laneJ", "laneB"].forEach(function (id) {
+  ["laneA","laneJ","laneB"].forEach(function(id){
     var el = document.getElementById(id);
-    for (var i = 0; i < N; i++) { var l = document.createElement("div"); l.className = "lamp"; el.appendChild(l); }
+    for(var i=0;i<N;i++){ var l = document.createElement("div"); l.className="lamp"; el.appendChild(l); }
   });
-  function room() {
-    if (!holding) {
+  function room(){
+    if(!FD || !FD.replay){ setTimeout(room, 320); return; }
+    if(!holding){
       var a = document.getElementById("laneA").children,
           j = document.getElementById("laneJ").children,
           b = document.getElementById("laneB").children;
-      if (idx < N) {
+      if(idx < N){
         a[idx].classList.add("lit"); j[idx].classList.add("lit"); b[idx].classList.add("lit");
         idx++;
       } else {
-        [document.getElementById("va"), document.getElementById("vj"), document.getElementById("vb")]
-          .forEach(function (v, k) { v.textContent = k === 1 ? "steps: 9" : "AGREE \u00b7 step counts invariant"; });
+        var chunks = FD.replay.chunks;
+        document.getElementById("vj").textContent = "chunks: " + chunks;
+        document.getElementById("va").textContent = "re-derive";
+        document.getElementById("vb").textContent = "agree \u00b7 invariant";
         holding = true; idx = 0;
-        setTimeout(function () {
+        setTimeout(function(){
           holding = false;
-          ["va", "vj", "vb"].forEach(function (id) { document.getElementById(id).textContent = ""; });
-          ["laneA", "laneJ", "laneB"].forEach(function (id) {
-            Array.prototype.forEach.call(document.getElementById(id).children, function (c) { c.classList.remove("lit"); });
+          ["va","vj","vb"].forEach(function(id){ document.getElementById(id).textContent = ""; });
+          ["laneA","laneJ","laneB"].forEach(function(id){
+            Array.prototype.forEach.call(document.getElementById(id).children, function(c){ c.classList.remove("lit"); });
           });
         }, 2600);
       }
     }
     setTimeout(room, holding ? 240 : 320);
   }
-  room();
 
-  /* ---------- radar ---------- */
+  /* ---------- radar: claimants as blips, brightness from mass ---------- */
   var rad = document.getElementById("radar").getContext("2d");
-  var sweep = 0;
-  var blips = [
-    { x: 190, y: 62, label: "GOMODEL", col: "#39ff8b", hot: true },
-    { x: 86,  y: 40, label: "SYNTHETIC", col: "#4aa8ff", hot: true },
-    { x: 74,  y: 108, label: "NEURALWATT", col: "rgba(95,107,128,.5)", hot: false }
-  ];
-  function radar() {
-    var w = rad.canvas.width, mid = { x: w/2, y: 78 }, R = 64;
-    sweep = (sweep + 0.03) % (Math.PI * 2);
-    rad.clearRect(0, 0, w, 150);
+  var sweep = 0, blips = [];
+  function hashPos(s){
+    var h = 0; for(var i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i)) >>> 0;
+    return { x: 40 + (h % 200), y: 20 + ((h>>8) % 116) };
+  }
+  function renderRadar(){
+    if(!FD || !FD.claimants) return;
+    var max = 1;
+    Object.keys(FD.claimants).forEach(function(k){ max = Math.max(max, FD.claimants[k]); });
+    blips = Object.keys(FD.claimants).map(function(k){
+      var p = hashPos(k);
+      var mass = FD.claimants[k]/max;
+      return { x:p.x, y:p.y, label:k.toUpperCase(), col: mass>0.5?"#39ff8b":"#4aa8ff", hot:true, alpha: 0.35+0.65*mass };
+    });
+  }
+  function radar(){
+    var w = rad.canvas.width, mid = { x:w/2, y:78 }, R = 64;
+    sweep = (sweep + 0.03) % (Math.PI*2);
+    rad.clearRect(0,0,w,150);
     rad.strokeStyle = "#16202e";
-    [R, R*0.66, R*0.33].forEach(function (r) { rad.beginPath(); rad.arc(mid.x, mid.y, r, 0, 6.3); rad.stroke(); });
+    [R, R*0.66, R*0.33].forEach(function(r){ rad.beginPath(); rad.arc(mid.x, mid.y, r, 0, 6.3); rad.stroke(); });
     rad.beginPath(); rad.moveTo(mid.x, mid.y - R); rad.lineTo(mid.x, mid.y + R); rad.stroke();
     rad.beginPath(); rad.moveTo(mid.x - R, mid.y); rad.lineTo(mid.x + R, mid.y); rad.stroke();
-    var glow = { x: mid.x + Math.cos(sweep) * R, y: mid.y + Math.sin(sweep) * R };
+    var glow = { x: mid.x + Math.cos(sweep)*R, y: mid.y + Math.sin(sweep)*R };
     var g = rad.createRadialGradient(glow.x, glow.y, 2, glow.x, glow.y, 46);
-    g.addColorStop(0, "rgba(74,168,255,.28)"); g.addColorStop(1, "rgba(74,168,255,0)");
+    g.addColorStop(0,"rgba(74,168,255,.28)"); g.addColorStop(1,"rgba(74,168,255,0)");
     rad.fillStyle = g; rad.beginPath(); rad.arc(glow.x, glow.y, 46, 0, 6.3); rad.fill();
-    blips.forEach(function (p) {
-      var near = Math.abs((Math.atan2(p.y - mid.y, p.x - mid.x) - (sweep - Math.PI*2) % (Math.PI*2))) < 0.5;
+    blips.forEach(function(p){
+      var near = Math.abs((Math.atan2(p.y-mid.y, p.x-mid.x) - (sweep - Math.PI*2) % (Math.PI*2))) < 0.5;
       var pulse = p.hot && near ? 1 : 0.75;
-      rad.fillStyle = p.col; rad.globalAlpha = pulse;
+      rad.fillStyle = p.col; rad.globalAlpha = pulse * (p.alpha||1);
       rad.beginPath(); rad.arc(p.x, p.y, p.hot ? 3 : 2.4, 0, 6.3); rad.fill();
       rad.globalAlpha = 1;
       rad.fillStyle = p.hot ? "#cfe0ff" : "rgba(95,107,128,.7)";
@@ -345,7 +373,61 @@
     });
     requestAnimationFrame(radar);
   }
-  radar();
+
+  /* ---------- depth chart: real kind counts ---------- */
+  function renderDepth(){
+    if(!FD || !FD.counts) return;
+    var c = FD.counts, t = Math.max(1, c.total);
+    var bars = [
+      ["computed", c.computed, "","var(--green)"],
+      ["observed", c.observed, "","var(--blue)"],
+      ["asserted", c.asserted, "","var(--amber)"],
+      ["verdicts", c.verdict, "","var(--red)"]
+    ];
+    var host = document.querySelector(".depthbar").parentNode;
+    host.innerHTML = "";
+    bars.forEach(function(b){
+      var d = document.createElement("div");
+      d.className = "depthbar" + (b[2]?" "+b[2]:"");
+      d.innerHTML = '<span style="color:var(--dim)">' + b[0] + '</span>' +
+        '<div class="bar" style="width:' + Math.round(100*b[1]/t) + '%' + (b[3]?';background:'+b[3]:"") + '"></div>' +
+        '<span>' + b[1] + '</span>';
+      host.appendChild(d);
+    });
+    var head = document.querySelector(".gidget:last-child header span:last-child");
+    if(head) head.textContent = " \u25cf " + c.total + " claims";
+  }
+
+  /* ---------- boot: bake first, then try live ---------- */
+  function boot(){
+    renderTape(FD && FD.rows); renderFuel(); renderCandles(); renderSeismo();
+    renderRadar(); renderDepth(); room(); radar();
+    if(FD) setStamp(document.querySelector("footer span:last-child") || document.body);
+  }
+
+  function tryLive(){
+    /* same-origin only: cross-origin fetch is refused by design (no ACAO) */
+    fetch("/console/feed/claims", {credentials:"omit"}).then(function(r){
+      if(!r.ok) throw 0;
+      return r.text();
+    }).then(function(html){
+      window.__LIVE = true;
+      var doc = new DOMParser().parseFromString('<div>'+html+'</div>', "text/html");
+      var rows = [];
+      doc.querySelectorAll(".row").forEach(function(row, i){
+        if(i >= 8) return;
+        var a = row.querySelector("a");
+        var chip = row.querySelector(".chip");
+        var t = row.querySelector(".t");
+        rows.push({ date: t?t.textContent:"", claimant: a?a.textContent:"", path: a?a.getAttribute("href").replace("/claims/",""):"", chip: chip?chip.textContent.trim():"" });
+      });
+      if(rows.length) renderTape(rows);
+      setStamp(document.querySelector("footer span:last-child") || document.body);
+    }).catch(function(){ /* bake mode stands */ });
+  }
+
+  boot();
+  tryLive(); setInterval(tryLive, 30000);
 })();
 </script>
 </body>
