@@ -2625,6 +2625,124 @@ let defs_usage pool _auth _req =
   in
   j_ok (`Assoc [ ("defs", `List rows) ])
 
+(* -- addressing (migration 0019, todo/c3208d48) ----------------------
+
+   The public message log.  A write carries to, text (and optional
+   kind/re) and is signed by the posting KEY: a payload carrying
+   "from" is refused, not ignored, so an agent cannot be talked into
+   spoofing.  Reads need no key - the log is public, the same rule as
+   the board - and the inbox cursor is server-side, so a restarted
+   consumer neither replays nor drops a row. *)
+
+let message_json (m : Store.message) : J.t =
+  `Assoc
+    [ ("seq", `Int (Int64.to_int m.Store.msg_seq))
+    ; ("from", `String m.Store.msg_sender)
+    ; ("to", `String m.Store.msg_recipient)
+    ; ("kind", `String m.Store.msg_kind)
+    ; ("re", opt_str m.Store.msg_re)
+    ; ("body", `String m.Store.msg_body)
+    ; ("hash", `String m.Store.msg_hash)
+    ; ("ts", `String m.Store.msg_created_at) ]
+
+let int_query req key =
+  match Web.query req key with
+  | None -> None
+  | Some s -> ( try Some (Int64.of_string (String.trim s)) with _ -> None)
+
+let message_limit req =
+  match int_query req "limit" with
+  | Some n when n > 0L && n <= 500L -> Int64.to_int n
+  | _ -> 100
+
+let messages_json msgs =
+  `Assoc
+    [ ("messages", `List (List.map message_json msgs))
+    ; ("count", `Int (List.length msgs)) ]
+
+let post_msg pool auth req =
+  guard (fun () ->
+      body_json req >>= function
+      | Error msg -> (j_err msg)
+      | Ok j -> (
+          match get_string_opt j "from" with
+          | Some _ ->
+              (j_err
+                 "no \"from\" field: a message is signed by the key that \
+                  posts it")
+          | None -> (
+              match (get_string_opt j "to", get_string_opt j "text") with
+              | None, _ -> (j_err "missing \"to\"")
+              | _, None -> (j_err "missing \"text\"")
+              | Some to_, Some text -> (
+                  let to_ = Store.normalize_name to_ in
+                  match Store.check_name_charset to_ with
+                  | Error e -> (j_err ~code:400 e)
+                  | Ok () ->
+                      let kind =
+                        match get_string_opt j "kind" with
+                        | Some k when String.trim k <> "" -> String.trim k
+                        | _ -> "note"
+                      in
+                      let re = get_string_opt j "re" in
+                      Store.send_message pool ~sender:auth.auth_name
+                        ~recipient:to_ ~kind ?re ~body:text ()
+                      >>= fun m -> (j_ok ~code:201 (message_json m))))))
+
+let get_messages pool req =
+  guard (fun () ->
+      let recipient = Option.map Store.normalize_name (Web.query req "to") in
+      let after = Option.value (int_query req "since") ~default:0L in
+      Store.list_messages pool ?recipient ~after ~limit:(message_limit req) ()
+      >>= fun msgs -> (j_ok (messages_json msgs)))
+
+let get_inbox pool req =
+  guard (fun () ->
+      let inbox = Store.normalize_name (Web.param req "name") in
+      match Store.check_name_charset inbox with
+      | Error e -> (j_err ~code:400 e)
+      | Ok () -> (
+          match int_query req "since" with
+          | Some since ->
+              Store.list_messages pool ~recipient:inbox ~after:since
+                ~limit:(message_limit req) ()
+              >>= fun msgs ->
+              let next =
+                List.fold_left
+                  (fun acc (m : Store.message) ->
+                    if m.Store.msg_seq > acc then m.Store.msg_seq else acc)
+                  since msgs
+              in
+              (j_ok
+                 (`Assoc
+                   [ ("inbox", `String inbox)
+                   ; ("since", `Int (Int64.to_int since))
+                   ; ("cursor", `Int (Int64.to_int next))
+                   ; ("messages", `List (List.map message_json msgs)) ]))
+          | None ->
+              Store.inbox_poll pool ~inbox ~limit:(message_limit req) ()
+              >>= fun (msgs, cursor) ->
+              (j_ok
+                 (`Assoc
+                   [ ("inbox", `String inbox)
+                   ; ("cursor", `Int (Int64.to_int cursor))
+                   ; ("messages", `List (List.map message_json msgs)) ]))))
+
+let get_inbox_status pool req =
+  guard (fun () ->
+      let inbox = Store.normalize_name (Web.param req "name") in
+      match Store.check_name_charset inbox with
+      | Error e -> (j_err ~code:400 e)
+      | Ok () ->
+          Store.inbox_status pool ~inbox
+          >>= fun (cursor, last_poll_at, pending, head) ->
+          (j_ok
+             (`Assoc
+               [ ("inbox", `String inbox)
+               ; ("cursor", `Int (Int64.to_int cursor))
+               ; ("last_poll_at", opt_str last_poll_at)
+               ; ("pending", `Int (Int64.to_int pending))
+               ; ("head", `Int (Int64.to_int head)) ])))
 (* -- router / server ------------------------------------------------- *)
 
 (* route list, mounted alongside the M8 page routes by bin/main.ml *)
@@ -2678,7 +2796,11 @@ let api_routes pool =
       ; Web.post "/api/route/put" (with_auth pool (post_route_put pool))
       ; Web.post "/api/route/delete" (with_auth pool (post_route_delete pool))
       ; Web.get "/api/route/get" (with_auth pool (get_route_get pool))
-      ; Web.get "/api/route/list" (with_auth pool (get_route_list pool)) ]
+        ; Web.get "/api/route/list" (with_auth pool (get_route_list pool))
+        ; Web.post "/api/msg" (with_auth pool (post_msg pool))
+        ; Web.get "/api/messages" (get_messages pool)
+        ; Web.get "/api/inbox/:name/status" (get_inbox_status pool)
+        ; Web.get "/api/inbox/:name" (get_inbox pool) ]
 
 (* the public artifact directory (pp-slice T3): scripts/deploy/build-public.sh
    writes src.tgz here at boot/refresh; absent file is a plain 404 *)

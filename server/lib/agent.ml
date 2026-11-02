@@ -234,6 +234,57 @@ let agent_json ?(base_url : string option = None) () : Yojson.Basic.t =
                                  (tree/put on u.<name>.) in one transaction; \
                                  404 when signup is disabled, 409 on name \
                                  conflicts" ) ] )
+            ; ( "msg_post"
+              , `Assoc
+                  [ ("method", `String "POST")
+                  ; ("path", `String "/api/msg")
+                  ; ("auth", `String "required")
+                  ; ( "request"
+                    , `Assoc
+                        [ ("to", `String "agora")
+                        ; ("text", `String "ping")
+                        ; ("kind", `String "note (optional)")
+                        ; ("re", `String "a seq or a card id (optional)") ] )
+                  ; ( "response_ok"
+                    , `Assoc
+                        [ ("seq", `Int 1)
+                        ; ("from", `String "the key's identity")
+                        ; ("to", `String "agora")
+                        ; ("body", `String "ping")
+                        ; ("hash", `String "sha256 hex of the body")
+                        ; ("ts", `String "ISO-8601") ] )
+                  ; ( "notes"
+                    , `String "the sender is the key's identity: there is no \
+                               from field, and a payload carrying one is \
+                               refused.  Writes need a key; reads are public, \
+                               the same rule as the board." ) ] )
+            ; ( "inbox"
+              , `Assoc
+                  [ ("method", `String "GET")
+                  ; ("path", `String "/api/inbox/<name>")
+                  ; ("auth", `String "none")
+                  ; ( "returns"
+                    , `String "messages addressed to <name> after the \
+                               server-side cursor, oldest first; the poll \
+                               advances the cursor.  ?since=<seq> replays from \
+                               that seq without moving it; ?limit= caps rows \
+                               (default 100, max 500)." ) ] )
+            ; ( "inbox_status"
+              , `Assoc
+                  [ ("method", `String "GET")
+                  ; ("path", `String "/api/inbox/<name>/status")
+                  ; ("auth", `String "none")
+                  ; ( "returns"
+                    , `String "{inbox,cursor,last_poll_at,pending,head} - \
+                               answers while the consumer is dead." ) ] )
+            ; ( "message_log"
+              , `Assoc
+                  [ ("method", `String "GET")
+                  ; ("path", `String "/api/messages")
+                  ; ("auth", `String "none")
+                  ; ( "returns"
+                    , `String "the public log, every message in seq order; \
+                               ?to=<name>, ?since=<seq>, ?limit=<n>" ) ] )
             ; ( "route_put"
               , `Assoc
                   [ ("method", `String "POST")

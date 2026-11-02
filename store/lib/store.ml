@@ -2499,3 +2499,131 @@ let fed_apply p ~actor ~dst_prefix ~src_prefix
                         apply acc rest
                   in
                   apply [] ops)))
+
+(* -- addressing: the public message log (migration 0019,
+   todo/c3208d48) ----------------------------------------------------
+
+   A message is an append-only row.  The sender is the identity the
+   posting KEY resolves to - never a request field - so spoofing is a
+   shape that does not exist rather than a check to forget.  Reads are
+   public: the log is a filtered view, not a security boundary, and
+   the board's rule carries over (no secrets ride a message).
+
+   The inbox cursor is server-side (message_cursors), so a consumer
+   that dies and restarts neither replays nor drops a row: a poll
+   without [since] advances it atomically, a poll with [since] replays
+   from that seq and leaves it alone. *)
+
+type message =
+  { msg_seq : int64
+  ; msg_sender : string
+  ; msg_recipient : string
+  ; msg_kind : string
+  ; msg_re : string option
+  ; msg_body : string
+  ; msg_hash : string
+  ; msg_created_at : string
+  }
+
+let select_message_cols =
+  "seq, sender, recipient, kind, re, body, body_hash, created_at::text"
+
+let message_of_row r =
+  { msg_seq = int64 r 0 "messages.seq"
+  ; msg_sender = text r 1 "messages.sender"
+  ; msg_recipient = text r 2 "messages.recipient"
+  ; msg_kind = text r 3 "messages.kind"
+  ; msg_re = opt_text r 4
+  ; msg_body = text r 5 "messages.body"
+  ; msg_hash = text r 6 "messages.body_hash"
+  ; msg_created_at = text r 7 "messages.created_at"
+  }
+
+let send_message p ~sender ~recipient ?(kind = "note") ?re ~body () =
+  Db.q
+    ~params:
+      [ p_str sender
+      ; p_str recipient
+      ; p_str kind
+      ; p_opt re
+      ; p_str body
+      ; p_str (Tuna.Hash.hex_of_string body)
+      ]
+    p
+    (Printf.sprintf
+       "INSERT INTO messages (sender, recipient, kind, re, body, body_hash) \
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING %s" select_message_cols)
+  >>= function
+  | [ r ] -> Direct.return (message_of_row r)
+  | n -> store_error "send_message: RETURNING gave %d rows" (List.length n)
+
+(* the public log: every message, or one recipient's, in seq order.
+   [after] is the caller's watermark; the default 0 replays from the
+   beginning. *)
+let list_messages p ?recipient ?(after = 0L) ?(limit = 100) () =
+  Db.q
+    ~params:[ p_opt recipient; p_int64 after; p_int limit ]
+    p
+    (Printf.sprintf
+       "SELECT %s FROM messages \
+        WHERE ($1::text IS NULL OR recipient = $1) AND seq > $2 \
+        ORDER BY seq ASC LIMIT $3" select_message_cols)
+  >>= fun rows -> Direct.return (List.map message_of_row rows)
+
+(* the cursor row, created on first touch and locked for the poll so
+   two concurrent consumers cannot both claim the same rows *)
+let inbox_cursor_conn c inbox =
+  Db.q_conn_unit
+    ~params:[ p_str inbox ] c
+    "INSERT INTO message_cursors (inbox) VALUES ($1) \
+     ON CONFLICT (inbox) DO NOTHING"
+  >>= fun () ->
+  Db.q_conn
+    ~params:[ p_str inbox ] c
+    "SELECT last_seq FROM message_cursors WHERE inbox = $1 FOR UPDATE"
+  >>= function
+  | [ r ] -> Direct.return (int64 r 0 "message_cursors.last_seq")
+  | n -> store_error "inbox_poll: cursor gave %d rows" (List.length n)
+
+let inbox_poll p ~inbox ?(limit = 100) () =
+  Db.with_tx p (fun c ->
+      inbox_cursor_conn c inbox >>= fun cursor ->
+      Db.q_conn
+        ~params:[ p_str inbox; p_int64 cursor; p_int limit ] c
+        (Printf.sprintf
+           "SELECT %s FROM messages WHERE recipient = $1 AND seq > $2 \
+            ORDER BY seq ASC LIMIT $3" select_message_cols)
+      >>= fun rows ->
+      let msgs = List.map message_of_row rows in
+      let next =
+        List.fold_left
+          (fun acc (m : message) -> if m.msg_seq > acc then m.msg_seq else acc)
+          cursor msgs
+      in
+      Db.q_conn_unit
+        ~params:[ p_int64 next; p_str inbox ] c
+        "UPDATE message_cursors SET last_seq = $1, last_poll_at = now() \
+         WHERE inbox = $2"
+      >>= fun () -> Direct.return (msgs, next))
+
+(* status answers while the consumer is dead: it reads the cursor row
+   and counts, and never waits on anything. *)
+let inbox_status p ~inbox =
+  Db.q
+    ~params:[ p_str inbox ] p
+    "WITH c AS (SELECT last_seq, last_poll_at FROM message_cursors \
+                WHERE inbox = $1) \
+     SELECT COALESCE((SELECT last_seq FROM c), 0), \
+            (SELECT last_poll_at::text FROM c), \
+            (SELECT count(*)::bigint FROM messages m WHERE m.recipient = $1 \
+               AND m.seq > COALESCE((SELECT last_seq FROM c), 0)), \
+            (SELECT COALESCE(max(seq), 0)::bigint FROM messages \
+               WHERE recipient = $1)"
+  >>= function
+  | [ r ] ->
+      Direct.return
+        ( int64 r 0 "message_cursors.last_seq"
+        , opt_text r 1
+        , int64 r 2 "pending"
+        , int64 r 3 "head" )
+  | n -> store_error "inbox_status: %d rows" (List.length n)
