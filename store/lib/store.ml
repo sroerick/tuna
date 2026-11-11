@@ -2627,3 +2627,211 @@ let inbox_status p ~inbox =
         , int64 r 2 "pending"
         , int64 r 3 "head" )
   | n -> store_error "inbox_status: %d rows" (List.length n)
+
+(* -- cron telemetry ingest (migration 0018-cron-runs.sql, sundial T1) --
+
+   A cron run is central telemetry: not a claim, not an interpreter
+   run - high cardinality, cited by run_id, its own table.  [box] is
+   always the identity the bearer names (the API refuses a payload
+   naming another box before a single row is written), so a compromised
+   box forges rows about itself and nothing else.  The shipper retries
+   blindly: UNIQUE (box, run_id) + ON CONFLICT DO UPDATE makes a
+   duplicate post a no-op and lets the later post supersede;
+   received_at (server time) is the only column central invents.
+   Nothing here names a command for a box to run: no dispatch path. *)
+
+type cron_run =
+  { cr_box : string
+  ; cr_run_id : string
+  ; cr_job : string option
+  ; cr_verdict : string option
+  ; cr_started_at : string option
+  ; cr_ended_at : string option
+  ; cr_detail : string
+  ; cr_received_at : string
+  }
+
+type cron_run_in =
+  { ci_run_id : string
+  ; ci_job : string option
+  ; ci_verdict : string option
+  ; ci_started_at : string option
+  ; ci_ended_at : string option
+  ; ci_detail : string
+  }
+
+let select_cron_run_cols =
+  "box, run_id, job, verdict, started_at::text, ended_at::text, \
+   detail::text, received_at::text"
+
+let cron_run_of_row r =
+  { cr_box = text r 0 "cron_runs.box"
+  ; cr_run_id = text r 1 "cron_runs.run_id"
+  ; cr_job = opt_text r 2
+  ; cr_verdict = opt_text r 3
+  ; cr_started_at = opt_text r 4
+  ; cr_ended_at = opt_text r 5
+  ; cr_detail = Option.value (opt_text r 6) ~default:"{}"
+  ; cr_received_at = text r 7 "cron_runs.received_at"
+  }
+
+let upsert_cron_run_conn c ~box (r : cron_run_in) =
+  Db.q_conn_unit
+    ~params:
+      [ p_str box
+      ; p_str r.ci_run_id
+      ; p_opt r.ci_job
+      ; p_opt r.ci_verdict
+      ; p_opt r.ci_started_at
+      ; p_opt r.ci_ended_at
+      ; p_str r.ci_detail ]
+    c
+    "INSERT INTO cron_runs (box, run_id, job, verdict, started_at, ended_at, \
+     detail) VALUES ($1, $2, $3, $4, $5::timestamptz, $6::timestamptz, \
+     $7::jsonb) ON CONFLICT (box, run_id) DO UPDATE SET \
+     job = EXCLUDED.job, verdict = EXCLUDED.verdict, \
+     started_at = EXCLUDED.started_at, ended_at = EXCLUDED.ended_at, \
+     detail = EXCLUDED.detail, received_at = now()"
+
+(* one transaction per batch: a refused or failed batch writes nothing,
+   and a duplicate post supersedes in place rather than duplicating *)
+let ingest_cron_runs p ~box ~(runs : cron_run_in list) =
+  Db.with_tx p (fun c ->
+      let rec go = function
+        | [] -> Direct.return ()
+        | r :: rest -> upsert_cron_run_conn c ~box r >>= fun () -> go rest
+      in
+      go runs
+      >>= fun () ->
+      match runs with
+      | [] -> Direct.return []
+      | _ ->
+          Db.q_conn
+            ~params:
+              [ p_str box
+              ; p_text_list (List.map (fun r -> r.ci_run_id) runs) ]
+            c
+            (Printf.sprintf
+               "SELECT %s FROM cron_runs WHERE box = $1 AND \
+                run_id = ANY($2::text[]) ORDER BY run_id" select_cron_run_cols)
+          >>= fun rows -> Direct.return (List.map cron_run_of_row rows))
+
+let cron_runs_filter ?box ?job ?since ?verdict () =
+  ( " WHERE ($1::text IS NULL OR box = $1) \
+     AND ($2::text IS NULL OR job = $2) \
+     AND ($3::timestamptz IS NULL OR received_at >= $3::timestamptz) \
+     AND ($4::text IS NULL OR verdict = $4)"
+  , [ p_opt box; p_opt job; p_opt since; p_opt verdict ] )
+
+let list_cron_runs p ?box ?job ?since ?verdict ?(limit = 100) ?(offset = 0) () =
+  let where, params = cron_runs_filter ?box ?job ?since ?verdict () in
+  Db.q
+    ~params:(params @ [ p_int limit; p_int offset ])
+    p
+    (Printf.sprintf
+       "SELECT %s FROM cron_runs%s ORDER BY received_at DESC, run_id \
+        LIMIT $5 OFFSET $6"
+       select_cron_run_cols where)
+  >>= fun rows -> Direct.return (List.map cron_run_of_row rows)
+
+let count_cron_runs p ?box ?job ?since ?verdict () =
+  let where, params = cron_runs_filter ?box ?job ?since ?verdict () in
+  Db.q ~params p (Printf.sprintf "SELECT count(*)::bigint FROM cron_runs%s" where)
+  >>= function
+  | [ r ] -> Direct.return (int64 r 0 "count")
+  | n -> store_error "count_cron_runs: %d rows" (List.length n)
+
+type cron_job =
+  { cj_box : string
+  ; cj_job : string
+  ; cj_schedule : string option
+  ; cj_enabled : bool
+  ; cj_detail : string
+  ; cj_updated_at : string
+  }
+
+let select_cron_job_cols =
+  "box, job, schedule, enabled, detail::text, updated_at::text"
+
+let cron_job_of_row r =
+  { cj_box = text r 0 "cron_jobs.box"
+  ; cj_job = text r 1 "cron_jobs.job"
+  ; cj_schedule = opt_text r 2
+  ; cj_enabled = bool r 3 "cron_jobs.enabled"
+  ; cj_detail = Option.value (opt_text r 4) ~default:"{}"
+  ; cj_updated_at = text r 5 "cron_jobs.updated_at"
+  }
+
+(* the box's schedule snapshot, replaced whole: the box is the only
+   writer of its own job list, and a removed job stops existing *)
+let replace_cron_jobs p ~box ~(jobs : (string * string option * bool * string) list) =
+  Db.with_tx p (fun c ->
+      Db.q_conn_unit ~params:[ p_str box ] c
+        "DELETE FROM cron_jobs WHERE box = $1"
+      >>= fun () ->
+      let rec go = function
+        | [] -> Direct.return ()
+        | (job, schedule, enabled, detail) :: rest ->
+            Db.q_conn_unit
+              ~params:
+                [ p_str box; p_str job; p_opt schedule; p_bool enabled
+                ; p_str detail ]
+              c
+              "INSERT INTO cron_jobs (box, job, schedule, enabled, detail) \
+               VALUES ($1, $2, $3, $4, $5::jsonb)"
+            >>= fun () -> go rest
+      in
+      go jobs
+      >>= fun () ->
+      Db.q_conn
+        ~params:[ p_str box ] c
+        (Printf.sprintf
+           "SELECT %s FROM cron_jobs WHERE box = $1 ORDER BY job"
+           select_cron_job_cols)
+      >>= fun rows -> Direct.return (List.map cron_job_of_row rows))
+
+let list_cron_jobs p ?box () =
+  Db.q
+    ~params:[ p_opt box ] p
+    (Printf.sprintf
+       "SELECT %s FROM cron_jobs WHERE ($1::text IS NULL OR box = $1) \
+        ORDER BY box, job" select_cron_job_cols)
+  >>= fun rows -> Direct.return (List.map cron_job_of_row rows)
+
+type cron_heartbeat =
+  { ch_box : string
+  ; ch_name : string
+  ; ch_last_seen : string
+  ; ch_detail : string
+  }
+
+let select_cron_heartbeat_cols =
+  "box, name, last_seen::text, detail::text"
+
+let cron_heartbeat_of_row r =
+  { ch_box = text r 0 "cron_heartbeats.box"
+  ; ch_name = text r 1 "cron_heartbeats.name"
+  ; ch_last_seen = text r 2 "cron_heartbeats.last_seen"
+  ; ch_detail = Option.value (opt_text r 3) ~default:"{}"
+  }
+
+let put_cron_heartbeat p ~box ?(name = "") ~detail () =
+  Db.q
+    ~params:[ p_str box; p_str name; p_str detail ]
+    p
+    (Printf.sprintf
+       "INSERT INTO cron_heartbeats (box, name, detail) VALUES ($1, $2, \
+        $3::jsonb) ON CONFLICT (box, name) DO UPDATE SET \
+        last_seen = now(), detail = EXCLUDED.detail RETURNING %s"
+       select_cron_heartbeat_cols)
+  >>= function
+  | [ r ] -> Direct.return (cron_heartbeat_of_row r)
+  | n -> store_error "put_cron_heartbeat: %d rows" (List.length n)
+
+let list_cron_heartbeats p ?box () =
+  Db.q
+    ~params:[ p_opt box ] p
+    (Printf.sprintf
+       "SELECT %s FROM cron_heartbeats WHERE ($1::text IS NULL OR box = $1) \
+        ORDER BY box, name" select_cron_heartbeat_cols)
+  >>= fun rows -> Direct.return (List.map cron_heartbeat_of_row rows)
