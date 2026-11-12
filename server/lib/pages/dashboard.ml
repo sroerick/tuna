@@ -32,12 +32,12 @@ let runs_table pool =
 </div>|}
        rows)
 
-let view pool user _req =
+let view ?(above = "") pool user _req =
   runs_table pool
   >>= fun table ->
   L.page ~user ~title:"tuna — runs"
        (Printf.sprintf
-          {|<h2>runs</h2>
+          {|%s<h2>runs</h2>
 <section>%s
 <noscript><p><a href="/frag/runs">refresh</a></p></noscript></section>
 <section>
@@ -47,7 +47,7 @@ let view pool user _req =
 <button type="submit">open</button>
 </form>
 </section>|}
-          table)
+          above table)
 
 (* The htmx refresh fragment (also the no-JS fallback view). *)
 let frag_runs pool user req =
