@@ -216,14 +216,18 @@ inside).  the book (<code>tuna.borg</code> + <code>borg/*.borg</code>)
 is the source of truth.</p></section>|}
        signup_block)
 
-(* the front door (2026-10-27 public-face revamp): a session sees the
-   dashboard, an anonymous visitor lands on the new welcome — PP's
-   home-flip shape. *)
+(* the front door: TU1 — GET / is the filmstrip.  Anonymous GET / answers
+   200 with the strip of public app tiles (Pages.Filmstrip owns the list;
+   no layout edit to add a tile), and a session gets the same strip with
+   the dashboard under it.  Nothing here is private: the strip is the
+   public face, so this page never redirects. *)
 let home pool req =
   A.identity_of_req pool req
   >>= function
-  | None -> Web.redirect req "/welcome"
-  | Some user -> Dashboard.view pool user req
+  | None -> return (Filmstrip.render ())
+  | Some user ->
+      Dashboard.runs_table pool
+      >>= fun table -> return (Filmstrip.render_with ~user table)
 
 (* one honest line per registered prim; an unnamed prim still renders
    rather than hiding from the census. *)
