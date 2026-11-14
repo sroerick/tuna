@@ -289,3 +289,16 @@
  (action
   (bash
    "bash %{workspace_root}/scripts/test-store.sh %{exe:messages_tests.exe} ../migrations tuna_test_messages")))
+
+; TU3 evaluation gate (the metrics) for GET / — the filmstrip.  The tile set
+; is read from its one home, ../server/lib/pages/filmstrip.ml, never from the
+; page's own HTML.  The gate is node + chromium over CDP; chromium drives the
+; 390x844 and 1280x800 metrics.  Node absent is the ONLY skip in this stanza —
+; the node invocation is bare, so a regression exits nonzero with no manual
+; step and no `|| true` on the way.
+(rule
+ (alias runtest)
+ (deps ../tools/filmstrip_cdp.mjs ../server/lib/pages/filmstrip.ml)
+ (action
+  (bash
+   "if command -v node >/dev/null 2>&1; then node %{workspace_root}/tools/filmstrip_cdp.mjs; else echo 'filmstrip_cdp: skip (node absent)'; fi")))
