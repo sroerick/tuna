@@ -82,7 +82,7 @@ let strip_html () =
 <h2>tuna</h2>
 <p class="muted">the tree calculus habitat.  everything on this strip is
 public — no cookie, no token, no JavaScript required: pick a door.</p>
-<div class="strip">
+<div class="strip" id="filmstrip">
 %s
 </div>
 <p class="muted">new here?  <a href="/welcome">/welcome</a> is the long
