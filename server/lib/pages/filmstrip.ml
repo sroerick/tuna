@@ -201,8 +201,13 @@ let live_stamps pool =
 
 (* -- markup -------------------------------------------------------------- *)
 
+(* a live stamp that came back blank must not blank the tile: the baked
+   stamp is the fallback, so every tile carries one honest line in both
+   states (the no-JS page and the polled fragment). *)
 let stamp_of stamps (t : tile) =
-  match List.assoc_opt t.name stamps with Some s -> s | None -> t.stamp
+  match List.assoc_opt t.name stamps with
+  | Some s when String.trim s <> "" -> s
+  | _ -> t.stamp
 
 (* every tile is a plain anchor with an href and a stamp; the href is the
    whole navigation, so the tile opens with JS disabled. *)
