@@ -63,9 +63,25 @@ function finish() {
 
 function declaredTiles() {
   const src = fs.readFileSync(SRC, "utf8");
-  const re = /\{\s*glyph\s*=\s*"((?:[^"\\]|\\.)*)"\s*;\s*name\s*=\s*"((?:[^"\\]|\\.)*)"\s*;\s*summary\s*=\s*"((?:[^"\\]|\\.)*)"\s*;\s*href\s*=\s*"((?:[^"\\]|\\.)*)"\s*\}/g;
+  /* The tile list is `let tiles = [ … ]`; each field is read by NAME rather
+     than by one positional pattern, so a field the record grows later (TU2
+     added `stamp` after `href`) cannot make the gate blind to the tiles. */
+  const list = src.match(/let tiles =\s*\[([\s\S]*?)\]/);
+  const body = list ? list[1] : "";
+  const field = (rec, k) => {
+    const m = rec.match(new RegExp(`\\b${k}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+    return m ? m[1] : "";
+  };
   const out = [];
-  for (const m of src.matchAll(re)) out.push({ glyph: m[1], name: m[2], summary: m[3], href: m[4] });
+  for (const m of body.matchAll(/\{([^}]*)\}/g)) {
+    const rec = m[1];
+    out.push({
+      glyph: field(rec, "glyph"),
+      name: field(rec, "name"),
+      summary: field(rec, "summary"),
+      href: field(rec, "href"),
+    });
+  }
   return out;
 }
 

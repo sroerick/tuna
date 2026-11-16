@@ -290,6 +290,20 @@
   (bash
    "bash %{workspace_root}/scripts/test-store.sh %{exe:messages_tests.exe} ../migrations tuna_test_messages")))
 
+; TU2 live tile data: the strip's gidget feed.  Pure - the tile list is read
+; from its one home (../server/lib/pages/filmstrip.ml) through tuna_server, so
+; a tile cannot drift from what GET / renders.  No Postgres, no HTTP, no node.
+(executable
+ (name test_filmstrip_feed)
+ (modules test_filmstrip_feed)
+ (libraries tuna_server alcotest))
+
+(rule
+ (alias runtest)
+ (deps test_filmstrip_feed.exe)
+ (action
+  (run %{exe:test_filmstrip_feed.exe})))
+
 ; TU3 evaluation gate (the metrics) for GET / — the filmstrip.  The tile set
 ; is read from its one home, ../server/lib/pages/filmstrip.ml, never from the
 ; page's own HTML.  The gate is node + chromium over CDP; chromium drives the
