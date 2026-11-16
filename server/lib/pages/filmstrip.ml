@@ -173,6 +173,12 @@ let code_stamp () =
    means the tile, /claims and the console census cannot drift apart. *)
 let census_limit = S.census_limit
 
+(* a census that fills the window is a FLOOR, not a total: LIMIT truncates
+   silently, so a stamp that prints "N claims" from a full window understates
+   the registry the moment it grows past the ceiling.  Ask whether the window
+   filled instead of trusting the row count as an exact total. *)
+let census_is_full ?(limit = census_limit) rows = List.length rows >= limit
+
 (* the newest log entry, asked of the store's newest-row query - never
    [list_messages] with a limit (that query is oldest-first: its last row
    is row N, not the latest). *)
@@ -191,13 +197,19 @@ let live_stamps pool =
      audit- and citation- projections, so taking the newest of all rows
      would stamp a date no claim was published on. *)
   let newest = date10 (newest_updated claims) in
+  (* a filled window counts a floor, so the stamp says "N+" rather than
+     printing a total the registry has already passed. *)
+  let count_stamp noun n =
+    if census_is_full census then Printf.sprintf "%d+ %s" n noun
+    else Printf.sprintf "%d %s" n noun
+  in
   let claims_stamp =
-    Printf.sprintf "%d claims%s" (List.length claims)
+    Printf.sprintf "%s%s" (count_stamp "claims" (List.length claims))
       (if newest = "" then "" else Printf.sprintf ", newest %s" newest)
   in
   return
     [ ("claims", claims_stamp)
-    ; ("console", Printf.sprintf "%d verdicts" (List.length verdicts))
+    ; ("console", count_stamp "verdicts" (List.length verdicts))
     ; ("messages", message_stamp newest_msg)
     ; ("code", code_stamp ())
     ; ("health", Printf.sprintf "ok %s UTC" (utc_clock ())) ]
