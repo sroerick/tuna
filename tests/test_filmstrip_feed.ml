@@ -105,6 +105,29 @@ let test_census_is_not_saturated () =
     "the tile census is at least the store's shared census ceiling" true
     (F.census_limit >= Tuna_store.Store.census_limit)
 
+(* the messages stamp is the NEWEST row, asked of the store's own newest-row
+   query ([newest_message], ORDER BY seq DESC LIMIT 1).  [list_messages] is a
+   replay log on purpose — ORDER BY seq ASC LIMIT — so a "latest" stamp taken
+   as the last row of a limited replay names row N forever once the log is
+   longer than N, which is a stamp that silently stops moving.  This pins the
+   stamp to a real row's created_at instead. *)
+let sample_message : Tuna_store.Store.message =
+  { msg_seq = 7L
+  ; msg_sender = "a"
+  ; msg_recipient = "b"
+  ; msg_kind = "note"
+  ; msg_re = None
+  ; msg_body = "hi"
+  ; msg_hash = "h"
+  ; msg_created_at = "2026-10-27 12:00:00+00"
+  }
+
+let test_message_stamp_is_newest () =
+  Alcotest.(check string) "an empty log says so" "no messages yet"
+    (F.message_stamp None);
+  Alcotest.(check string) "the stamp is the newest row's date"
+    "last message 2026-10-27" (F.message_stamp (Some sample_message))
+
 (* LAW 1 (anonymous-200): the strip's own page and every tile target are
    public surfaces; no tile points at a session surface such as /login,
    /grants or /identities, all of which would 303 or 401 an anonymous
@@ -129,5 +152,7 @@ let () =
         ; Alcotest.test_case "live stamps" `Quick test_live_stamps
         ; Alcotest.test_case "census is not saturated" `Quick
             test_census_is_not_saturated
+        ; Alcotest.test_case "message stamp is newest" `Quick
+            test_message_stamp_is_newest
         ; Alcotest.test_case "strip is anonymous 200" `Quick
             test_strip_is_anonymous ] ) ]
