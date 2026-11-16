@@ -187,7 +187,10 @@ let live_stamps pool =
   S.newest_message pool () >>= fun newest_msg ->
   let claims = List.filter is_claim_row census in
   let verdicts = List.filter is_verdict_row census in
-  let newest = date10 (newest_updated census) in
+  (* "newest" is the newest CLAIM row: the census also returns verdict-,
+     audit- and citation- projections, so taking the newest of all rows
+     would stamp a date no claim was published on. *)
+  let newest = date10 (newest_updated claims) in
   let claims_stamp =
     Printf.sprintf "%d claims%s" (List.length claims)
       (if newest = "" then "" else Printf.sprintf ", newest %s" newest)
