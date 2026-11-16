@@ -89,10 +89,38 @@ let test_live_stamps () =
        (F.tile_html ~stamps:[ ("nobody", "x") ] (List.hd F.tiles))
        (List.hd F.tiles).F.stamp)
 
+(* the claims count must be a real census, not a saturated window: the store's
+   [list_citation_paths] default is 200 (store/lib/store.ml), and a tile count
+   clamped at 200 can never equal the registry's own total.  The tile module
+   therefore asks for an explicit limit, and this pins it above the default. *)
+let test_census_is_not_saturated () =
+  Alcotest.(check bool)
+    "the census limit is explicit and above the store default 200" true
+    (F.census_limit > 200)
+
+(* LAW 1 (anonymous-200): the strip's own page and every tile target are
+   public surfaces; no tile points at a session surface such as /login,
+   /grants or /identities, all of which would 303 or 401 an anonymous
+   reader and break the strip. *)
+let test_strip_is_anonymous () =
+  Alcotest.(check bool)
+    "the strip is the anonymous 200 home, not a private one" true
+    (contains strip {|class="strip"|} && contains strip {|href="/|});
+  List.iter
+    (fun (t : F.tile) ->
+      Alcotest.(check bool)
+        (t.F.name ^ ": no session surface is tiled") false
+        (List.mem t.F.href [ "/login"; "/logout"; "/grants"; "/identities" ]))
+    F.tiles
+
 let () =
   Alcotest.run "filmstrip_feed"
     [ ( "strip"
       , [ Alcotest.test_case "feed wiring" `Quick test_feed_wiring
         ; Alcotest.test_case "tiles are links with stamps" `Quick
             test_tiles_are_links_with_stamps
-        ; Alcotest.test_case "live stamps" `Quick test_live_stamps ] ) ]
+        ; Alcotest.test_case "live stamps" `Quick test_live_stamps
+        ; Alcotest.test_case "census is not saturated" `Quick
+            test_census_is_not_saturated
+        ; Alcotest.test_case "strip is anonymous 200" `Quick
+            test_strip_is_anonymous ] ) ]

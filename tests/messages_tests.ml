@@ -175,6 +175,31 @@ let test_refusals () =
   Alcotest.(check string) "re echoed" "7" (str (json ok) "re");
   return ()
 
+(* the "latest" stamp for a tile must be the newest row, not the last row of
+   an oldest-first window: [list_messages] is a replay log (ORDER BY seq ASC
+   LIMIT n), so a latest computed from it names row n once the log exceeds n.
+   [newest_message] is its own ORDER BY seq DESC query; this pins it past the
+   default window so the regression cannot come back silently. *)
+let test_newest_message_is_latest () =
+  setup () >>= fun p ->
+  let rec send i =
+    if i > 250 then return ()
+    else
+      S.send_message p ~sender:"gregor" ~recipient:"stampbox"
+        ~body:(Printf.sprintf "row %d" i) ()
+      >>= fun _ -> send (i + 1)
+  in
+  send 1 >>= fun () ->
+  S.newest_message p ~recipient:"stampbox" () >>= fun newest ->
+  (match newest with
+   | None -> Alcotest.fail "newest_message: no row"
+   | Some m ->
+       Alcotest.(check string) "the latest row, not the window's last"
+         "row 250" m.S.msg_body);
+  S.newest_message p ~recipient:"empty-stampbox" () >>= fun none ->
+  Alcotest.(check bool) "an empty log is None" true (none = None);
+  return ()
+
 let test_cursor_survives_restart () =
   setup () >>= fun p ->
   S.send_message p ~sender:"gregor" ~recipient:"restartbox" ~body:"once" ()
@@ -206,5 +231,7 @@ let () =
             ; t "status answers with no consumer"
                 test_status_answers_with_no_consumer
             ; t "bad payloads are refused" test_refusals
+            ; t "the newest message is the latest row"
+                test_newest_message_is_latest
             ; t "the cursor survives a restart" test_cursor_survives_restart
             ] ) ]

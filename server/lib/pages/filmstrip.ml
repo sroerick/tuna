@@ -78,7 +78,12 @@ let tiles =
     ; name = "health"
     ; summary = "the liveness probe: version, uptime, db reachable"
     ; href = "/health"
-    ; stamp = "liveness probe" } ]
+    ; stamp = "liveness probe" }
+  ; { glyph = "✉"
+    ; name = "messages"
+    ; summary = "the public message log: append-only, readable by anyone"
+    ; href = "/api/messages"
+    ; stamp = "append-only log" } ]
 
 (* -- live data (the feed's half of the gidget pattern) ----------------- *)
 
@@ -167,8 +172,18 @@ let code_stamp () =
    saturate.  Bounded, but bounded above any plausible registry. *)
 let census_limit = 100000
 
+(* the newest log entry, asked of the store's newest-row query - never
+   [list_messages] with a limit (that query is oldest-first: its last row
+   is row N, not the latest). *)
+let message_stamp = function
+  | None -> "no messages yet"
+  | Some (m : S.message) -> (
+      let ts = date10 m.S.msg_created_at in
+      if ts = "" then "append-only log" else "last message " ^ ts)
+
 let live_stamps pool =
   S.list_citation_paths pool ~limit:census_limit () >>= fun census ->
+  S.newest_message pool () >>= fun newest_msg ->
   let claims = List.filter is_claim_row census in
   let verdicts = List.filter is_verdict_row census in
   let newest = date10 (newest_updated census) in
@@ -179,6 +194,7 @@ let live_stamps pool =
   return
     [ ("claims", claims_stamp)
     ; ("console", Printf.sprintf "%d verdicts" (List.length verdicts))
+    ; ("messages", message_stamp newest_msg)
     ; ("code", code_stamp ())
     ; ("health", Printf.sprintf "ok %s UTC" (utc_clock ())) ]
 

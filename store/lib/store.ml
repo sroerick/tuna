@@ -2110,8 +2110,17 @@ let path_list p ?(limit = 1000) ?(after = "") ~prefix () =
    being mistaken for one.
 
    Host-side page read, not a prim: the whole-namespace scan path_list
-   refuses is fine here as a bounded LIKE census. *)
-let list_citation_paths p ?(limit = 200) () =
+   refuses is fine here as a bounded LIKE census.
+
+   The window is SHARED, not per-caller: the old default of 200 truncated
+   the census, so every page that counted rows from the same call reported
+   a number clamped at 200 and silently stopped agreeing with the registry
+   (the strip's claims tile versus GET /claims).  One ceiling above any
+   plausible registry, used as the default by every page, keeps counts and
+   listings equal. *)
+let census_limit = 100000
+
+let list_citation_paths p ?(limit = census_limit) () =
   Db.q ~params:[ p_int limit ] p
     "SELECT path, value_hash, version, owner, updated_at::text FROM tree_paths \
      WHERE path LIKE '%citation-%' OR path LIKE '%.audit-%' \
@@ -2569,6 +2578,22 @@ let list_messages p ?recipient ?(after = 0L) ?(limit = 100) () =
         WHERE ($1::text IS NULL OR recipient = $1) AND seq > $2 \
         ORDER BY seq ASC LIMIT $3" select_message_cols)
   >>= fun rows -> Direct.return (List.map message_of_row rows)
+
+(* the newest message in the log.  [list_messages] is deliberately
+   OLDEST-first (it is a replay log: [after] is a watermark), so asking it
+   for a limit of N and taking the last row names row N once the log
+   exceeds N — a "latest" stamp computed that way is a lie the moment the
+   log grows.  The newest row is its own query, ORDER BY seq DESC. *)
+let newest_message p ?recipient () =
+  Db.q
+    ~params:[ p_opt recipient ]
+    p
+    (Printf.sprintf
+       "SELECT %s FROM messages WHERE ($1::text IS NULL OR recipient = $1) \
+        ORDER BY seq DESC LIMIT 1" select_message_cols)
+  >>= fun rows ->
+  Direct.return
+    (match rows with [] -> None | r :: _ -> Some (message_of_row r))
 
 (* the cursor row, created on first touch and locked for the poll so
    two concurrent consumers cannot both claim the same rows *)
