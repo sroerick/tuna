@@ -128,6 +128,18 @@ let test_message_stamp_is_newest () =
   Alcotest.(check string) "the stamp is the newest row's date"
     "last message 2026-10-27" (F.message_stamp (Some sample_message))
 
+(* a census window that FILLS the ceiling is a FLOOR, not a total: LIMIT
+   truncates silently, so a full window printing "N claims" understates the
+   registry the moment it grows past the ceiling.  The stamp must say "N+" in
+   that case, i.e. the tile must never claim a total it cannot know. *)
+let test_full_census_is_a_floor () =
+  Alcotest.(check bool) "an empty census is not full" false
+    (F.census_is_full ~limit:3 []);
+  Alcotest.(check bool) "a short census is not full" false
+    (F.census_is_full ~limit:3 [ "a"; "b" ]);
+  Alcotest.(check bool) "a filled census is a floor" true
+    (F.census_is_full ~limit:3 [ "a"; "b"; "c" ])
+
 (* LAW 1 (anonymous-200): the strip's own page and every tile target are
    public surfaces; no tile points at a session surface such as /login,
    /grants or /identities, all of which would 303 or 401 an anonymous
@@ -154,5 +166,7 @@ let () =
             test_census_is_not_saturated
         ; Alcotest.test_case "message stamp is newest" `Quick
             test_message_stamp_is_newest
+        ; Alcotest.test_case "full census is a floor" `Quick
+            test_full_census_is_a_floor
         ; Alcotest.test_case "strip is anonymous 200" `Quick
             test_strip_is_anonymous ] ) ]
