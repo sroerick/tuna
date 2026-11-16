@@ -90,6 +90,10 @@ let open_routes pool =
     ; Web.get "/console/feed/stats" (Console.feed_stats pool None)
     ; Web.get "/console/feed/code" (Console.feed_code pool None)
     ; Web.get "/console/feed/charts" (Console.feed_charts pool None)
+    (* TU2: the home strip's gidget feed - the same tile markup GET / bakes,
+       re-rendered with live counts and stamps.  Same-origin, anonymous,
+       read-only GET (routes.borg law 2: reserved surface pinned here). *)
+    ; Web.get "/console/feed/strip" (Filmstrip.feed pool None)
     ; Web.get "/agent.txt" (Public.agent_txt pool)
       ; Web.get "/agent" (Public.agent_page pool)
     ; Web.get "/.well-known/agent.json" (Public.agent_json pool)

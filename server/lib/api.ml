@@ -2625,6 +2625,326 @@ let defs_usage pool _auth _req =
   in
   j_ok (`Assoc [ ("defs", `List rows) ])
 
+(* -- addressing (migration 0019, todo/c3208d48) ----------------------
+
+   The public message log.  A write carries to, text (and optional
+   kind/re) and is signed by the posting KEY: a payload carrying
+   "from" is refused, not ignored, so an agent cannot be talked into
+   spoofing.  Reads need no key - the log is public, the same rule as
+   the board - and the inbox cursor is server-side, so a restarted
+   consumer neither replays nor drops a row. *)
+
+let message_json (m : Store.message) : J.t =
+  `Assoc
+    [ ("seq", `Int (Int64.to_int m.Store.msg_seq))
+    ; ("from", `String m.Store.msg_sender)
+    ; ("to", `String m.Store.msg_recipient)
+    ; ("kind", `String m.Store.msg_kind)
+    ; ("re", opt_str m.Store.msg_re)
+    ; ("body", `String m.Store.msg_body)
+    ; ("hash", `String m.Store.msg_hash)
+    ; ("ts", `String m.Store.msg_created_at) ]
+
+let int_query req key =
+  match Web.query req key with
+  | None -> None
+  | Some s -> ( try Some (Int64.of_string (String.trim s)) with _ -> None)
+
+let message_limit req =
+  match int_query req "limit" with
+  | Some n when n > 0L && n <= 500L -> Int64.to_int n
+  | _ -> 100
+
+let messages_json msgs =
+  `Assoc
+    [ ("messages", `List (List.map message_json msgs))
+    ; ("count", `Int (List.length msgs)) ]
+
+let post_msg pool auth req =
+  guard (fun () ->
+      body_json req >>= function
+      | Error msg -> (j_err msg)
+      | Ok j -> (
+          match get_string_opt j "from" with
+          | Some _ ->
+              (j_err
+                 "no \"from\" field: a message is signed by the key that \
+                  posts it")
+          | None -> (
+              match (get_string_opt j "to", get_string_opt j "text") with
+              | None, _ -> (j_err "missing \"to\"")
+              | _, None -> (j_err "missing \"text\"")
+              | Some to_, Some text -> (
+                  let to_ = Store.normalize_name to_ in
+                  match Store.check_name_charset to_ with
+                  | Error e -> (j_err ~code:400 e)
+                  | Ok () ->
+                      let kind =
+                        match get_string_opt j "kind" with
+                        | Some k when String.trim k <> "" -> String.trim k
+                        | _ -> "note"
+                      in
+                      let re = get_string_opt j "re" in
+                      Store.send_message pool ~sender:auth.auth_name
+                        ~recipient:to_ ~kind ?re ~body:text ()
+                      >>= fun m -> (j_ok ~code:201 (message_json m))))))
+
+let get_messages pool req =
+  guard (fun () ->
+      let recipient = Option.map Store.normalize_name (Web.query req "to") in
+      let after = Option.value (int_query req "since") ~default:0L in
+      Store.list_messages pool ?recipient ~after ~limit:(message_limit req) ()
+      >>= fun msgs -> (j_ok (messages_json msgs)))
+
+let get_inbox pool req =
+  guard (fun () ->
+      let inbox = Store.normalize_name (Web.param req "name") in
+      match Store.check_name_charset inbox with
+      | Error e -> (j_err ~code:400 e)
+      | Ok () -> (
+          match int_query req "since" with
+          | Some since ->
+              Store.list_messages pool ~recipient:inbox ~after:since
+                ~limit:(message_limit req) ()
+              >>= fun msgs ->
+              let next =
+                List.fold_left
+                  (fun acc (m : Store.message) ->
+                    if m.Store.msg_seq > acc then m.Store.msg_seq else acc)
+                  since msgs
+              in
+              (j_ok
+                 (`Assoc
+                   [ ("inbox", `String inbox)
+                   ; ("since", `Int (Int64.to_int since))
+                   ; ("cursor", `Int (Int64.to_int next))
+                   ; ("messages", `List (List.map message_json msgs)) ]))
+          | None ->
+              Store.inbox_poll pool ~inbox ~limit:(message_limit req) ()
+              >>= fun (msgs, cursor) ->
+              (j_ok
+                 (`Assoc
+                   [ ("inbox", `String inbox)
+                   ; ("cursor", `Int (Int64.to_int cursor))
+                   ; ("messages", `List (List.map message_json msgs)) ]))))
+
+let get_inbox_status pool req =
+  guard (fun () ->
+      let inbox = Store.normalize_name (Web.param req "name") in
+      match Store.check_name_charset inbox with
+      | Error e -> (j_err ~code:400 e)
+      | Ok () ->
+          Store.inbox_status pool ~inbox
+          >>= fun (cursor, last_poll_at, pending, head) ->
+          (j_ok
+             (`Assoc
+               [ ("inbox", `String inbox)
+               ; ("cursor", `Int (Int64.to_int cursor))
+               ; ("last_poll_at", opt_str last_poll_at)
+               ; ("pending", `Int (Int64.to_int pending))
+               ; ("head", `Int (Int64.to_int head)) ])))
+
+(* -- cron telemetry ingest (migration 0018-cron-runs.sql, sundial T1) --
+
+   The central cron record is write-only from a box's side and keyed by
+   the bearer's identity: a payload naming another box is refused WHOLE
+   before a row is written (a compromised box forges rows about itself
+   and nothing else).  Re-posting a batch upserts on (box, run_id), so
+   the shipper's blind retry is a no-op that only refreshes
+   received_at.  There is NO dispatch endpoint - central never names a
+   command for a box to run. *)
+
+let cron_detail_json s =
+  match J.from_string s with j -> j | exception Yojson.Json_error _ -> `Null
+
+let cron_run_json (r : Store.cron_run) : J.t =
+  `Assoc
+    [ ("box", `String r.Store.cr_box)
+    ; ("run_id", `String r.Store.cr_run_id)
+    ; ("job", opt_str r.Store.cr_job)
+    ; ("verdict", opt_str r.Store.cr_verdict)
+    ; ("started_at", opt_str r.Store.cr_started_at)
+    ; ("ended_at", opt_str r.Store.cr_ended_at)
+    ; ("detail", cron_detail_json r.Store.cr_detail)
+    ; ("received_at", `String r.Store.cr_received_at) ]
+
+let cron_job_json (j : Store.cron_job) : J.t =
+  `Assoc
+    [ ("box", `String j.Store.cj_box)
+    ; ("job", `String j.Store.cj_job)
+    ; ("schedule", opt_str j.Store.cj_schedule)
+    ; ("enabled", `Bool j.Store.cj_enabled)
+    ; ("detail", cron_detail_json j.Store.cj_detail)
+    ; ("updated_at", `String j.Store.cj_updated_at) ]
+
+let cron_heartbeat_json (h : Store.cron_heartbeat) : J.t =
+  `Assoc
+    [ ("box", `String h.Store.ch_box)
+    ; ("name", `String h.Store.ch_name)
+    ; ("last_seen", `String h.Store.ch_last_seen)
+    ; ("detail", cron_detail_json h.Store.ch_detail) ]
+
+(* a non-empty string field, trimmed; empty is absent *)
+let cron_field j k =
+  match get_string_opt j k with
+  | Some s when String.trim s <> "" -> Some (String.trim s)
+  | _ -> None
+
+let cron_detail_of j =
+  match member_opt "detail" j with
+  | None | Some `Null -> "{}"
+  | Some d -> J.to_string d
+
+(* the payload's box must EQUAL the bearer's identity: absent means the
+   bearer's own box, anything else refuses the whole batch *)
+let cron_payload_box auth j =
+  match get_string_opt j "box" with
+  | None -> Ok auth.auth_name
+  | Some b ->
+      let b = Store.normalize_name b in
+      if String.equal b (Store.normalize_name auth.auth_name) then Ok b
+      else
+        Error
+          (Printf.sprintf
+             "refused: box %S is not the caller's identity (%s)" b
+             auth.auth_name)
+
+let cron_collect f xs =
+  List.fold_left
+    (fun acc x ->
+      match acc with
+      | Error _ -> acc
+      | Ok l -> ( match f x with Ok v -> Ok (v :: l) | Error e -> Error e))
+    (Ok []) xs
+
+let cron_run_in_of_json j : (Store.cron_run_in, string) result =
+  match cron_field j "run_id" with
+  | None -> Error "missing \"run_id\""
+  | Some run_id ->
+      Ok
+        { Store.ci_run_id = run_id
+        ; ci_job = cron_field j "job"
+        ; ci_verdict = cron_field j "verdict"
+        ; ci_started_at = cron_field j "started_at"
+        ; ci_ended_at = cron_field j "ended_at"
+        ; ci_detail = cron_detail_of j }
+
+let post_cron_runs pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match cron_payload_box auth j with
+      | Error msg -> (j_err ~code:400 msg)
+      | Ok box -> (
+          let items = match j with `List l -> l | _ -> get_list j "runs" in
+          match cron_collect cron_run_in_of_json items with
+          | Error msg -> (j_err ~code:400 msg)
+          | Ok [] -> (j_err ~code:400 "empty batch: no runs")
+          | Ok runs ->
+              Store.ingest_cron_runs pool ~box ~runs:(List.rev runs)
+              >>= fun rows ->
+              (j_ok
+                 (`Assoc
+                   [ ("box", `String box)
+                   ; ("count", `Int (List.length rows))
+                   ; ("runs", `List (List.map cron_run_json rows)) ]))))
+
+(* the box's schedule snapshot, replaced whole: a removed job stops
+   existing.  Write-only for the same reason as the runs. *)
+let post_cron_jobs pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match cron_payload_box auth j with
+      | Error msg -> (j_err ~code:400 msg)
+      | Ok box -> (
+          let parse_job one : (string * string option * bool * string, string) result =
+            match cron_field one "job" with
+            | None -> Error "missing \"job\""
+            | Some job ->
+                Ok
+                  ( job
+                  , cron_field one "schedule"
+                  , (match get_bool_opt one "enabled" with
+                    | Some b -> b
+                    | None -> true)
+                  , cron_detail_of one )
+          in
+          match cron_collect parse_job (get_list j "jobs") with
+          | Error msg -> (j_err ~code:400 msg)
+          | Ok jobs ->
+              Store.replace_cron_jobs pool ~box ~jobs:(List.rev jobs)
+              >>= fun rows ->
+              (j_ok
+                 (`Assoc
+                   [ ("box", `String box)
+                   ; ("count", `Int (List.length rows))
+                   ; ("jobs", `List (List.map cron_job_json rows)) ]))))
+
+let post_cron_heartbeat pool auth req =
+  body_json req >>= function
+  | Error msg -> (j_err msg)
+  | Ok j -> (
+      match cron_payload_box auth j with
+      | Error msg -> (j_err ~code:400 msg)
+      | Ok box ->
+          let name =
+            match cron_field j "name" with Some n -> n | None -> ""
+          in
+          Store.put_cron_heartbeat pool ~box ~name ~detail:(cron_detail_of j) ()
+          >>= fun h -> (j_ok ~code:201 (cron_heartbeat_json h)))
+
+(* reads page by box/job/since/verdict.  A non-admin caller is confined
+   to its own box, exactly like the run law (a1). *)
+let cron_read_box auth req =
+  if auth.auth_is_admin then
+    Option.map Store.normalize_name (Web.query req "box")
+  else Some (Store.normalize_name auth.auth_name)
+
+let cron_query_value req k =
+  match Web.query req k with
+  | Some s when String.trim s <> "" -> Some (String.trim s)
+  | _ -> None
+
+let get_cron_runs pool auth req =
+  let box = cron_read_box auth req in
+  let job = cron_query_value req "job" in
+  let since = cron_query_value req "since" in
+  let verdict = cron_query_value req "verdict" in
+  let limit = message_limit req in
+  let offset =
+    match int_query req "offset" with
+    | Some n when n >= 0L -> Int64.to_int n
+    | _ -> 0
+  in
+  Store.list_cron_runs pool ?box ?job ?since ?verdict ~limit ~offset ()
+  >>= fun rows ->
+  Store.count_cron_runs pool ?box ?job ?since ?verdict ()
+  >>= fun total ->
+  (j_ok
+     (`Assoc
+       [ ("runs", `List (List.map cron_run_json rows))
+       ; ("count", `Int (List.length rows))
+       ; ("total", `Int (Int64.to_int total))
+       ; ("limit", `Int limit)
+       ; ("offset", `Int offset) ]))
+
+let get_cron_jobs pool auth req =
+  let box = cron_read_box auth req in
+  Store.list_cron_jobs pool ?box () >>= fun rows ->
+  (j_ok
+     (`Assoc
+       [ ("jobs", `List (List.map cron_job_json rows))
+       ; ("count", `Int (List.length rows)) ]))
+
+let get_cron_heartbeats pool auth req =
+  let box = cron_read_box auth req in
+  Store.list_cron_heartbeats pool ?box () >>= fun rows ->
+  (j_ok
+     (`Assoc
+       [ ("heartbeats", `List (List.map cron_heartbeat_json rows))
+       ; ("count", `Int (List.length rows)) ]))
+
 (* -- router / server ------------------------------------------------- *)
 
 (* route list, mounted alongside the M8 page routes by bin/main.ml *)
@@ -2678,7 +2998,19 @@ let api_routes pool =
       ; Web.post "/api/route/put" (with_auth pool (post_route_put pool))
       ; Web.post "/api/route/delete" (with_auth pool (post_route_delete pool))
       ; Web.get "/api/route/get" (with_auth pool (get_route_get pool))
-      ; Web.get "/api/route/list" (with_auth pool (get_route_list pool)) ]
+        ; Web.get "/api/route/list" (with_auth pool (get_route_list pool))
+        ; Web.post "/api/msg" (with_auth pool (post_msg pool))
+        ; Web.get "/api/messages" (get_messages pool)
+        ; Web.get "/api/inbox/:name/status" (get_inbox_status pool)
+        ; Web.get "/api/inbox/:name" (get_inbox pool)
+        ; Web.post "/api/cron/runs" (with_auth pool (post_cron_runs pool))
+        ; Web.get "/api/cron/runs" (with_auth pool (get_cron_runs pool))
+        ; Web.post "/api/cron/jobs" (with_auth pool (post_cron_jobs pool))
+        ; Web.get "/api/cron/jobs" (with_auth pool (get_cron_jobs pool))
+        ; Web.post "/api/cron/heartbeat"
+            (with_auth pool (post_cron_heartbeat pool))
+        ; Web.get "/api/cron/heartbeats"
+            (with_auth pool (get_cron_heartbeats pool)) ]
 
 (* the public artifact directory (pp-slice T3): scripts/deploy/build-public.sh
    writes src.tgz here at boot/refresh; absent file is a plain 404 *)
