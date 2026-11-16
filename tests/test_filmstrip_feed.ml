@@ -96,7 +96,14 @@ let test_live_stamps () =
 let test_census_is_not_saturated () =
   Alcotest.(check bool)
     "the census limit is explicit and above the store default 200" true
-    (F.census_limit > 200)
+    (F.census_limit > 200);
+  (* the ceiling is SHARED with the store (/claims and the console census
+     through the same default): a tile that asks for less than the store's
+     own ceiling can again report a number clamped below the registry's
+     total, so pin the two together instead of pinning just "> 200". *)
+  Alcotest.(check bool)
+    "the tile census is at least the store's shared census ceiling" true
+    (F.census_limit >= Tuna_store.Store.census_limit)
 
 (* LAW 1 (anonymous-200): the strip's own page and every tile target are
    public surfaces; no tile points at a session surface such as /login,

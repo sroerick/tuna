@@ -296,7 +296,7 @@
 (executable
  (name test_filmstrip_feed)
  (modules test_filmstrip_feed)
- (libraries tuna_server alcotest))
+ (libraries tuna_server tuna_store alcotest))
 
 (rule
  (alias runtest)

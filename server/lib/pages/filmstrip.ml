@@ -166,11 +166,12 @@ let code_stamp () =
       | _hash :: date :: _ -> "last commit " ^ date
       | _ -> "last commit" )
 
-(* the census limit is EXPLICIT and large: [list_citation_paths] defaults to
-   200 (store/lib/store.ml), and a truncated census yields a tile count that
-   can never equal the registry's own total — the tile would silently
-   saturate.  Bounded, but bounded above any plausible registry. *)
-let census_limit = 100000
+(* the census limit is the store's OWN shared ceiling, not a local number:
+   the old default was 200 (store/lib/store.ml), and a truncated census
+   yields a tile count that can never equal the registry's own total — the
+   tile would silently saturate below /claims.  Sharing the store's constant
+   means the tile, /claims and the console census cannot drift apart. *)
+let census_limit = S.census_limit
 
 (* the newest log entry, asked of the store's newest-row query - never
    [list_messages] with a limit (that query is oldest-first: its last row
