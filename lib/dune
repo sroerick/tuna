@@ -1,0 +1,4 @@
+(library
+ (name tuna_strip)
+ (modules strip_adapter tuna_strip)
+ (libraries filmstrip_shared))
