@@ -29,7 +29,11 @@ module L = Layout
 module S = Tuna_store.Store
 open Tuna_store.Direct
 
-type tile = {
+(* the tile record is a TYPE EQUATION with the shared filmstrip's tile
+   (filmstrip-shared/lib.ml through Tuna_strip): tuna supplies the data, the
+   shared package owns the markup and the CSS, so a field added on one side
+   is a build error on the other instead of a silent drift. *)
+type tile = Tuna_strip.tile = {
   glyph : string;   (* one character: the tile's icon *)
   name : string;    (* the app's short name (what the tile is called) *)
   summary : string; (* one honest line: what the surface is for *)
@@ -226,14 +230,9 @@ let stamp_of stamps (t : tile) =
 
 (* every tile is a plain anchor with an href and a stamp; the href is the
    whole navigation, so the tile opens with JS disabled. *)
-let tile_html ?(stamps = []) (t : tile) =
-  Printf.sprintf
-    {|<a class="tile" href="%s"><span class="glyph">%s</span><span class="name">%s</span><span class="summary">%s</span><span class="stamp">%s</span></a>|}
-    (L.esc t.href) (L.esc t.glyph) (L.esc t.name) (L.esc t.summary)
-    (L.esc (stamp_of stamps t))
+let tile_html ?(stamps = []) (t : tile) = Tuna_strip.tile_html ~stamps t
 
-let tiles_html ?(stamps = []) () =
-  String.concat "\n" (List.map (fun t -> tile_html ~stamps t) tiles)
+let tiles_html ?(stamps = []) () = Tuna_strip.tiles_html ~stamps tiles
 
 (* the strip markup: server-rendered anchors only, so it renders and the
    tiles navigate with JS disabled.  Shared by the anonymous home and by a
@@ -242,30 +241,16 @@ let tiles_html ?(stamps = []) () =
    swap is innerHTML so the baked tiles stay if a poll fails. *)
 let strip_html ?(stamps = []) () =
   Printf.sprintf
-    {|<style>
-.strip { display:flex; flex-wrap:wrap; gap:.8rem; margin:1rem 0 1.5rem; }
-.tile { display:flex; flex-direction:column; width:13rem; padding:.7rem .8rem;
-        border:1px solid #333; background:#181818; border-radius:4px;
-        text-decoration:none; }
-.tile:hover, .tile:focus { border-color:#7fb4ca; background:#1d2a33; }
-.tile .glyph { font-size:1.6rem; line-height:1.2; color:#9ccfd8; }
-.tile .name { margin:.2rem 0; color:#7fb4ca; font-weight:bold; }
-.tile .summary { color:#888; font-size:.85em; line-height:1.25; }
-.tile .stamp { margin-top:.35rem; color:#9ccfd8; font-size:.75em;
-               letter-spacing:.03em; }
-</style>
-<h2>tuna</h2>
+    {|<h2>tuna</h2>
 <p class="muted">the tree calculus habitat.  everything on this strip is
 public — no cookie, no token, no JavaScript required: pick a door.</p>
-<div class="strip" id="filmstrip" hx-get="/console/feed/strip" hx-trigger="every 30s" hx-swap="innerHTML">
 %s
-</div>
 <noscript><p class="muted">the counts and stamps on these tiles refresh by
 polling /console/feed/strip; this server-rendered strip is complete without
 it — every tile is a plain link.</p></noscript>
 <p class="muted">new here?  <a href="/welcome">/welcome</a> is the long
 argument; <a href="/agent.txt">/agent.txt</a> is the one an agent reads.</p>|}
-    (tiles_html ~stamps ())
+    (Tuna_strip.strip_html ~feed:"/console/feed/strip" ~stamps tiles)
 
 (* the anonymous home page (200, no cookie, no bearer): the strip alone. *)
 let render () = L.page ~title:"tuna — the tree calculus habitat" (strip_html ())

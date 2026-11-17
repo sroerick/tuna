@@ -1,0 +1,23 @@
+; TU3 equivalence proof for the swap: emit renders a FIXED tile set through
+; the shared package, and the capture is diffed against the checked-in
+; pre-swap capture (test/tiles_pre_swap.txt).  A change to the shared markup
+; or to the tile data that tuna's strip cannot absorb fails the diff, which
+; is the whole point of doing the swap behind a gate.
+;
+; `dune runtest` runs the same diff as filmstrip-shared/test/gate.sh, so the
+; equivalence check cannot rot into a script nobody invokes.
+(executable
+ (name emit)
+ (modules emit)
+ (libraries filmstrip_shared))
+
+(rule
+ (target tiles_post_swap.txt)
+ (deps emit.exe)
+ (action
+  (with-stdout-to %{target} (run %{exe:emit.exe}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff tiles_pre_swap.txt tiles_post_swap.txt)))

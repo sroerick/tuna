@@ -1,0 +1,2 @@
+claims|C|/claims|the registry, backed by runs|the registry, no cookie needed
+console|K|/console|the swarm console, live|live feed, htmx polling only

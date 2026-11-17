@@ -1,0 +1,3 @@
+(library
+ (name filmstrip_shared)
+ (modules lib filmstrip_shared))
