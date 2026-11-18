@@ -16,12 +16,12 @@
 (executable
  (name demand_tests)
  (modules demand_tests tuna_test_eio)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server alcotest eio eio_main))
 
 (executable
  (name delegation_tests)
  (modules delegation_tests tuna_test_eio)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server alcotest eio eio_main))
 
 ; demand-memo (borg/sharing.borg): PG-gated, own scratch db
 (rule
@@ -75,17 +75,17 @@
 (executable
  (name store_tests)
  (modules store_tests tuna_test_eio)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest eio eio_main))
 
 (executable
  (name tree_substrate_tests)
  (modules tree_substrate_tests tuna_test_eio)
- (libraries tuna tuna_compiler tuna_store tuna_server alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_compiler tuna_store tuna_server alcotest eio eio_main))
 
 (executable
  (name m11_tests)
  (modules m11_tests tuna_test_eio)
- (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest eio eio_main))
 
 (executable
  (name repl_tests)
@@ -157,7 +157,7 @@
  (executable
  (name fed_tests)
  (modules fed_tests tuna_test_eio)
- (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest eio eio_main))
 
 (rule
  (alias runtest)
@@ -171,7 +171,7 @@
 (executable
  (name session_tests)
  (modules session_tests tuna_test_eio)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server pgx alcotest eio eio_main))
 
 (rule
  (alias runtest)
@@ -195,7 +195,7 @@
 (executable
  (name deriv_tests)
  (modules deriv_tests tuna_test_eio)
- (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server tuna_deriv alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server tuna_deriv alcotest eio eio_main))
 
 ; derivation records (borg/deriv.borg): same PG gate, own scratch db
 ; (tuna_test_deriv) so the PG suites never share one.
@@ -247,7 +247,7 @@
 (executable
  (name signup_garden_tests)
  (modules signup_garden_tests tuna_test_eio)
- (libraries tuna tuna_compiler tuna_store tuna_server unix alcotest eio eio_main eio.unix))
+ (libraries tuna tuna_compiler tuna_store tuna_server unix alcotest eio eio_main))
 
 (rule
  (alias runtest)
@@ -268,7 +268,7 @@
 (executable
  (name chatgpt_tests)
  (modules chatgpt_tests)
- (libraries tuna_server alcotest eio eio.unix eio_main unix))
+ (libraries tuna_server alcotest eio eio_main unix))
 
 (rule
  (alias runtest)
@@ -281,7 +281,7 @@
  (name messages_tests)
  (modules messages_tests tuna_test_eio)
  (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server alcotest
-   eio eio_main eio.unix))
+   eio eio_main))
 
 (rule
  (alias runtest)
