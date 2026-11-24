@@ -81,11 +81,14 @@
                      and-or fallback rule printed that sentence after a
                      real failure, and believing it is the fail-open
                      this chapter exists to catch.
-        make-test    sum every suite summary in the gate log.  A skipped
-                     suite (postgres down, node absent, sbcl missing)
-                     with no failure makes the gate unparsed: part of
-                     the gate did not run.  A real failure still
-                     outranks it, because the log states it.
+        make-test    sum every recognised suite summary in the gate log.
+                     A skipped suite (postgres down, node absent, sbcl
+                     missing) with no failure makes the gate unparsed:
+                     part of the gate did not run.  A real failure still
+                     outranks it, because the log states it.  Extra
+                     checks in the same log that print their own lines
+                     (the filmstrip CDP gate) are not counted; their
+                     failure rides the command's exit status.
       A log with no recognisable suite summary is unparsed.  A cached
       dune run that prints nothing is therefore unverified, never pass;
       run the gate from a clean build (a fresh worktree or --force).
