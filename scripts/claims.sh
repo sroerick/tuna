@@ -293,24 +293,54 @@ cmd_verify() {
 # adds target=<path> for verdict claims (kind=verdict) that judge a
 # specific earlier claim.  A verdict correction can also be minted with
 # `claims.sh verdict` (a small standalone record beside its target).
-CLAIM_KINDS=' observed computed cited interpreted asserted axiom verdict '
+CLAIM_KINDS=' observed computed cited interpreted asserted axiom verdict gate '
 LEAF_HASH=5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
 
 seg() { printf '%s' "$1" | cut -d. -f"$2"; }
 
 claim_base_check() {
-  local base="$1" dots
+  local base="$1" dots segs
   dots=$(printf '%s' "$base" | tr -cd '.' | wc -c | tr -d ' ')
-  [ "$dots" = 6 ] || die "claim path needs 7 dot segments (u.<identity>.claim.<date>.<kind>.<subject>.<slug>), got $((dots+1)): $base"
-  [ "$(seg "$base" 1)" = u ] || die "claim path must start u.<identity>: $base"
-  [ "$(seg "$base" 3)" = claim ] || die "claim path must carry the claim segment: $base"
-  case "$(seg "$base" 4)" in
-    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
-    *) die "claim date segment must be YYYY-MM-DD: $base" ;;
+  segs=$((dots + 1))
+  GATE_REV=''
+  case "$segs" in
+    7)
+      [ "$(seg "$base" 1)" = u ] || die "claim path must start u.<identity>: $base"
+      [ "$(seg "$base" 3)" = claim ] || die "claim path must carry the claim segment: $base"
+      case "$(seg "$base" 4)" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+        *) die "claim date segment must be YYYY-MM-DD: $base" ;;
+      esac
+      KIND=$(seg "$base" 5)
+      [ "$KIND" = gate ] && die "kind gate needs the 8-segment receipt path (u.<identity>.claim.<date>.gate.<project>.<rev12>.<gate-slug>): $base"
+      SUBJECT=$(seg "$base" 6)
+      ASSERTION=$(seg "$base" 7)
+      ;;
+    8)
+      # the gate-receipt shape (borg/gate-receipts.borg):
+      # u.<runner>.claim.<date>.gate.<project>.<rev12>.<gate-slug>
+      [ "$(seg "$base" 1)" = u ] || die "claim path must start u.<identity>: $base"
+      [ "$(seg "$base" 3)" = claim ] || die "claim path must carry the claim segment: $base"
+      case "$(seg "$base" 4)" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+        *) die "claim date segment must be YYYY-MM-DD: $base" ;;
+      esac
+      [ "$(seg "$base" 5)" = gate ] || die "an 8-segment claim path is the gate-receipt shape and must have kind 'gate': $base"
+      GATE_REV=$(seg "$base" 7)
+      case "$GATE_REV" in
+        [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) : ;;
+        *) die "gate claim rev segment must be 12 lowercase hex: $GATE_REV" ;;
+      esac
+      KIND=gate
+      SUBJECT=$(seg "$base" 6)
+      ASSERTION=$(seg "$base" 8)
+      [ -n "$SUBJECT" ] || die "gate claim needs a project segment: $base"
+      [ -n "$ASSERTION" ] || die "gate claim needs a gate-slug segment: $base"
+      ;;
+    *)
+      die "claim path needs 7 dot segments (u.<identity>.claim.<date>.<kind>.<subject>.<slug>) or the 8-segment gate receipts shape (u.<identity>.claim.<date>.gate.<project>.<rev12>.<gate-slug>), got $segs: $base"
+      ;;
   esac
-  KIND=$(seg "$base" 5)
-  SUBJECT=$(seg "$base" 6)
-  ASSERTION=$(seg "$base" 7)
   case "$CLAIM_KINDS" in *" $KIND "*) : ;; *) die "unknown claim kind '$KIND'; vocabulary:$CLAIM_KINDS" ;; esac
   case "$KIND" in
     interpreted|asserted) [ -n "$NARR_HASH" ] || die "kind $KIND needs a narrative (--narrative FILE or --narrative-hash HASH): prose is context, not evidence, so it cannot stand in for one" ;;
@@ -333,6 +363,7 @@ cmd_mint() {
   local base="" runid="" target="" resp ph res st fuel cap sem status caller inputs h jrn
   local enc hash run_art jrn_art narr_enc p12 n12 rev
   NARR_HASH=''
+  GATE_REV=''
 
   [ $# -ge 2 ] || die "usage: claims.sh mint <claim-base-path> <run-id> [--narrative FILE|--narrative-hash HASH] [--target PATH]"
   base="$1"
@@ -394,6 +425,7 @@ cmd_mint() {
     printf 'kind=%s\n' "$KIND"
     printf 'subject=%s\n' "$SUBJECT"
     printf 'assertion=%s\n' "$ASSERTION"
+    [ -n "$GATE_REV" ] && printf 'rev=%s\n' "$GATE_REV"
     printf 'server_rev=%s\n' "$rev"
     [ -n "$target" ] && printf 'target=%s\n' "$target"
     printf 'program=%s\n' "$ph"

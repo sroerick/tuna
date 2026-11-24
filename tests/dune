@@ -100,6 +100,19 @@
  (action
   (run %{exe:agent_contract_tests.exe})))
 
+; gate receipts G1 (borg/gate-receipts.borg): prim-free verdict fixtures
+; over observation records + the host-side log adapters.  No PG, no HTTP.
+(executable
+ (name gate_receipt_tests)
+ (modules gate_receipt_tests)
+ (libraries tuna tuna_interp tuna_compiler alcotest))
+
+(rule
+ (alias runtest)
+ (deps gate_receipt_tests.exe (source_tree ../scripts/gate-receipts))
+ (action
+  (run %{exe:gate_receipt_tests.exe})))
+
 (executable
  (name repl_tests)
  (modules repl_tests)
