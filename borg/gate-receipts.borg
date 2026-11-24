@@ -3,11 +3,12 @@
  (status planned)
  (convention ocaml-dune)
  (* agent note (|2026-11-23 design discussion (roerick + Claude, onboarding session). MOTIVATION, both observed the same day: (1) tuna's three-engine differential gate built no binaries after the monorepo merge, failed 93/93, and the runtest rule's `&& ... || echo` reported it as "sbcl missing: skipped" - make -C tuna test exited 0 (fixed in 3cd448d5); (2) pp's image/test/data_spaces_test.ml prints SKIP and marks every case [OK] when Postgres is unreachable, so a default-env run reports 15/15 green while testing nothing. The organization policy installed the same day (nomia: engineering.verify-change, engineering.independent-review) already demands gate evidence over claims; nomia's review-change check-evidence.sh says of itself "a completeness check, not a truth check". This chapter is the truth half. FRAMING DECISION: tuna does not run the gate. Shell commands are host effects that no journal can make replayable; what tuna CAN make replayable is the DECISION (pass, fail, unverified) given the facts, and what it can make tamper-evident is WHO asserted the facts. Everything below follows from keeping those two apart.|) *)
+ (* agent note (|2026-11-24 G1 LANDED. Artifacts: scripts/gate-receipts/verdict.sabra (prim-free, self-contained), scripts/gate-receipts/adapt.sh (alcotest, differential, make-test), scripts/gate-receipts/encode.sh (the record codec in awk), scripts/gate-receipt.sh (the wrapper), tests/gate_receipt_tests.ml (19 alcotest cases, no PG, no HTTP). claims.sh gained the gate claim kind for the 8-segment receipt path. EVIDENCE: fixtures green; before/after replay at a90487b3 fail (the log's 93/93 FAILED outranks its misleading sbcl-missing line) and at 3cd448d5 pass; a non-admin second identity verified the receipt while getting 404 on the runner's run row; every observation field changes the input hash, and a tampered citation naming changed facts under the original result reports MISMATCH. DEVIATIONS FROM THE ORIGINAL TEXT, forced by reality: (a) the chapter predicted unverified for the a90487b3 log, but that log states 93/93 FAILED, so the honest verdict is fail; (b) "changing any field breaks verification of the original claim" is not a shape claims.sh has - it verifies a citation, and the original citation still pins its own immutable input - so the measured property is the hash binding plus a mismatch when a citation names changed facts under the original result. Project status stays planned because the G2 verify line (check-evidence receipt mode) is unrun; the three G1 subsections are marked implemented.|) *)
  (section gate-receipts
   (doc "Three layers with different trust: OBSERVATION (attested by a runner identity, not proven), VERDICT (a pure tuna program, re-derivable by anyone), REPRODUCTION (optional re-execution of the command at the same revision by a reviewer).")
   (status planned)
   (subsection observation-record
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       A runner (the factory loop, an agent's verify-change pass, or a
@@ -43,11 +44,56 @@
       re-parse. This is the prim-creep discipline from the substrate
       discussion: no new prim is admitted to make the verdict "smarter"
       unless a refuted fixture shows the pure policy cannot decide it.
+
+      ENCODING, concrete (G1).  A record is canonical: entries sorted by
+      ascending key, keys are the dialect's small-nat tags (Stem^n Leaf),
+      and each value uses the book's one codec:
+
+        1 gate        cstr string (the slug as invoked)
+        2 project     cstr string
+        3 command     cstr string (bash %q of the argv)
+        4 rev         40-hex cstr string
+        5 tree_clean  law-5 int, 0 or 1
+        6 diff_hash   cstr string; the empty string is the leaf
+        7 exit        law-5 int
+        8 log_hash    64-hex cstr string
+        9 counts      [run passed failed skipped] of law-5 ints, or the
+                      atom %10 (Stem Leaf) for unparsed
+       10 adapter     cstr string, e.g. adapt.sh/make-test/v1
+       11 runner      cstr string (the identity name)
+       12 started_at  cstr string, UTC ISO-8601
+
+      A receipt's VERDICT is one tag, never a string: %10 pass, %110
+      fail, %1110 unverified.  unverified is first-class and never
+      folded into pass.  The skip-allowed list is a bracket list of cstr
+      gate slugs (the empty list is the leaf).  Both inputs are stored
+      as tree values before the run, so claims.sh can cite them by hash.
+
+      ADAPTERS (host-side, scripts/gate-receipts/adapt.sh, bash+awk):
+        alcotest     "Test Successful in Xs. N tests run." is N passes;
+                     "F failures! ... N tests run." adds F failures
+                     (run = N+F); every line printed starting SKIP adds
+                     a skip even when alcotest says [OK].
+        differential "all N corpus entries agree" is N passes;
+                     "F/N corpus entries FAILED" is N run, N-F passed,
+                     F failed.  A FAILED line outranks the misleading
+                     "sbcl missing: ... skipped" sentence: the old
+                     and-or fallback rule printed that sentence after a
+                     real failure, and believing it is the fail-open
+                     this chapter exists to catch.
+        make-test    sum every suite summary in the gate log.  A skipped
+                     suite (postgres down, node absent, sbcl missing)
+                     with no failure makes the gate unparsed: part of
+                     the gate did not run.  A real failure still
+                     outranks it, because the log states it.
+      A log with no recognisable suite summary is unparsed.  A cached
+      dune run that prints nothing is therefore unverified, never pass;
+      run the gate from a clean build (a fresh worktree or --force).
     |))
    )
   )
   (subsection verdict-program
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       The verdict is a pure sabra program over one observation record,
@@ -67,16 +113,33 @@
       is a program INPUT (a list of gate slugs), so a project widening
       it is a visible change to the cited inputs, not a code edit.
 
-      Both 2026-11-23 failures land as unverified under this policy:
-      the differential gate parses to run 0, and the pp PG suite's SKIP
-      lines parse to skipped 15. The adapter must count a printed SKIP
-      as a skip even when the harness reports [OK]; that adapter rule is
-      the one piece of gate-specific knowledge the system needs.
+      The pp PG suite's SKIP lines parse to counts [15 15 0 15], so
+      that gate lands as unverified.  The 2026-11-23 differential log
+      does NOT: it printed "differential: 93/93 corpus entries FAILED"
+      next to the rule's misleading "sbcl missing: ... skipped"
+      sentence, so an honest adapter must report fail.  Believing the
+      skip sentence would reproduce the fail-open the chapter exists to
+      catch.  The bare "sbcl missing" shape, with no FAILED summary,
+      is counts [0 0 0 0] and therefore unverified.  The adapter must
+      also count a printed SKIP as a skip even when the harness reports
+      [OK]; that rule and the FAILED-over-skip rule are the only pieces
+      of gate-specific knowledge the system needs.
+
+      LANDED (G1).  scripts/gate-receipts/verdict.sabra is the program.
+      It is self-contained: the frozen stdlib v1 helper definitions
+      (if, tree-case, list-fold, tree-eq, rec-get, ...) are copied
+      inline, so POST /api/programs {"source": ...} compiles it with no
+      caller dictionary.  It is prim-free: the fixture suite evaluates
+      every case with a host that records prim calls and asserts zero.
+      The fixture matrix pins all seven policy lines, including exit
+      nonzero outranking unparsed counts and a skip-allowed gate still
+      failing on a failed test.  Counts are compared as law-5 ints to
+      the canonical zero %200, never by leaf/stem shape.
     |))
    )
   )
   (subsection minting-and-verifying
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       The runner POSTs the verdict run (program = verdict hash,
@@ -84,6 +147,34 @@
       existing claims machinery (scripts/claims.sh mint), at
 
         u.<runner>.claim.<date>.gate.<project>.<rev12>.<gate-slug>
+
+      LANDED (G1).  scripts/claims.sh gained the gate kind: an
+      8-segment path is accepted when segment 5 is gate, segment 7 is
+      validated as 12 lowercase hex and carried in the projection as
+      rev=, and segments 6 and 8 are project and gate-slug.  The wrapper
+      sanitizes "/" and other path separators in project and gate-slug
+      to "-" so the path stays 8 segments.  It writes the observation
+      and skip-allowed list as tree values first, so claims.sh's
+      input-published check passes, then mints the run.
+
+      MEASURED (2026-11-24): a receipt minted by root verified under
+      claims.sh verify for a fresh non-admin identity, and that identity
+      received 404 on the runner's run row - the citation alone carried
+      it.  The before/after differential replay is recorded in the
+      verify lines below.
+
+      CONTENT ADDRESSING, and what the tamper test can say.  Changing
+      any observation field changes the observation tree, so its hash
+      and the citation hash change: the changed facts are a different
+      receipt, never an edit of the original.  The original citation
+      still verifies against the facts it pins, because values are
+      immutable.  A citation that names the changed input under the
+      original result fails verification exactly when the verdict
+      changes (measured: exit 0 to 1 turns pass into fail; the tampered
+      citation reported MISMATCH, exit 1).  claims.sh verify takes a
+      citation, not a candidate observation, so "verify the original
+      path with changed facts" is not a shape the machinery has: the
+      binding is the hash, not a re-derivation of the observation.
 
       Because the run is prim-free, the claims.sh VERIFIABLE property
       holds: any identity resolves the cited program and inputs by
@@ -121,11 +212,12 @@
         - tuna's own make test: the first runner, via a planned wrapper
           scripts/gate-receipt.sh, so tuna dogfoods its own gate.
 
-      ORDER. G1: observation encoding, verdict program, the two harness
-      adapters (alcotest, the tuna differential script) and the wrapper,
-      against tuna's own suite. G2: check-evidence.sh receipt mode. G3:
-      the factory loop emits receipts for every gate. Each step stands
-      alone; G1 is useful with no factory change.
+      ORDER. G1 LANDED (2026-11-24): observation encoding, verdict
+      program, the harness adapters (alcotest, differential, and the
+      make-test aggregate) and the wrapper, against tuna's own suite.
+      G2: check-evidence.sh receipt mode. G3: the factory loop emits
+      receipts for every gate. Each step stands alone; G1 is useful
+      with no factory change.
     |))
    )
   )
@@ -151,7 +243,7 @@
  )
  (verify
   (test "verdict fixtures: an observation with exit 0 and counts [0 0 0 0] is unverified; exit 0 with [15 15 0 15] (the pp SKIP shape) is unverified unless the gate is skip-allowed; exit 0 with [93 93 0 0] is pass; exit 1 is fail; unparsed counts are unverified")
-  (test "replaying the 2026-11-23 differential failure (tuna at a90487b3, before 3cd448d5) through scripts/gate-receipt.sh yields unverified, and the same gate at 3cd448d5 yields pass")
+  (test "replaying the 2026-11-23 differential failure (tuna at a90487b3, before 3cd448d5) through scripts/gate-receipt.sh yields fail, because the log's 93/93 FAILED outranks its misleading sbcl-missing sentence, and the same gate at 3cd448d5 yields pass")
   (test "a receipt minted by one identity verifies under claims.sh verify for a second, non-admin identity with no access to the runner's run row")
-  (test "changing any observation field changes the cited input hash, and verify against the original claim path reports a mismatch")
+  (test "changing any observation field changes the cited input hash, so the changed facts are a different citation (a different claim path), never a silent edit of the original; a citation naming the changed input under the original result fails verification when the verdict differs")
   (test "check-evidence.sh in receipt mode fails a report that claims pass for a command whose receipt verdict is unverified")))

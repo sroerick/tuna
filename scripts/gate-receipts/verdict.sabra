@@ -1,0 +1,101 @@
+; verdict.sabra - the gate-receipt verdict program (borg/gate-receipts.borg,
+; verdict-program).  Compiled from this source and addressed by hash; the
+; receipt cites the hash, so any identity can re-derive the answer.
+;
+; Inputs (applied left to right, POST /api/runs "inputs"):
+;   obs           the observation record: a dialect v1.1 record, i.e. a
+;                 list of [key value] two-lists, sorted by key.  The
+;                 record keys are the small-nat field tags below; values
+;                 are the encoding named in the chapter.
+;   skip-allowed a list of gate slugs (cstr strings) whose skips do not
+;                 turn the verdict unverified.
+;
+; Output: one tag, never a string (a receipt's result hash is compared,
+; not read):
+;   %10    pass
+;   %110   fail
+;   %1110  unverified
+;
+; SELF-CONTAINED.  This source uses only the reader (lambda, let,
+; decimal/ternary literals, brackets-as-cons via the `pair` builtin) and
+; carries its helpers inline, so `POST /api/programs {"source": ...}`
+; compiles it without a caller dictionary.  The helper bodies are the
+; frozen sabra stdlib v1 definitions (stdlib/v1/core.defs) copied
+; verbatim, not re-derived.  There is no (prim ...) form: the fixture
+; suite evaluates every case with a host that records any prim call and
+; asserts the count stays zero.  The policy is the chapter's v1 order,
+; top to bottom.
+
+(lambda (obs)
+  (lambda (skip-allowed)
+
+    ; field tags (small-nat keys, dialect records subsection)
+    ;   1 gate        2 project      3 command       4 rev
+    ;   5 tree_clean  6 diff_hash    7 exit          8 log_hash
+    ;   9 counts     10 adapter     11 runner       12 started_at
+
+    (let
+      ((if (lambda (t) (lambda (f) (pair (pair f (pair %0 t)) %0))))
+       (tree-case (lambda (la) (lambda (lb) (lambda (lf) (pair (pair la lb) lf)))))
+       (is-leaf (lambda (t) ((tree-case %10 (lambda (c) %0) (lambda (l) (lambda (r) %0))) t)))
+       (is-fork (lambda (t) ((tree-case %0 (lambda (c) %0) (lambda (l) (lambda (r) %10))) t)))
+       (not %22102000)
+       (bool-and (lambda (a) (lambda (b) ((tree-case %0 (lambda (c) b) (lambda (l) (lambda (r) %0))) a))))
+       (bool-or (lambda (a) (lambda (b) ((tree-case b (lambda (c) %10) (lambda (l) (lambda (r) %0))) a))))
+       (first (lambda (p) ((tree-case %0 (lambda (c) %0) (lambda (l) (lambda (r) l))) p)))
+       (second (lambda (p) ((tree-case %0 (lambda (c) %0) (lambda (l) (lambda (r) r))) p)))
+       (sa-k (lambda (x) (x (%10 x))))
+       (wait (lambda (a) (lambda (b) (lambda (c) (((%0 (%0 a)) (%10 c)) b)))))
+       (wait1 (lambda (a) (%0 (%0 ((%0 (%0 (%10 (%0 (%0 a))))) %10)))))
+       (rec-fix (lambda (functional) ((wait sa-k) (lambda (x) (functional (wait1 sa-k x))))))
+       (fold-fn (lambda (self) (lambda (xs) (lambda (f) (lambda (z) ((tree-case z (lambda (c) z) (lambda (hd) (lambda (tl) (f hd (self tl f z))))) xs))))))
+       (list-fold (lambda (f) (lambda (z) (lambda (xs) ((((rec-fix fold-fn) xs) f) z)))))
+       (eq-fn (lambda (self) (lambda (a) (lambda (b) ((tree-case (is-leaf b) (lambda (c) ((tree-case %0 (lambda (c2) (self c c2)) (lambda (u) (lambda (v) %0))) b)) (lambda (l) (lambda (r) ((tree-case %0 (lambda (c) %0) (lambda (l2) (lambda (r2) (bool-and (self l l2) (self r r2))))) b)))) a)))))
+       (tree-eq (rec-fix eq-fn))
+       (some (lambda (x) (%0 x)))
+       (rec-get (lambda (key) (lambda (rec) (list-fold (lambda (kv) (lambda (acc) ((tree-case acc (lambda (c) (some (first (second kv)))) (lambda (l) (lambda (r) acc))) (tree-eq (first kv) key)))) %0 rec))))
+       (rec-val (lambda (key) (lambda (rec) ((tree-case %0 (lambda (c) c) (lambda (l) (lambda (r) %0))) (rec-get key rec))))))
+
+      (let
+        ((gate (rec-val %10 obs))
+         (tree-clean (rec-val %111110 obs))
+         (diff-hash (rec-val %1111110 obs))
+         (exit-status (rec-val %11111110 obs))
+         (counts (rec-val %1111111110 obs)))
+
+        ; counts is either [run passed failed skipped] (a fork) or the atom
+        ; %10 for unparsed.  Projecting an atom through first/second yields
+        ; the leaf, so the derived zeros below are harmless.
+        (let
+          ((parsed (is-fork counts))
+           (run (first counts))
+           (failed (first (second (second counts))))
+           (skipped (first (second (second (second counts)))))
+           (skip-member
+             (list-fold
+               (lambda (slug) (lambda (acc) (bool-or (tree-eq slug gate) acc)))
+               %0
+               skip-allowed)))
+
+          ; counts is a fork iff parsed; %10 (and a missing field's leaf)
+          ; are not.  Law-5 ints are compared to the canonical zero %200,
+          ; never by leaf/stem shape.
+          (if
+            %110
+            (if
+              %1110
+              (if
+                %1110
+                (if
+                  %110
+                  (if
+                    %1110
+                    (if
+                      %1110
+                      %10
+                      (bool-and (tree-eq tree-clean %200) (is-leaf diff-hash)))
+                    (bool-and (not (tree-eq skipped %200)) (not skip-member)))
+                  (not (tree-eq failed %200)))
+                (tree-eq run %200))
+              (not parsed))
+            (not (tree-eq exit-status %200))))))))
