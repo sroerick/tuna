@@ -144,7 +144,7 @@ start_pg() {
 build_all() {
   opam_env
   echo "[dev] building (${OPAM_SWITCH:-current switch})..."
-  (cd "$ROOT" && dune build @all)
+  (cd "$ROOT" && dune build --root "$ROOT" @all)
 }
 
 start_server() {

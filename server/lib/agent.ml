@@ -58,10 +58,12 @@ let rules =
   ; "A step is one triage-rule firing; the two wrapper applications are \
      application, not steps.  Step counts are an invariant of the \
      calculus, so they are stable across engines."
-  ; "Replay determinism: GET /api/runs/:id/trace and POST \
-     /api/runs/:id/verify re-execute program+inputs with prim calls \
-     answered sequentially from the run's journal.  Replay never touches \
-     the live host."
+  ; "Replay determinism: GET /api/runs/:id answers {run, journal} and \
+     verifies an unverified finished run on read (run.verify_status) by \
+     re-executing program+inputs with prim calls answered sequentially \
+     from the run's journal.  Replay never touches the live host.  GET \
+     /api/runs/:id/trace returns the firing trace of a run posted with \
+     \"trace\": true."
   ; "Fuel and size caps are ordinary results (fuel_exhausted / \
      size_exhausted), never timeouts; a wall-clock cap only finalizes a \
      run as deadline_exceeded at the operator boundary."
@@ -76,18 +78,19 @@ let rules =
 let first_calls =
   [ "curl -sS -H 'Content-Type: application/json' -d '{\"name\":\"my-agent\"}' \
       $BASE/api/signup   # 201 {id,name,is_admin,token}; token returned ONCE"
-  ; "curl -sS -H 'Authorization: Bearer $TOKEN' -H 'Content-Type: application/json' \
-      -d '{\"source\":\"(\\f. \\x. f x)\"}' $BASE/api/programs"
-  ; "curl -sS -H 'Authorization: Bearer $TOKEN' -H 'Content-Type: application/json' \
-      -d '{\"program\":\"<hash>\",\"inputs\":[]}' $BASE/api/runs"
-  ; "curl -sS -H 'Authorization: Bearer $TOKEN' $BASE/api/runs/<id>/trace"
+  ; "curl -sS -H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/json' \
+      -d '{\"source\":\"(lambda (f) (lambda (x) (f x)))\"}' $BASE/api/programs   # {hash}"
+  ; "curl -sS -H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/json' \
+      -d '{\"program_hash\":\"<hash>\",\"inputs\":[\"0\",\"10\"],\"trace\":true}' $BASE/api/runs   # {run:{id,status,result_ternary,step_count,...}}"
+  ; "curl -sS -H \"Authorization: Bearer $TOKEN\" $BASE/api/runs/<id>   # {run:{...,verify_status},journal}"
+  ; "curl -sS -H \"Authorization: Bearer $TOKEN\" $BASE/api/runs/<id>/trace"
   ; "curl -sS $BASE/code"
   ]
 
 let curl_example (base : string) : string =
   Printf.sprintf
-    "curl -sS -H 'Authorization: Bearer $TOKEN' -H 'Content-Type: application/json' \\\n\
-    \  -d '{\"source\":\"(\\\\f. \\\\x. f x)\"}' %s/api/programs"
+    "curl -sS -H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/json' \\\n\
+    \  -d '{\"source\":\"(lambda (f) (lambda (x) (f x)))\"}' %s/api/programs"
     base
 
 let agent_json ?(base_url : string option = None) () : Yojson.Basic.t =
@@ -141,7 +144,7 @@ let agent_json ?(base_url : string option = None) () : Yojson.Basic.t =
                   ; ("path", `String "/api/programs")
                   ; ("auth", `String "required")
                   ; ( "request"
-                    , `Assoc [ ("source", `String "(\\f. \\x. f x)") ] )
+                    , `Assoc [ ("source", `String "(lambda (f) (lambda (x) (f x)))") ] )
                   ; ( "response_ok"
                     , `Assoc
                         [ ("hash", `String "sha256-hex")
@@ -158,30 +161,32 @@ let agent_json ?(base_url : string option = None) () : Yojson.Basic.t =
                   ; ("auth", `String "required")
                   ; ( "request"
                     , `Assoc
-                        [ ("program", `String "<hash>")
+                        [ ("program_hash", `String "<hash>")
                         ; ("inputs", `List [])
                         ; ("grants", `List [])
                         ; ("fuel", `Int 10000)
-                        ; ("size_cap", `Int 10000) ] ) ] )
+                        ; ("size_cap", `Int 10000)
+                        ; ("trace", `Bool false) ] )
+                  ; ( "response_ok"
+                    , `String "{run: {id, status, result_ternary, step_count, ...}}" ) ] )
             ; ( "runs_get"
               , `Assoc
                   [ ("method", `String "GET")
                   ; ("path", `String "/api/runs/<id>")
-                  ; ("auth", `String "required") ] )
+                  ; ("auth", `String "required")
+                  ; ( "returns"
+                    , `String
+                        "{run, journal}; an unverified finished run is \
+                         replay-verified on read (run.verify_status)" ) ] )
             ; ( "run_trace"
               , `Assoc
                   [ ("method", `String "GET")
                   ; ("path", `String "/api/runs/<id>/trace")
                   ; ("auth", `String "required")
                   ; ( "returns"
-                    , `String "the firing trace (steps, prims, step counts)" ) ] )
-            ; ( "run_verify"
-              , `Assoc
-                  [ ("method", `String "POST")
-                  ; ("path", `String "/api/runs/<id>/verify")
-                  ; ("auth", `String "required")
-                  ; ( "returns"
-                    , `String "replay verdict: verified | failed" ) ] )
+                    , `String
+                        "the firing trace (steps, prims, step counts) of a \
+                         run posted with \"trace\": true" ) ] )
             ; ( "journal"
               , `Assoc
                   [ ("method", `String "GET")
@@ -376,19 +381,23 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; ""
     ; "Programs are compiled then run in two steps:"
     ; ""
-    ; "  POST " ^ origin ^ "/api/programs   {\"source\":\"(\\\\f. \\\\x. f x)\"}"
-    ; "    -> {\"hash\":\"…\",\"ternary\":\"…\"}"
+    ; "  POST " ^ origin ^ "/api/programs   {\"source\":\"(lambda (f) (lambda (x) (f x)))\"}"
+    ; "    -> {\"hash\":\"…\"}"
     ; ""
-    ; "  POST " ^ origin ^ "/api/runs       {\"program\":\"<hash>\",\"inputs\":[]}"
-    ; "    -> {\"id\":\"…\",\"status\":\"normal\",\"step_count\":N,…}"
+    ; "  POST " ^ origin ^ "/api/runs       {\"program_hash\":\"<hash>\",\"inputs\":[\"0\",\"10\"]}"
+    ; "    -> {\"run\":{\"id\":\"…\",\"status\":\"normal\",\"result_ternary\":\"110\",\"step_count\":2,…}}"
+    ; ""
+    ; "Inputs are canonical ternary trees.  The surface language is"
+    ; "s-expressions: (lambda (x) body), application, %<ternary> tree"
+    ; "literals, \"...\" strings."
     ; ""
     ; "Authentication is required on /api/*; /health, /welcome, /code,"
     ; "/src.tgz, /agent.txt and /.well-known/agent.json are public."
     ; ""
     ; "## Verification surfaces"
     ; ""
-    ; "- GET  " ^ origin ^ "/api/runs/<id>/trace    the firing trace"
-    ; "- POST " ^ origin ^ "/api/runs/<id>/verify   replay verdict"
+    ; "- GET  " ^ origin ^ "/api/runs/<id>          run + journal; replay-verifies on read (run.verify_status)"
+    ; "- GET  " ^ origin ^ "/api/runs/<id>/trace    the firing trace (run posted with \"trace\": true)"
     ; "- GET  " ^ origin ^ "/api/journals/<run_id>  the prim-call journal"
     ; ""
     ; "Replay re-executes program+inputs with prim calls answered"

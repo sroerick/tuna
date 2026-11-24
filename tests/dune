@@ -87,6 +87,19 @@
  (modules m11_tests tuna_test_eio)
  (libraries tuna tuna_compiler tuna_store tuna_server base64 digestif alcotest eio eio_main))
 
+; agent contract (/agent.txt, /.well-known/agent.json): the published
+; examples compile, run, and name routes the router serves
+(executable
+ (name agent_contract_tests)
+ (modules agent_contract_tests)
+ (libraries tuna tuna_interp tuna_compiler tuna_store tuna_server yojson alcotest))
+
+(rule
+ (alias runtest)
+ (deps agent_contract_tests.exe)
+ (action
+  (run %{exe:agent_contract_tests.exe})))
+
 (executable
  (name repl_tests)
  (modules repl_tests)
@@ -182,7 +195,8 @@
 
 ; M3 differential harness: three engines (instrumented upstream copy,
 ; CL reference twin, tuna CLI) must agree on every corpus entry.
-; Skipped silently when sbcl is not installed.
+; Skipped (with a message) only when sbcl is not installed; a harness
+; failure fails runtest.
 (rule
  (alias runtest)
  (deps
@@ -190,7 +204,8 @@
   ../reference/tree-calc.lisp
   (source_tree ../scripts/diff-corpus))
  (action
-  (bash "command -v sbcl >/dev/null 2>&1 && bash %{workspace_root}/scripts/verify-differential.sh || echo 'sbcl missing: differential harness skipped'")))
+  (bash
+   "if command -v sbcl >/dev/null 2>&1; then TUNA_DIFF_GEN=%{exe:../tools/gen/gen.exe} TUNA_DIFF_CLI=%{exe:../cli/bin/main.exe} bash %{workspace_root}/scripts/verify-differential.sh; else echo 'sbcl missing: differential harness skipped'; fi")))
 
 (executable
  (name deriv_tests)

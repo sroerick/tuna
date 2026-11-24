@@ -55,7 +55,7 @@ start() {
   echo "[serve] booting PG via dev.sh start-pg (TUNA_DB_* honored)..."
   "$ROOT/scripts/dev.sh" start-pg
   echo "[serve] building @all..."
-  ( cd "$ROOT" && dune build @all )
+  ( cd "$ROOT" && dune build --root "$ROOT" @all )
   echo "[serve] building public artifacts..."
   "$ROOT/scripts/deploy/build-public.sh" "$PUBLIC_DIR"
   if running; then

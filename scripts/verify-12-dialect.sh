@@ -20,8 +20,8 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 eval $(opam env --switch=poohstack --set-switch)
-dune build cli/bin/main.exe 2>/dev/null
-CLI=_build/default/cli/bin/main.exe
+dune build --root "$ROOT" cli/bin/main.exe 2>/dev/null
+CLI="$ROOT/_build/default/cli/bin/main.exe"
 
 # compile a surface term, echo "<ternary> <size> <steps>"
 compile_term() {

@@ -156,9 +156,10 @@ echo "[8.5] balance = $BAL, replay $V; deriv seal next"
 STEPS=$(repl_field "$OUT" steps)
 
 eval "$OPAM_ENV" 2>/dev/null || true
-dune build tools/deriv-check/deriv_check.exe 2>/dev/null || \
+TUNA_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+dune build --root "$TUNA_ROOT" tools/deriv-check/deriv_check.exe 2>/dev/null || \
   fail "could not build deriv-check"
-DC=_build/default/tools/deriv-check/deriv_check.exe
+DC="$TUNA_ROOT/_build/default/tools/deriv-check/deriv_check.exe"
 curl -sf -m 300 -H "$AUTH" "$BASE/api/runs/$RUN_ID/deriv" | $DC - >/dev/null \
   && echo "[8.5] deriv-check exit 0 (sealed receipt verified offline)" \
   || fail "deriv-check failed on the balance run (steps=$STEPS)"

@@ -24,7 +24,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 eval $(opam env --switch=poohstack --set-switch)
-dune build tools/gen/gen.exe cli/bin/main.exe
+dune build --root "$PWD" tools/gen/gen.exe cli/bin/main.exe
 GEN=_build/default/tools/gen/gen.exe
 
 NOT=22102000        # not: not true = false, not false = true
@@ -130,7 +130,7 @@ emit church3_succ_zero
 # --- sabra stdlib v1 (borg/stdlib.borg acceptance 2) ----------------
 # one entry per stdlib def; programs are compiled (lambda (w) <case>),
 # so the twin measures RUNTIME steps.  Ends stay small (F6).
-dune build tools/stdprobe/corpusgen.exe
+dune build --root "$PWD" tools/stdprobe/corpusgen.exe
 CG=_build/default/tools/stdprobe/corpusgen.exe
 for slug in $($CG --list); do
   $CG "$slug" > "$tmp.def"

@@ -10,15 +10,33 @@
 #   3. the tuna CLI evaluator (cli/bin/main.exe eval).
 # Exit 0 on green; exit 1 on the first mismatch, printing all three
 # outputs and the expected line.
+#
+# The dune runtest rule passes the two binaries in as TUNA_DIFF_GEN /
+# TUNA_DIFF_CLI (it already built them). Run by hand, the script builds
+# them itself with --root: inside the wyo monorepo a bare `dune` resolves
+# to the repo root, which excludes tuna/.
 set -uo pipefail
+# make caller-relative binary paths absolute before changing directory
+for v in TUNA_DIFF_GEN TUNA_DIFF_CLI; do
+  [ -n "${!v:-}" ] && printf -v "$v" '%s' "$(realpath "${!v}")"
+done
 cd "$(dirname "$0")/.."
 
-eval $(opam env --switch=poohstack --set-switch)
 command -v sbcl >/dev/null || { echo "FATAL: sbcl not found (needed for the CL reference twin)" >&2; exit 2; }
-dune build tools/gen/gen.exe cli/bin/main.exe 2>/dev/null
 
-GEN=_build/default/tools/gen/gen.exe
-CLI=_build/default/cli/bin/main.exe
+if [ -n "${TUNA_DIFF_GEN:-}" ] && [ -n "${TUNA_DIFF_CLI:-}" ]; then
+  GEN=$TUNA_DIFF_GEN
+  CLI=$TUNA_DIFF_CLI
+else
+  eval $(opam env --switch=poohstack --set-switch)
+  dune build --root "$PWD" tools/gen/gen.exe cli/bin/main.exe \
+    || { echo "FATAL: could not build the differential binaries" >&2; exit 2; }
+  GEN=_build/default/tools/gen/gen.exe
+  CLI=_build/default/cli/bin/main.exe
+fi
+for exe in "$GEN" "$CLI"; do
+  [ -x "$exe" ] || { echo "FATAL: missing harness binary $exe" >&2; exit 2; }
+done
 fails=0
 total=0
 
