@@ -1,0 +1,157 @@
+(project tuna-gate-receipts
+ (doc "Tuna book chapter: gate receipts - tuna's first product customer is the delivery gate. A gate result (a build, a test suite, a lint) becomes a claim whose verdict is a PRIM-FREE tuna run over an attested observation record, so any reviewer identity can re-derive the verdict from content-addressed artifacts instead of trusting a sentence in a commit message. Research question, stated so it can be refuted: does a replayable verdict over attested observations catch fail-open gates, and is it cheap enough that the factory and its reviewers actually use it?")
+ (status planned)
+ (convention ocaml-dune)
+ (* agent note (|2026-11-23 design discussion (roerick + Claude, onboarding session). MOTIVATION, both observed the same day: (1) tuna's three-engine differential gate built no binaries after the monorepo merge, failed 93/93, and the runtest rule's `&& ... || echo` reported it as "sbcl missing: skipped" - make -C tuna test exited 0 (fixed in 3cd448d5); (2) pp's image/test/data_spaces_test.ml prints SKIP and marks every case [OK] when Postgres is unreachable, so a default-env run reports 15/15 green while testing nothing. The organization policy installed the same day (nomia: engineering.verify-change, engineering.independent-review) already demands gate evidence over claims; nomia's review-change check-evidence.sh says of itself "a completeness check, not a truth check". This chapter is the truth half. FRAMING DECISION: tuna does not run the gate. Shell commands are host effects that no journal can make replayable; what tuna CAN make replayable is the DECISION (pass, fail, unverified) given the facts, and what it can make tamper-evident is WHO asserted the facts. Everything below follows from keeping those two apart.|) *)
+ (section gate-receipts
+  (doc "Three layers with different trust: OBSERVATION (attested by a runner identity, not proven), VERDICT (a pure tuna program, re-derivable by anyone), REPRODUCTION (optional re-execution of the command at the same revision by a reviewer).")
+  (status planned)
+  (subsection observation-record
+   (status planned)
+   (details
+    (doc (|
+      A runner (the factory loop, an agent's verify-change pass, or a
+      human's wrapper script) executes one check and records an
+      observation. It is a tuna record (dialect v1.1: a list of
+      [key value] two-lists) passed to the verdict run as an INPUT,
+      never fetched by a prim, so the verdict run stays prim-free:
+
+        gate        check slug, e.g. tuna/runtest
+        project     owning project dir, e.g. tuna
+        command     the exact argv string run
+        rev         git commit the tree was at (40 hex)
+        tree_clean  1 when the working tree matched rev, else 0
+        diff_hash   sha256 of `git diff HEAD` when tree_clean is 0
+        exit        process exit status
+        log_hash    sha256 of combined stdout+stderr bytes; the bytes
+                    are stored as a byte value (byte-values.borg) and
+                    resolvable by hash
+        counts      [run passed failed skipped], parsed from the log by
+                    the runner's harness adapter, or the atom unparsed
+        adapter     name+version of the parser that produced counts
+        runner      identity that executed the command
+        started_at  UTC timestamp (attribution only; not a verdict input)
+
+      Secrets never enter the record: env is recorded by NAME only, and
+      the log is the runner's responsibility to redact before hashing
+      (a redacted log is a different log hash, stated, never silent).
+
+      Parsing logs in the calculus is deliberately out of scope for v1:
+      strings are bit lists, so a 10k-line test log is a priced
+      non-starter. The adapter runs host-side and its counts are
+      attested facts like the exit code. The log hash lets a reviewer
+      re-parse. This is the prim-creep discipline from the substrate
+      discussion: no new prim is admitted to make the verdict "smarter"
+      unless a refuted fixture shows the pure policy cannot decide it.
+    |))
+   )
+  )
+  (subsection verdict-program
+   (status planned)
+   (details
+    (doc (|
+      The verdict is a pure sabra program over one observation record,
+      compiled once and addressed by hash. v1 policy, in order:
+
+        exit is nonzero                                   -> fail
+        counts is unparsed                                -> unverified
+        run is 0                                          -> unverified
+        failed is nonzero                                 -> fail
+        skipped is nonzero and gate not in skip-allowed   -> unverified
+        tree_clean is 0 and diff_hash is empty            -> unverified
+        otherwise                                         -> pass
+
+      unverified is a first-class answer, never folded into pass. It is
+      the organization rule "an unrun or unavailable check is
+      unverified, never a pass" made executable. The skip-allowed set
+      is a program INPUT (a list of gate slugs), so a project widening
+      it is a visible change to the cited inputs, not a code edit.
+
+      Both 2026-11-23 failures land as unverified under this policy:
+      the differential gate parses to run 0, and the pp PG suite's SKIP
+      lines parse to skipped 15. The adapter must count a printed SKIP
+      as a skip even when the harness reports [OK]; that adapter rule is
+      the one piece of gate-specific knowledge the system needs.
+    |))
+   )
+  )
+  (subsection minting-and-verifying
+   (status planned)
+   (details
+    (doc (|
+      The runner POSTs the verdict run (program = verdict hash,
+      inputs = [observation, skip-allowed]) and mints it with the
+      existing claims machinery (scripts/claims.sh mint), at
+
+        u.<runner>.claim.<date>.gate.<project>.<rev12>.<gate-slug>
+
+      Because the run is prim-free, the claims.sh VERIFIABLE property
+      holds: any identity resolves the cited program and inputs by
+      hash, re-executes under the same caps, and compares result hash
+      and step count, with no access to the runner's run row or
+      journal. A sealed derivation record (deriv.borg) is available for
+      offline checking with deriv-check.
+
+      What a verified receipt PROVES: this verdict follows from this
+      exact observation record under this exact policy, and identity R
+      asserted the record. What it does NOT prove: that the command ran
+      or exited as recorded, or that the tests test the right thing.
+      Those stay with REPRODUCTION (a reviewer re-runs the command at
+      rev and compares exit and counts) and with independent review.
+      Attestation is why the runner identity matters: a receipt minted
+      by the implementer's own identity is weaker evidence than one
+      minted by a separate factory runner identity, and review-change
+      should say which it got.
+    |))
+   )
+  )
+  (subsection integration
+   (status planned)
+   (details
+    (doc (|
+      Seams that exist today (no new subsystem):
+        - nomia verify-change: its report gains an optional receipt
+          (claim path) per command; review-change's check-evidence.sh
+          gains a mode that resolves each receipt with claims.sh verify
+          and fails when a receipt's verdict disagrees with the claimed
+          exit or pass.
+        - factory/evidence.py and the loop's gate runs: emit one receipt
+          per gate command; a card cannot advance on a gate whose
+          receipt verdict is unverified.
+        - tuna's own make test: the first runner, via a planned wrapper
+          scripts/gate-receipt.sh, so tuna dogfoods its own gate.
+
+      ORDER. G1: observation encoding, verdict program, the two harness
+      adapters (alcotest, the tuna differential script) and the wrapper,
+      against tuna's own suite. G2: check-evidence.sh receipt mode. G3:
+      the factory loop emits receipts for every gate. Each step stands
+      alone; G1 is useful with no factory change.
+    |))
+   )
+  )
+  (subsection failure-definitions
+   (status planned)
+   (details
+    (doc (|
+      Defined in advance, per acceptance.borg's regime; record any
+      observed failure in FINDINGS.md with evidence:
+        GF1  a reproduced fail-open gate (exit 0, nothing checked) still
+             yields pass: the policy or adapter is wrong.
+        GF2  verifying a receipt costs a reviewer more than re-running
+             the check: the format is not paying for itself.
+        GF3  after G3, factory reviewers still cite exit codes and not
+             receipts: no one uses it, and the chapter is refuted on
+             adoption.
+        GF4  the verdict needs a prim to decide a real gate: the
+             prim-free property, and with it third-party verification,
+             does not survive contact with real gates.
+    |))
+   )
+  )
+ )
+ (verify
+  (test "verdict fixtures: an observation with exit 0 and counts [0 0 0 0] is unverified; exit 0 with [15 15 0 15] (the pp SKIP shape) is unverified unless the gate is skip-allowed; exit 0 with [93 93 0 0] is pass; exit 1 is fail; unparsed counts are unverified")
+  (test "replaying the 2026-11-23 differential failure (tuna at a90487b3, before 3cd448d5) through scripts/gate-receipt.sh yields unverified, and the same gate at 3cd448d5 yields pass")
+  (test "a receipt minted by one identity verifies under claims.sh verify for a second, non-admin identity with no access to the runner's run row")
+  (test "changing any observation field changes the cited input hash, and verify against the original claim path reports a mismatch")
+  (test "check-evidence.sh in receipt mode fails a report that claims pass for a command whose receipt verdict is unverified")))
