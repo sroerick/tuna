@@ -31,6 +31,7 @@
  (convention ocaml-dune)
  (section grants
   (doc "Capability grants as the security model: grants are arguments, the evaluator guarantees reachability, the host defines policy.")
+  (status implemented)
 
   (subsection grant-token
    (doc "Shape of a grant: an opaque row the evaluator never interprets")

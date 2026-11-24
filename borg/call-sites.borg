@@ -30,6 +30,7 @@
  (convention ocaml-dune)
  (section call-sites
   (doc "The seam between compiled trees and human comprehension: canonical program paths as the primary coordinate system, with IR provenance retained so diagnostics can talk about source.")
+  (status implemented)
 
   (subsection tagging
    (doc "Callsite paths assigned at compile time")

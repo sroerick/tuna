@@ -17,7 +17,7 @@ source of truth; code converges to it).
 
 ```
 eval $(opam env --switch=poohstack --set-switch)
-dune build @all && dune runtest          # build + unit/differential tests
+dune build --root . @all && dune runtest --root .  # build + unit/differential tests
 scripts/dev.sh start                     # PG (:5434, db tuna) + server (:18090)
 curl -s http://127.0.0.1:18090/health    # {"status":"ok","db":true}
 ```
@@ -363,7 +363,7 @@ Recorded, not hidden:
 ## Tests & acceptance
 
 ```
-dune runtest                     # 60+ alcotest suites + 24-entry differential corpus (3 engines agree)
+dune runtest --root .            # 60+ alcotest suites + 24-entry differential corpus (3 engines agree)
 scripts/smoke-api.sh             # 14 sections over a live server
 scripts/smoke-ui.sh              # 17 sections over the htmx UI
 scripts/smoke-public.sh          # 12 sections over the public rim + sessions

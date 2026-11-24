@@ -159,6 +159,43 @@
         README (the mutating GET is get_run's auto replay-verify; the
         all=1 sweep is admin-only since a1) - a real CSRF token stays
         the named future fix.|) *)
+(* agent note (|2026-10-27 TENANCY (the floor law the g1 note left open;
+     live-box scoping pass 2026-10-27): a grant's path_prefix must COVER
+     the path a call touches, and a NULL prefix covers NO path.  Three
+     consumers, one law: has_covering_grant (store.ml) ignores NULL rows,
+     so a holder's capability is the union of its SCOPED rows - one
+     store-wide row no longer stands in for every garden; check_grant's
+     NULL arm answers Prefix_denied for any call that carries paths, so a
+     pathless capability authorizes only pathless calls at the prim
+     boundary too; attenuation_narrower refuses to derive path scope from
+     a NULL parent, so scope can only ever narrow.  The mint completes it
+     (Api.grant_mint_core): a non-admin mint of a path-addressed prim
+     (tree/*, ns/fork, "*") needs an explicit prefix INSIDE a prefix the
+     caller already covers, and an admin may mint FOR another identity
+     ({"identity": "<id>"}) - the operator seeds a garden, the member
+     narrows inside it, and neither can mint into somebody else's space
+     or hand a capability to somebody else.  /api/tree/log and
+     /api/tree/state now answer to the floor with the requested prefix as
+     the path (both took _auth and folded the whole substrate for any
+     bearer).  verify-1 [1.6]/[1.7] and verify-14 [14.1] pin: NULL rows
+     deny, a seeded garden opens exactly its prefix, a member cannot mint
+     outside its own or for another identity, "" is 400.  STILL OPEN: the
+     floor stays path-only and prim-blind, so a garden is a prefix and not
+     a per-prim allowlist (no read-without-write row shape); raw-string
+     prefix matching aliases siblings (u.notes covers u.notes-writer),
+     and separator-aware matching must keep the garden-root listing
+     working, since tree/list gates on the request's prefix string
+     itself.|) *)
+
+(* agent note (|2026-10-27 GRANTS PAGE READ-ONLY: the human /grants page
+      is a read view of the grants table (short id, identity, prim,
+      path_prefix, status, granted_by, created_at) over the same
+      Store.list_grants the admin JSON list uses; the session-tier form
+      endpoints /grants/mint + /grants/:id/revoke are retired.  Minting
+      and revocation stay API-first - POST /api/grants,
+      /api/grants/:id/attenuate and /api/grants/:id/revoke are the
+      machine surface, and the page's muted note says so.  smoke-ui
+      [15] pins the read-only page (table renders, no forms ship). |) *)
   (subsection public-rim
    (status implemented)
    (details
@@ -245,41 +282,3 @@
       code), the code list follows in the same commit, and a
       regression test pins the collision denial. |)))))
 )
-
-(* agent note (|2026-10-27 TENANCY (the floor law the g1 note left open;
-     live-box scoping pass 2026-10-27): a grant's path_prefix must COVER
-     the path a call touches, and a NULL prefix covers NO path.  Three
-     consumers, one law: has_covering_grant (store.ml) ignores NULL rows,
-     so a holder's capability is the union of its SCOPED rows - one
-     store-wide row no longer stands in for every garden; check_grant's
-     NULL arm answers Prefix_denied for any call that carries paths, so a
-     pathless capability authorizes only pathless calls at the prim
-     boundary too; attenuation_narrower refuses to derive path scope from
-     a NULL parent, so scope can only ever narrow.  The mint completes it
-     (Api.grant_mint_core): a non-admin mint of a path-addressed prim
-     (tree/*, ns/fork, "*") needs an explicit prefix INSIDE a prefix the
-     caller already covers, and an admin may mint FOR another identity
-     ({"identity": "<id>"}) - the operator seeds a garden, the member
-     narrows inside it, and neither can mint into somebody else's space
-     or hand a capability to somebody else.  /api/tree/log and
-     /api/tree/state now answer to the floor with the requested prefix as
-     the path (both took _auth and folded the whole substrate for any
-     bearer).  verify-1 [1.6]/[1.7] and verify-14 [14.1] pin: NULL rows
-     deny, a seeded garden opens exactly its prefix, a member cannot mint
-     outside its own or for another identity, "" is 400.  STILL OPEN: the
-     floor stays path-only and prim-blind, so a garden is a prefix and not
-     a per-prim allowlist (no read-without-write row shape); raw-string
-     prefix matching aliases siblings (u.notes covers u.notes-writer),
-     and separator-aware matching must keep the garden-root listing
-     working, since tree/list gates on the request's prefix string
-     itself.|) *)
-
-(* agent note (|2026-10-27 GRANTS PAGE READ-ONLY: the human /grants page
-      is a read view of the grants table (short id, identity, prim,
-      path_prefix, status, granted_by, created_at) over the same
-      Store.list_grants the admin JSON list uses; the session-tier form
-      endpoints /grants/mint + /grants/:id/revoke are retired.  Minting
-      and revocation stay API-first - POST /api/grants,
-      /api/grants/:id/attenuate and /api/grants/:id/revoke are the
-      machine surface, and the page's muted note says so.  smoke-ui
-      [15] pins the read-only page (table renders, no forms ship). |) *)

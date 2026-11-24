@@ -19,8 +19,8 @@ converge to it.
 
 ```
 eval $(opam env --switch=poohstack --set-switch)
-dune build @all          # exit 0 is the gate
-dune runtest             # alcotest suites must pass
+dune build --root . @all # exit 0 is the gate
+dune runtest --root .    # alcotest suites must pass
 scripts/dev.sh start     # boots PG cluster (runtime socket directory from `scripts/dev.sh`, :5434, db tuna) + server (:18090)
 scripts/dev.sh status    # migrations auto-apply
 curl -s http://127.0.0.1:18090/health
@@ -95,7 +95,7 @@ scripts/      dev.sh orchestration, verify_*.sh acceptance scripts
 
 ## Verification culture
 
-- After any change: `dune build @all && dune runtest` must be green
+- After any change: `dune build --root . @all && dune runtest --root .` must be green
   before commit. Commit early, commit small.
 - `borge lint && borge report` must stay clean; if a stanza's reality
   changes, update the borg book in the same commit (status flips are

@@ -120,10 +120,10 @@
    "borg/board.borg"
   )
   (inline
-   "borg/board.borg"
+   "borg/gate-receipts.borg"
   )
   (inline
-   "borg/gate-receipts.borg"
+   "borg/metatheory.borg"
   )
  (* agent note (|2026-09-15 STORAGE SUBSTRATE WATCH (operator review
       session, PP archaeology). Pricklypear's one-tree substrate

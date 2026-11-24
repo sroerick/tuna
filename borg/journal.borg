@@ -35,6 +35,7 @@
  (convention ocaml-dune)
  (section journal
   (doc "The journal: append rows per run at each prim boundary event. Everything else in the system is derivable from hashes plus semantics; the journal is what the world actually answered.")
+  (status in-progress)
 
   (subsection row-schema
    (doc "Journal row shape and storage")
@@ -135,7 +136,7 @@
 
   (subsection retention-gc
    (doc "Retention, garbage collection, and PII")
-   (status partial)
+   (status in-progress)
    (details
     (doc (|
          Three pressures priced up front:

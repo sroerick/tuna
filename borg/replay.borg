@@ -29,6 +29,7 @@
  (convention ocaml-dune)
  (section replay
   (doc "Re-executing recorded runs: faithful replay for verification, live replay for debugging, counterfactual replay for exploration; divergence reported as structural diffs designed for agents.")
+  (status implemented)
 
   (subsection faithful
    (doc "Faithful replay — the verification primitive")
