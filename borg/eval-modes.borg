@@ -1,0 +1,128 @@
+(project tuna-eval-modes
+ (doc "Tuna book chapter: evaluation modes - make tuna fast enough to answer a request (render a page, answer a tool call) while the five rewrite rules stay the only semantics. Two moves: E1 staging, which already works at compile time and needs a convention, a record and a vocabulary; E2 accelerators, native implementations of pure stdlib trees keyed by hash, under a new semantics version with reference re-verification. Named and deferred: recorded calls and job mode. Research question, stated so it can be refuted: can request-path cost fall by orders of magnitude WITHOUT an impure evaluation mode - no new effect, no unjournaled host call, no change to what any program tree means - so that every fast answer stays checkable, offline, against the reference law?")
+ (status planned)
+ (convention ocaml-dune)
+ (* agent note (|2026-11-25 chapter authored (roerick + Claude) after the tool-language chapter. OWNER DIRECTION, this date: no impure evaluation mode; distinguish in the core, not by bracket syntax, a function that is precompiled (templates) from one that runs live; keep everything runnable OFFLINE (no first-class dependency on a server to record or check a run). EVIDENCE that shapes the moves, measured in-tree this date: (1) Bracket.compile reduces the whole program to normal form (bracket.ml artifact.steps counts compile-time firings), so (render tmpl) written in a source is specialised at compile time today. Experiment (throwaway exe, stdlib/v1 dictionary, template [13 0 11 7 0 14 9 0 6 12], data 42): NAIVE render (lambda (t) (lambda (d) (list-map (lambda (s) (if d (int-mul s s) (tree-eq s int-zero))) t))) specialises in 2 steps and still costs 13,465,951 steps per request; STAGED render (lambda (t) ((lambda (pre) (lambda (d) (list-map (lambda (x) (if d x (tree-eq x int-zero))) pre))) (list-map (lambda (s) (int-mul s s)) t))) pays 13,461,209 steps once at compile and 7,029 per request; same result hash. Staging is a binding-time property of how the program is WRITTEN, not something the evaluator can add. (2) The same experiment is the accelerator case: ~2M v0 steps per in-calculus int-mul of operands under 15 (the F6 slope math-prims.borg already recorded). PRECEDENT: Urbit's Nock runs its stdlib through 'jets' (native code matched to known formulas); its known failure class is jet mismatch, answered by a run-both-and-compare mode. This chapter uses the neutral word accelerator.|) *)
+ (section eval-modes
+  (doc "Two moves; neither changes the five rules, the tree law, the prim set or the journal.")
+  (status planned)
+  (subsection e1-staging
+   (status planned)
+   (details
+    (doc (|
+      WHAT EXISTS: compile is normal-form reduction, so a source that
+      applies a staged function to its static input - (render-page
+      tmpl) - compiles to the specialised tree, and def stores it by
+      hash. Nothing in the evaluator needs to change.
+
+      WHAT IS MISSING:
+      (a) A RECORD. A specialised tree is the answer to (function hash,
+          static input hash). Store that triple so a specialisation is
+          citable and re-derivable: anyone holding the two inputs
+          re-reduces offline and must get the same hash. This is the
+          demand-memo key law (sharing.borg) applied to a whole
+          partial application, recorded per def rather than per firing.
+      (b) A STAGED VOCABULARY. The naive and staged renderers above
+          compute the same function; only the staged one specialises.
+          So the template library is written staged from the start:
+          template-compile : template -> (data -> output), with every
+          template-only computation (parsing, static formatting,
+          constant arithmetic) outside the data lambda. Vocabulary
+          first (stdlib.borg gate): the library lands with acceptance
+          before any page uses it.
+      (c) A CHECK, NOT A KEYWORD. A def may declare itself staged with
+          a request budget (fuel per request). Acceptance compiles it,
+          runs a declared sample request, and fails the def when the
+          request exceeds the budget - catching a naive renderer at
+          def time instead of in production. No new bracket syntax:
+          [ ] already means list and record literals, and the
+          distinction is a property of the definition, not of a call.
+
+      Target workload: a real page in the board chapter's surface,
+      rendered from a staged template over a todo record list. |))))
+  (subsection e2-accelerators
+   (status planned)
+   (details
+    (doc (|
+      An ACCELERATOR is a native implementation of a pure stdlib tree,
+      keyed by that tree's sha256. When the fast evaluator is about to
+      apply a tree whose hash is registered, it calls the native
+      function on the argument trees instead of rewriting.
+
+      LAW:
+      - Reference mode (v0, and v1 per sharing.borg) is unchanged and
+        stays the semantics. Accelerators run only under a new run
+        semantics version ("fast"), recorded on the run row like v1:
+        its step counts are fast-mode facts, not comparable to v0 and
+        not claimed to be. Fuel under fast mode charges a declared
+        cost per accelerated call.
+      - An accelerator may DECLINE (malformed or out-of-range input):
+        the evaluator falls back to rewriting that application. It
+        never guesses.
+      - Keyed by hash, never by name. A different tree computing the
+        same function is not accelerated; extensional equality is
+        undecidable, and the stdlib's pinned names (tool-language T2)
+        are how programs reach the canonical hashes.
+      - Not a prim: no grant, no journal entry, no effect. A prim is
+        an environment answer the journal must record; an accelerator
+        computes what the tree would have computed, so replay under
+        the reference law recomputes it.
+
+      CHECKING, three tiers:
+      1. DIFFERENTIAL (required to register): for every accelerator,
+         a vector table plus generated inputs, malformed trees
+         included, run under reference and fast modes; results must
+         be identical or the accelerator must decline. Runs at make
+         time and on every change, like the math-prim vector table.
+      2. RE-VERIFICATION (always available): any fast-mode run can be
+         re-executed under v0, offline, by anyone, and must give the
+         same result hash. A sampled audit runs this on live rows.
+      3. PROOF (optional, for the foundational few): int-add, int-sub,
+         int-mul, int-cmp and tree-eq proved equal to their trees in
+         Rocq or Lean, building on the existing Coq formalisations of
+         tree calculus. Phase-4 scope, not a gate.
+
+      FIRST SET: first-order and total - int-add, int-sub, int-mul,
+      int-cmp, tree-eq, list-length, list-append, list-reverse. The
+      higher-order ones (list-fold, list-map) need a native loop that
+      calls back into the evaluator for the function argument; they
+      come second, with their own differential vectors. |))))
+  (subsection deferred
+   (status planned)
+   (details
+    (doc (|
+      Named so they are not rediscovered as new ideas; not scheduled.
+      RECORDED CALLS: an in-program form marking a call whose (function,
+      input, result, steps) is kept. Local-first: the record is data
+      that can live in a file and sync later or never, so it must not
+      require tuna.town. Waits until E1's record and E2's
+      re-verification give it a format to reuse.
+      JOB MODE: a definition declares a fuel class too large for a
+      request; the host queues it and drives the pure step core in
+      slices (purity.borg suspension already parks and resumes a
+      machine). Waits for a real long-running workload. |))))
+  (subsection failure-definitions
+   (status planned)
+   (details
+    (doc (|
+      Written before any code, per acceptance.borg:
+      EM1 STAGING DOES NOT PAY: on the target page, request-path v0
+          steps of the staged template exceed 1% of the live
+          (unstaged) render. The 2026-11-25 experiment measured 0.05%.
+      EM2 ACCELERATOR MISMATCH: any vector, live audit or replay where
+          fast and reference results differ. The accelerator is
+          unregistered at once and the mismatch filed as a finding; it
+          is never patched in place under the same semantics version.
+      EM3 ACCELERATORS DO NOT PAY: the gate verdict and the naive
+          renderer under fast mode are not at least 10x faster in wall
+          clock than v0.
+      EM4 HASH FRAGILITY: stdlib revisions keep moving the hashes
+          accelerators are keyed on, so registrations churn with each
+          manifest bump. Recorded with the churn count; the answer is
+          a stdlib stability rule, not name-keyed accelerators. |)))))
+ (verify
+  (test "E1: a staged template def records (function hash, static input hash, specialised hash), an offline re-reduction reproduces the specialised hash, and a naive renderer declared staged fails its request budget at def time")
+  (test "E1: the target board page renders from its staged template with request-path steps under 1% of the unstaged render, same output")
+  (test "E2: every registered accelerator passes its differential vectors (malformed inputs included) against the reference law, and a fast-mode run re-verifies under v0 to the same result hash")
+  (test "E2: a tree computing the same function under a different hash is not accelerated, and an accelerator that declines falls back to rewriting with the same result")
+  (test "E2: the gate verdict and the naive renderer run at least 10x faster in wall clock under fast mode than under v0")))
