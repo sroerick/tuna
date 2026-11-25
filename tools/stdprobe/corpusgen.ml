@@ -114,6 +114,14 @@ let cases =
      as data while the tuna lane substitutes a host error answer).*)
   ; ( "stdlib_todo-add",
       ("(pair todo-add w)", "%10") )
+  (* tool-language.borg T1: one law per combinator, each with a
+     hand-known answer.  S K K = I (K is std true); B not not = id on
+     bools; C pair x y = pair y x; W pair x = pair x x. *)
+  ; ("stdlib_comb-i", ("(comb-i w)", "%1110"))
+  ; ("stdlib_comb-s", ("(comb-s true true w)", "%200"))
+  ; ("stdlib_comb-b", ("(comb-b not not w)", "%10"))
+  ; ("stdlib_comb-c", ("(comb-c pair w %10)", "%0"))
+  ; ("stdlib_comb-w", ("(comb-w pair w)", "%10"))
   ]
 
 let () =

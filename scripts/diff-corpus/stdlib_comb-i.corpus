@@ -1,0 +1,9 @@
+name stdlib_comb-i
+program 21100
+arg 1110
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 1110
+expect_steps 2

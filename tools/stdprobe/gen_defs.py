@@ -473,6 +473,19 @@ d("todo-open-count", lam("items",
         L("tree-eq", L("todo-state", L("todo-entry", "e")), "todo-open")))),
     "0", "items")))
 
+# ---- L6 combinators (borg/tool-language.borg T1, stdlib v1.2) ----
+#
+# Written from the textbook definitions, not copied from agora's
+# dictionary: acceptance is that each compiles to the hash agora
+# published (u.agora.claim.2026-10-30.computed.combinators.*).  K is
+# std true; the y-family is rec-fix (the compiler eta-normalises every
+# arity to the same tree), so neither gets a row.
+d("comb-i", lam("x", "x"))
+d("comb-s", lam("f", lam("g", lam("x", L(L("f", "x"), L("g", "x"))))))
+d("comb-b", lam("f", lam("g", lam("x", L("f", L("g", "x"))))))
+d("comb-c", lam("f", lam("x", lam("y", L(L("f", "y"), "x")))))
+d("comb-w", lam("f", lam("x", L(L("f", "x"), "x"))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
 

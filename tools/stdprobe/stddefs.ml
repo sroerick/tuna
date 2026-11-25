@@ -77,4 +77,9 @@ let all = [
   ("todo-add", "(lambda (path) (lambda (title) (lambda (who) (lambda (when) (prim \"tree/put\" path (todo-item todo-open title who when))))))");
   ("todo-flip", "(lambda (r) (rec-upd key-state (if %0 %10 (tree-eq (todo-state r) todo-open)) r))");
   ("todo-open-count", "(lambda (items) (list-fold (lambda (e) (lambda (acc) (if (prim \"math/add\" acc 1) acc (tree-eq (todo-state (todo-entry e)) todo-open)))) 0 items))");
+  ("comb-i", "(lambda (x) x)");
+  ("comb-s", "(lambda (f) (lambda (g) (lambda (x) ((f x) (g x)))))");
+  ("comb-b", "(lambda (f) (lambda (g) (lambda (x) (f (g x)))))");
+  ("comb-c", "(lambda (f) (lambda (x) (lambda (y) ((f y) x))))");
+  ("comb-w", "(lambda (f) (lambda (x) ((f x) x)))");
 ]

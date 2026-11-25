@@ -156,3 +156,13 @@ def todo-add (lambda (path) (lambda (title) (lambda (who) (lambda (when) (prim "
 def todo-flip (lambda (r) (rec-upd key-state (if %0 %10 (tree-eq (todo-state r) todo-open)) r))
 
 def todo-open-count (lambda (items) (list-fold (lambda (e) (lambda (acc) (if (prim "math/add" acc 1) acc (tree-eq (todo-state (todo-entry e)) todo-open)))) 0 items))
+
+def comb-i (lambda (x) x)
+
+def comb-s (lambda (f) (lambda (g) (lambda (x) ((f x) (g x)))))
+
+def comb-b (lambda (f) (lambda (g) (lambda (x) (f (g x)))))
+
+def comb-c (lambda (f) (lambda (x) (lambda (y) ((f y) x))))
+
+def comb-w (lambda (f) (lambda (x) ((f x) x)))
