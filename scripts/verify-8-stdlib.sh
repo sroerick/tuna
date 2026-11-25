@@ -170,16 +170,30 @@ echo "[8.6] core untouched (acceptance 6)"
 # (common/lib/int_enc.ml) DELIBERATELY, under its own 12.3 law.  What
 # must stay true forever: the interpreter is byte-identical, and the
 # compiler delta is exactly sexp.ml (no IR/bracket changes).
-BASELINE="${TUNA_STDLIB_BASELINE:-0185b1a}"
-if ! git diff --quiet "$BASELINE"..HEAD -- interpreter 2>/dev/null; then
+# BASELINES (monorepo, 2026-11-25): the standalone-repo commit 0185b1a
+# did not survive the monorepo merge, so the law is pinned to commits
+# that exist here.  617cae59 is the stdlib freeze itself (core.defs +
+# manifest, 53 defs): the interpreter must be byte-identical since.
+# The compiler baseline is f429d515 (def usage, 2026-10-27), whose
+# bracket.ml delta is the on_resolve argument threaded through
+# compile_source - plumbing, no abstraction change - so from there on
+# the compiler delta must be sexp.ml only.  Paths are --relative: in
+# the monorepo git prints tuna/compiler/..., which never matched.
+BASELINE="${TUNA_STDLIB_BASELINE:-617cae59}"
+COMPILER_BASELINE="${TUNA_STDLIB_COMPILER_BASELINE:-f429d515}"
+git cat-file -e "$BASELINE^{commit}" 2>/dev/null \
+  || fail "baseline $BASELINE is not a commit in this repository"
+git cat-file -e "$COMPILER_BASELINE^{commit}" 2>/dev/null \
+  || fail "compiler baseline $COMPILER_BASELINE is not a commit in this repository"
+if ! git diff --quiet "$BASELINE"..HEAD -- interpreter; then
   git diff --stat "$BASELINE"..HEAD -- interpreter || true
   fail "interpreter touched since $BASELINE"
 fi
-COMPILER_DELTA=$(git diff --name-only "$BASELINE"..HEAD -- compiler 2>/dev/null | tr '\n' ' ')
+COMPILER_DELTA=$(git diff --relative --name-only "$COMPILER_BASELINE"..HEAD -- compiler | tr '\n' ' ')
 case "$COMPILER_DELTA" in
   ""|"compiler/lib/sexp.ml ") : ;;
   *) echo "  compiler delta: $COMPILER_DELTA" >&2
-     fail "compiler delta must be sexp.ml only since $BASELINE" ;;
+     fail "compiler delta must be sexp.ml only since $COMPILER_BASELINE" ;;
 esac
 echo "[8.6] interpreter byte-identical; compiler delta = ${COMPILER_DELTA:-none}"
 

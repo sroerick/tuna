@@ -34,7 +34,7 @@ import pytwin  # noqa: E402
 
 BASE = "http://127.0.0.1:" + os.environ.get("TUNA_HTTP_PORT", "18090")
 TOKEN = os.environ.get("TUNA_SMOKE_TOKEN") or open(
-    "/tmp/tuna-dev/bootstrap.token").read().strip()
+    os.path.join(os.environ.get("TUNA_DEV_DIR", "/tmp/tuna-dev"), "bootstrap.token")).read().strip()
 if TOKEN.startswith("TUNA_BOOTSTRAP_TOKEN="):
     TOKEN = TOKEN.split("=", 1)[1]
 AUTH = {"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"}

@@ -128,7 +128,7 @@ def record(state_b, title_b, who_b, when):
 def parity(base):
     """cross-check the builders against the live REPL; exit 1 on gap."""
     token = os.environ.get("TUNA_SMOKE_TOKEN") or open(
-        "/tmp/tuna-dev/bootstrap.token").read().strip()
+        os.path.join(os.environ.get("TUNA_DEV_DIR", "/tmp/tuna-dev"), "bootstrap.token")).read().strip()
     if token.startswith("TUNA_BOOTSTRAP_TOKEN="):
         token = token.split("=", 1)[1]
     auth = {"Authorization": "Bearer " + token,

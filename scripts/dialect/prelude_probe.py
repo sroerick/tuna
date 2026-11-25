@@ -33,7 +33,7 @@ def src(name):
 def token():
     if os.environ.get("TUNA_SMOKE_TOKEN"):
         return os.environ["TUNA_SMOKE_TOKEN"]
-    with open("/tmp/tuna-dev/bootstrap.token") as f:
+    with open(os.path.join(os.environ.get("TUNA_DEV_DIR", "/tmp/tuna-dev"), "bootstrap.token")) as f:
         tok = f.read().strip()
     # the dev harness stores the line prefixed (TUNA_BOOTSTRAP_TOKEN=...);
     # a bare read only worked in the pre-pp-slice era.  Strip once.
