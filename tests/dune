@@ -396,3 +396,12 @@
  (deps accel_tests.exe ../stdlib/v1/core.defs (glob_files ../scripts/diff-corpus/*.corpus))
  (action
   (run %{exe:accel_tests.exe})))
+
+; the FULL int vector set (60 per op, 15 canonical pairs): required
+; before any change to the accelerators - dune build --root . @tests/accel-full
+(rule
+ (alias accel-full)
+ (deps accel_tests.exe ../stdlib/v1/core.defs (glob_files ../scripts/diff-corpus/*.corpus))
+ (action
+  (setenv TUNA_ACCEL_FULL 1
+   (run %{exe:accel_tests.exe}))))

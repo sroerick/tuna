@@ -20,6 +20,8 @@
      or a changed cost is a NEW semantics version, because replay of a
      fast row must reproduce its step count.
    - Not a prim: no grant, no journal, no effect.
+   - Gate: `dune build --root . @tests/accel-full` (the full int vector
+     set) before any change here; `runtest` runs a smoke subset.
 
    RECOGNITION.  Trees are not hash-consed and [size] is O(n), so the
    core cannot hash the function at every firing.  Instead [prepare]

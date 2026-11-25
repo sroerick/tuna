@@ -7,7 +7,16 @@
    Plus: the registry is pinned to the frozen stdlib; the whole
    differential corpus answers identically under fast1; partials are
    recognised at run time; a same-function tree under a different hash
-   is not accelerated.  No PG. *)
+   is not accelerated.  No PG.
+
+   TWO SIZES.  The reference side of the int vectors is in-calculus
+   arithmetic (the F6 slope) and dominates the cost, so `dune runtest`
+   runs a SMOKE set of them (8 vectors per int op, 2 canonical pairs
+   per op) and the FULL set (60 and 15) runs under
+   `dune build --root . @tests/accel-full` (TUNA_ACCEL_FULL=1), which
+   is required before any change to interpreter/lib/accel.ml or the
+   accelerator path in flat.ml.  Every other case is identical in
+   both. *)
 
 open Tuna
 module T = Tree
@@ -124,15 +133,20 @@ let gen = function
   | "int-mul" -> fun () -> [ ints ~bound:16 (); ints ~bound:16 () ]
   | _ -> fun () -> [ ints (); ints () ]
 
+let full = Sys.getenv_opt "TUNA_ACCEL_FULL" = Some "1"
+let is_int e = String.length e.A.name > 4 && String.sub e.A.name 0 4 = "int-"
+
 let differential (e : A.entry) =
-  Alcotest.test_case (Printf.sprintf "%s: 60 vectors agree with the reference" e.A.name) `Quick
+  let n = if is_int e && not full then 8 else 60 in
+  Alcotest.test_case (Printf.sprintf "%s: %d vectors agree with the reference" e.A.name n) `Quick
     (fun () ->
       let f = def e.A.name in
       (* a coverage floor, not the correctness check: int natives
-         accept only when BOTH inputs are canonical, ~1/4 of vectors *)
-      let floor = if String.length e.A.name > 4 && String.sub e.A.name 0 4 = "int-" then 5 else 20 in
+         accept only when BOTH inputs are canonical, ~1/4 of vectors
+         (the canonical-pair case below checks acceptance exactly) *)
+      let floor = if is_int e then (if full then 5 else 1) else 20 in
       let accepted = ref 0 in
-      for _ = 1 to 60 do
+      for _ = 1 to n do
         let args = gen e.A.name () in
         let r0, _, _ = run ~fast:false f args in
         let r1, calls, _ = run ~fast:true f args in
@@ -212,7 +226,7 @@ let keying =
     Alcotest.test_case "every canonical int pair is answered natively" `Quick (fun () ->
         List.iter
           (fun name ->
-            for _ = 1 to 15 do
+            for _ = 1 to (if full then 15 else 2) do
               let args = [ canonical_int ~bound:16 (); canonical_int ~bound:16 () ] in
               let r0, _, _ = run ~fast:false (def name) args in
               let r1, calls, declines = run ~fast:true (def name) args in
