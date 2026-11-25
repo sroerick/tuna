@@ -17,7 +17,7 @@ git -C "$SRC" checkout -q "$COMMIT"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/jay-export.XXXX")
 trap 'rm -rf "$WORK"' EXIT
 cp "$HERE"/export/*.v "$WORK"/
-(cd "$WORK" && for v in ExportBool ExportLists; do
+(cd "$WORK" && for v in ExportBool ExportLists ExportConcrete; do
    rocq compile -Q "$SRC" BigStep "$v.v" >/dev/null 2>&1 || { echo "rocq failed on $v.v" >&2; exit 1; }
  done)
-python3 -I "$HERE/convert.py" "$HERE" bool="$WORK/bool_vectors.out" lists="$WORK/list_vectors.out"
+python3 -I "$HERE/convert.py" "$HERE" bool="$WORK/bool_vectors.out" lists="$WORK/list_vectors.out" concrete="$WORK/concrete_vectors.out"

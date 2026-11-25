@@ -721,6 +721,19 @@ deliver_checked (the ASIDE below), ~11us/step on a 3.5k-node
 observation. The inline verdict cannot be accelerated (no registered
 hash inside) and pays the start walk for nothing.
 
+SIZE-CHECK FIX (2026-11-25, after the owner rescoped stdlib acceptance
+6): deliver_checked now reads subtree sizes from a direct-mapped,
+weakly keyed cache (interpreter/lib/flat.ml, cached_size) instead of
+walking the whole new value on every Stem/Fork build. Size is a pure
+function of the tree, so answers, step counts and the cap decision are
+unchanged (runtest, accel-full, differential 103/103, Jay's 30 proved
+vectors all identical). A chained physical-identity table was tried
+first and lost: Jay's checker makes thousands of distinct copies of
+EQUAL trees, which share a hash, so buckets reached ~6k. Effect on
+Jay's checker: 100-130us/step -> ~1us/step (infer typing itself
+668s -> 3.4s; an expression typing 160s -> 1.6s); whole runtest
+~9 min -> 36s.
+
 The renderer half clears 10x by one to two orders of magnitude; the
 verdict half does not. Two causes, both structural:
 1. verdict.sabra carries its helpers INLINE (let-bound), so no subtree
@@ -736,5 +749,38 @@ ASIDE (not a failure definition): v0 costs ~8us per step on
 verdict.sabra but ~1.8us on verdict-std.sabra. Flat.deliver_checked
 computes Tree.size - O(n) - on every delivered value, so per-step cost
 grows with value size. Pre-existing; recorded, not changed here.
+
+---
+
+## F17 — V1 INT CODE FORGES ONE OF JAY'S LABELS (typing TY-F4)
+
+> borg/typing.borg pre-registration (TY-F4): a v1 stdlib def, corpus
+> program or compiler output is not concrete in Jay's sense (contains
+> a label-shaped subtree S2[K, K1 n] where no tag was meant).
+
+**Status: OBSERVED, 2026-11-25** (typing TY1, the first run of Jay's
+own `is_concrete` over tuna's trees).
+
+Jay's `is_concrete` (vendored from his development, checked against his
+spec's vectors) answers KI for five frozen stdlib v1 rows: `mag-cmp-fn`,
+`mag-cmp`, `int-add`, `int-sub`, `int-cmp` (and their five corpus
+entries); every other v1 def and every other corpus program is concrete.
+The offending subtree, found by a shape scan of `mag-cmp-fn` (three
+copies): `Fork(Stem(Stem Leaf), Fork(Leaf, Stem Leaf))` - in v1 terms a
+data constant pairing the compare result `%110` with `K %10`; in Jay's
+terms exactly `label[K]`, the name of an abstract type.
+
+Why it matters: Jay's type application treats a label as an abstract
+type and refuses what the ontology does not declare, so any program
+calling v1 int-add / int-sub / int-cmp cannot be typed. It is the
+representation question of the typing chapter in miniature: untagged
+v1 data can collide with the encoding his types use.
+
+Not fixed in v1: rows are immutable (stdlib.borg), and a changed
+`mag-cmp-fn` would move five hashes plus the fast1/fast2 accelerators
+keyed on them. The fix belongs to stdlib v2 (typing TY5), whose defs
+must all pass `is_concrete`. tests/jay_tests.ml pins the non-concrete
+set to exactly these names, so a new forged label - or one of these
+disappearing - fails the test.
 
 ---

@@ -408,8 +408,7 @@
 
 ; Jay's typing-rules-as-programs (reference/jay-typing-rules): his type
 ; checker and examples, as trees, run on the v0 engine; every answer must
-; be the one his Rocq proof states.  runtest runs the quick vectors;
-; dune build --root . @tests/jay-full runs all (about an hour of v0).
+; be the one his Rocq proof states.  All 30 vectors, ~25s.
 (executable
  (name jay_tests)
  (modules jay_tests)
@@ -417,13 +416,7 @@
 
 (rule
  (alias runtest)
- (deps jay_tests.exe ../reference/jay-typing-rules/trees ../reference/jay-typing-rules/vectors)
+ (deps jay_tests.exe ../reference/jay-typing-rules/trees ../reference/jay-typing-rules/vectors
+  ../stdlib/v1/trees (glob_files ../scripts/diff-corpus/*.corpus))
  (action
   (run %{exe:jay_tests.exe})))
-
-(rule
- (alias jay-full)
- (deps jay_tests.exe ../reference/jay-typing-rules/trees ../reference/jay-typing-rules/vectors)
- (action
-  (setenv TUNA_JAY_FULL 1
-   (run %{exe:jay_tests.exe}))))

@@ -1,0 +1,113 @@
+(project tuna-typing
+ (doc "Tuna book chapter: typing - sabra gets types by adopting Barry Jay's typed tree calculus as written, not by inventing a type system. Types are trees, the type checker is a tree program (his infer / type_app, vendored unchanged and pinned), and a type check is an ordinary run with a receipt. Untyped code keeps running; typing is opt-in per program and enforced at the boundaries we choose (the tool endpoint first). The open design question - abstract types need tagged values - is answered by a measured spike before any stdlib v2 is written.")
+ (status partial)
+ (convention ocaml-dune)
+ (* agent note (|2026-11-25 chapter authored (roerick + Claude). OWNER DIRECTION, this date: "go wherever jay goes" - he is the authority on the calculus, use his code; add typing. Owner also asked whether this is gradual typing: in practice partly (types can be adopted piece by piece, untyped code keeps checking - as its own singleton type - and checks can sit at boundaries), technically no (no unknown type, no inserted casts, no blame); the accurate names are optional/pluggable typing with boundary checks. SOURCES: metatheory.borg rung 4 (survey and the 30-vector spike); reference/jay-typing-rules (his trees at commit ddbab88b, MIT). STANCE ON THE UPSTREAM: pin, do not chase. His work is a draft dated the day this chapter was written; a re-pin is a deliberate change that re-runs every vendored proved example.|) *)
+ (section typing
+  (doc "Five moves, in order; each lands with its own evidence.")
+  (status partial)
+  (subsection ty0-checker
+   (status implemented)
+   (details
+    (doc (|
+      Jay's checker runs on tuna unchanged. reference/jay-typing-rules
+      vendors infer, type_app and infer_expression for his O_ex and
+      O_list ontologies, his example values and programs, and the
+      result each of his proved Examples states. tests/jay_tests.ml:
+      all 30 agree on the v0 engine, including the checker typing
+      itself (5.2M steps, ~3s after the size-check fix). Nothing in
+      the five rules, the prims or the journal changed for this. |))))
+  (subsection ty1-concreteness
+   (status partial)
+   (* agent note (|2026-11-25 TY1 RUN; TY-F4 OBSERVED (FINDINGS F17). is_concrete exported from his tree.v with seven vectors from his is_concrete_spec (his checker parts K; tagged values and labels KI), all agreeing. Over tuna: every v1 stdlib def and corpus program is concrete EXCEPT mag-cmp-fn, mag-cmp, int-add, int-sub, int-cmp - mag-cmp-fn holds the data constant Fork(%110, Fork(%0, %10)), which is label[K]. Not a compiler bug: v1 data coinciding with his label encoding. v1 is immutable, so the acceptance stays unmet for v1 and moves to stdlib v2 (TY5: every v2 def concrete). tests/jay_tests.ml pins the set exactly.|) *)
+   (details
+    (doc (|
+      Jay's soundness depends on untyped code never forging what an
+      abstract type hides: a "label" is the tree S2[K, K1 n], and a
+      program containing one where no tag was meant can pass for a
+      typed value. His own program is_concrete decides this (paper
+      4.2), and it is a tree, so tuna can run it. ACCEPTANCE: export
+      is_concrete with the other vendored trees; every v1 stdlib def
+      and every corpus program is concrete. A non-concrete compiler
+      output is a FINDING about bracket abstraction (his paper notes
+      the optimised star can emit label[I] on non-beta-normal input),
+      fixed in the compiler, never by weakening the check. |))))
+  (subsection ty2-tagged-int-spike
+   (status planned)
+   (details
+    (doc (|
+      The design question: Jay types only tagged values abstractly
+      (an untagged tree is its own type, 42 : 42). The cheapest
+      candidate keeps v1 data inside ONE tag: Int = label[int_nm],
+      a value is tagged[carrier, int_nm] whose carrier is today's
+      canonical bit-list int, and the ontology entry's guard (an
+      ordinary program) admits exactly the canonical carriers.
+      Arithmetic unwraps, calls the v1 int code (and its accelerators)
+      and re-wraps.
+      WRITTEN IN HIS DEVELOPMENT: the Int entry, guard and eliminator
+      are defined in a .v file that imports his modules, so its
+      soundness ("sound by values", his Figure 8) is stated and,
+      where we can, proved in Rocq with his lemmas - our entries are
+      our obligation, his framework is how we discharge it. Exported
+      to trees like the rest.
+      MEASURE: v1 vs tagged on the int-heavy workloads already in
+      FINDINGS (int-add/int-mul vectors, the ledger balance of
+      verify-8 8.5): steps, wall clock under v0 and fast2, tree size;
+      and the cost of typing them. TY-F1 decides. |))))
+  (subsection ty3-boundary
+   (status planned)
+   (details
+    (doc (|
+      The tool endpoint is the boundary that matters: inputs already
+      arrive with a declared type and are encoded by
+      server/lib/json_codec.ml. For a program that declares typed
+      inputs, the endpoint encodes them as tagged values, runs infer
+      on each, and refuses (400, with the checker run cited) unless
+      it answers Sm of the declared type; optionally the program's
+      own application is typed by infer_expression before it runs.
+      The check is a run like any other: replayable, offline,
+      receipted. Untyped programs and untyped inputs behave exactly
+      as today. |))))
+  (subsection ty4-consumer
+   (status planned)
+   (details
+    (doc (|
+      One real outside user: an erde tool that calls a typed sabra
+      program by hash through POST /api/tool/run. erde is a separate
+      project with its own book; its side lands on its own branch,
+      verified with erde's own checks. This also closes
+      tool-language TL3 (no taker). |))))
+  (subsection ty5-stdlib-v2
+   (status planned)
+   (details
+    (doc (|
+      Only after TY2 says the tagged representation is affordable: a
+      typed vocabulary (his Bool and List[A], our Int and String,
+      records) as stdlib v2, with its own manifest, accelerators
+      re-keyed to v2 hashes, and v1 frozen and runnable forever.
+      Its own chapter. |))))
+  (subsection failure-definitions
+   (status planned)
+   (details
+    (doc (|
+      Written before any code, per acceptance.borg:
+      TY-F1 TAGS DO NOT PAY: on the int workloads, the tagged
+          representation costs more than 2x the v1 steps or wall
+          clock under fast2 with re-keyed natives. Then one tag per
+          value is the wrong grain, and stdlib v2 waits for a better
+          encoding.
+      TY-F2 OUR ENTRY IS NOT SOUND: the Int entry's soundness cannot
+          be proved in his framework, or a vector finds a value that
+          types Int and evaluates to a non-Int (an EPT counterexample).
+          The entry is withdrawn, never patched under the same pin.
+      TY-F3 UPSTREAM DRIFT: re-pinning to a newer commit of his
+          development changes a vendored tree or a proved result.
+          Recorded with the diff; the old pin stays until the new one
+          passes every vector.
+      TY-F4 FORGED LABEL: a v1 stdlib def, corpus program or
+          compiler output is not concrete (TY1). A compiler finding. |)))))
+ (verify
+  (test "TY0: every vendored Jay vector (30) applies his program to his arguments on the v0 engine and answers exactly the result his proof states, including infer typing itself")
+  (test "TY1: Jay's is_concrete answers K for every v1 stdlib def and every corpus program")
+  (test "TY2: the tagged Int entry is sound in his framework and its cost against v1 is measured on the int workloads; TY-F1 decides")
+  (test "TY3: a typed tool run whose inputs do not type as declared is refused with the checker run cited; untyped runs are unchanged")))
