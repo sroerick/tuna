@@ -784,3 +784,43 @@ set to exactly these names, so a new forged label - or one of these
 disappearing - fails the test.
 
 ---
+
+## F18 — THE JAY-NATIVE BINARY INT IS SOUND BUT ~45x BIGGER (typing TY-F1, first encoding)
+
+> borg/typing.borg pre-registration (TY-F1): the tagged representation
+> costs more than 2x v1 on the int workloads.
+
+**Status: OBSERVED for the first encoding, 2026-11-25** (typing TY2
+spike). Arithmetic on it is not written; the size and typing cost
+alone decide this encoding.
+
+Encoding: `Int = wrap[int_nm, sign * magnitude]`, payload type
+`Bool * List Bool` - v1's shape (sign, LSB-first bits) rebuilt from
+Jay's tagged Bool and tagged List cells, declared with his `D_wrap`.
+`reference/jay-typing-rules/export/TyInt.v` defines it inside his
+development and proves `O_int_sound` / `O_int_typing_sound` by his
+`wrap_decl_sound` (Print Assumptions: closed under the global context).
+Nine proved Examples (five, -6, zero, a 21-bit value : Int; a bad
+payload refused; sign and magnitude projections typed Bool and
+List Bool; sign evaluation) all agree on tuna's v0 engine.
+
+Cost, measured in tuna:
+
+| value | tagged Int nodes | v1 nodes | typing steps |
+|---|---|---|---|
+| 0 | 176 | ~3 | 58,693 |
+| 5 | 476 | ~9 | 192,993 |
+| 1,048,579 (21 bits) | 2,342 | ~55 | 1,022,773 (0.8s) |
+
+~107 nodes and ~45k typing steps per bit: every bit is a tagged Bool
+plus a tagged list cell, and every list cell carries the code of its
+element type. Soundness comes free from his framework; the price is
+the representation.
+
+Next encodings to measure (owner decision which): a dedicated binary
+type declared like his Nat with two successors (one tag per bit, its
+own soundness proof modelled on `nat_interp_sound`), or one tag around
+a v1 carrier with a declared table of trusted operations (smallest,
+but its soundness rests on proofs about v1 arithmetic).
+
+---

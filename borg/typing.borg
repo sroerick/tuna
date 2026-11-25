@@ -33,7 +33,8 @@
       the optimised star can emit label[I] on non-beta-normal input),
       fixed in the compiler, never by weakening the check. |))))
   (subsection ty2-tagged-int-spike
-   (status planned)
+   (status partial)
+   (* agent note (|2026-11-25 FIRST ENCODING RUN; TY-F1 OBSERVED for it (FINDINGS F18). Jay has no binary numbers (his Nat is unary Scott), so the first candidate was the most Jay-native one: Int as his WRAPPED type over payload Bool * List Bool (v1's shape rebuilt from his tagged cells). export/TyInt.v declares it in his development; O_int_sound is proved by his wrap_decl_sound, no axioms; 9 proved Examples agree on tuna. The one-tag-around-a-v1-carrier design in the text below turned out NOT to be expressible soundly without a trusted-operation table: an opaque Int can only be consumed through its eliminator. COST: ~45x v1 size (107 nodes/bit) and ~45k typing steps per bit. Next encoding is an owner decision: a dedicated two-successor binary type (one tag per bit, our own proof after his nat_interp_sound) or one tag with trusted operations.|) *)
    (details
     (doc (|
       The design question: Jay types only tagged values abstractly
