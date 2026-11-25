@@ -579,7 +579,7 @@ let post_run pool auth req =
      {"program_hash": "<hex>",
       "inputs": [{"type": T, "value": <json>}, ...],
       "result_type": T,
-      "grants": [...], "fuel": n, "size_cap": n, "semantics": "v0"|"v1"|"fast1"}
+      "grants": [...], "fuel": n, "size_cap": n, "semantics": "v0"|"v1"|"fast1"|"fast2"}
 
    Each input is encoded to its tree at the rim and the run goes through
    the SAME Run.execute_run as POST /api/runs - one boundary, one journal,

@@ -702,6 +702,25 @@ wall clock on this laptop, single run each.
 | todo page, live, 20 items | 6,456,586 steps, 12.7s | 161,314 steps, 668 native | 31.4x |
 | int-mul experiment (naive renderer) | 13,465,953 steps, 24.6s | 12,431 steps, 17 native | 460x |
 
+FAST2 UPDATE (same day, registry fast2: + rec-get/val/has, list-fold/
+map/filter, compile-time partials; best of 3, machine under load so
+ratios are the comparable figure):
+
+| workload | v0 steps | fast2 steps | wall vs v0 |
+|---|---|---|---|
+| verdict.sabra (inline) | 67,192 | 67,192 (0 native) | 0.9-1.0x |
+| verdict-std.sabra | 55,195 | 1,848 (11 native) | 6.7-8.0x |
+| todo page, staged, 20 | 5,627,063 | 711 (203 native) | 480-670x |
+| int-mul experiment | 13,465,953 | 5,655 (34 native) | 580x |
+
+Still OBSERVED for the verdict half. verdict-std now takes 30x fewer
+steps than v0 but wall clock is held by two fixed costs: the fast2
+start walk (~13ms on 13.4k program+input nodes once the registry is
+cached; 37ms on first use) and the per-step O(size) check in
+deliver_checked (the ASIDE below), ~11us/step on a 3.5k-node
+observation. The inline verdict cannot be accelerated (no registered
+hash inside) and pays the start walk for nothing.
+
 The renderer half clears 10x by one to two orders of magnitude; the
 verdict half does not. Two causes, both structural:
 1. verdict.sabra carries its helpers INLINE (let-bound), so no subtree

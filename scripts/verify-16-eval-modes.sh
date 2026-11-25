@@ -14,6 +14,9 @@
 #        verifies under its own law, and re-run under v0 (tier 2: the
 #        reference re-verification) gives the identical result hash.
 #        An unknown semantics is refused.
+#   16.5 E2 FAST2 - records, the higher-order list family and
+#        compile-time partials: the same call answers the same string in
+#        fewer steps than fast1, and replay-verifies under fast2.
 #
 # Env: as scripts/verify-lib.sh (a live dev server; TUNA_HTTP_PORT,
 # TUNA_SMOKE_TOKEN or the dev boot token).
@@ -103,6 +106,20 @@ code, j = tool("fast9")
 if code != 400:
     die("16.4 an unknown semantics must be a 400: %s %r" % (code, j))
 print("  unknown semantics fast9 -> 400")
+
+print("[16.5] E2 fast2: records, higher-order lists, compile-time partials")
+code, j = tool("fast2")
+if code != 201 or j.get("result") != want or j["run"]["semantics"] != "fast2":
+    die("16.5 fast2 must answer %r: %s %r" % (want, code, {k: j.get(k) for k in ("result", "error")}))
+f2 = j["run"]
+if not f2["step_count"] < fast["step_count"]:
+    die("16.5 fast2 must take fewer steps than fast1: %d vs %d" % (f2["step_count"], fast["step_count"]))
+code, full = call("GET", "/api/runs/" + f2["id"])
+if full["run"].get("verify_status") != "verified" or f2["result_hash"] != fast["result_hash"]:
+    die("16.5 fast2 must replay-verify with the same result: %r %s"
+        % (full["run"].get("verify_status"), f2["result_hash"]))
+print("  fast2 %d steps (fast1 %d, v0 %d), replay verified, same result hash"
+      % (f2["step_count"], fast["step_count"], v0_run["step_count"]))
 PY
 
-echo "ACCEPT 16 OK: a staged template is a recorded, replayable run and a callable tool; fast1 agrees with v0"
+echo "ACCEPT 16 OK: a staged template is a recorded, replayable run and a callable tool; fast1 and fast2 agree with v0"

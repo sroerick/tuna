@@ -67,6 +67,12 @@ type frame =
       (* fast1 (borg/eval-modes.borg E2): the value about to be
          delivered is a registered function applied to these args;
          remember it so its next application can run natively *)
+  | KEach of t * t list * t list * t list * Accel.finish
+      (* fast2 plan: fn, xs still to apply it to, results so far
+         (reversed), all xs, what to do with the results *)
+  | KFoldBack of t list
+      (* fast2 list-fold: partials still to apply, innermost first;
+         the delivered value is the accumulator *)
 
 type mode = Prim_eval.mode = Canonical | Sharing
 
@@ -126,21 +132,10 @@ let rec digest_of s (t : t) =
 
 (* -- start ------------------------------------------------------------- *)
 
-let start ?(mode = Canonical) ?trace ?(garden = []) ?accel ~fuel ~size_cap
+(* the machine constructor; [start] (end of file) is the public entry
+   that prepares accelerator state first *)
+let start_core ?(mode = Canonical) ?trace ?(garden = []) ?accel ~fuel ~size_cap
     ~program ~args () =
-  (* fast1 is the v0 counting law plus accelerators; it never combines
-     with the distinct-work law *)
-  let accel =
-    match (accel, mode) with
-    | None, _ -> None
-    | Some _, Sharing -> invalid_arg "Flat.start: accelerators run under v0 counting only"
-    | Some entries, Canonical -> Some (Accel.start entries)
-  in
-  let program, args =
-    match accel with
-    | None -> (program, args)
-    | Some st -> (Accel.prepare st program, List.map (Accel.prepare st) args)
-  in
   let sharing =
     match mode with
     | Canonical -> None
@@ -377,7 +372,35 @@ let rec deliver m r =
            (match m.accel with
             | Some st -> Accel.remember st r (e, args)
             | None -> ());
-           deliver m r)
+           deliver m r
+       | KEach (fn, todo, acc, xs, fin) -> (
+           let acc = r :: acc in
+           match todo with
+           | x :: todo ->
+               m.k <- KEach (fn, todo, acc, xs, fin) :: rest;
+               set_eval m fn x
+           | [] -> finish_plan m xs (List.rev acc) fin)
+       | KFoldBack gs -> (
+           match gs with
+           | [] -> deliver m r
+           | g :: gs ->
+               m.k <- KFoldBack gs :: rest;
+               set_eval m g r))
+
+(* a plan's results are in: build the value, or fold the partials back *)
+and finish_plan m xs results = function
+  | Accel.Build b -> deliver m (b xs results)
+  | Accel.Fold_back z ->
+      m.k <- KFoldBack (List.rev results) :: m.k;
+      deliver m z
+
+(* start a plan: the first application, or (no xs) its finish *)
+and start_plan m (p : Accel.plan) =
+  match p.Accel.xs with
+  | [] -> finish_plan m [] [] p.Accel.finish
+  | x :: todo ->
+      m.k <- KEach (p.Accel.fn, todo, [], p.Accel.xs, p.Accel.finish) :: m.k;
+      set_eval m p.Accel.fn x
 
 and set_eval m f x =
   m.f <- Some f;
@@ -427,7 +450,9 @@ let accel_step m f =
                   m.steps <- m.steps + e.Accel.cost;
                   st.Accel.calls <- st.Accel.calls + 1;
                   emit m Prim_eval.Kfire "accel" None None e.Accel.name;
-                  deliver_checked m r
+                  match r with
+                  | Accel.Value v -> deliver_checked m v
+                  | Accel.Plan p -> start_plan m p
                 end;
                 true))
 
@@ -539,3 +564,31 @@ let run ~(host : site:int -> name:string -> args:t -> [ `Done of t | `Error of s
   in
   go ();
   Option.value m.done_ ~default:(Prim_eval.Normal (m.value, m.steps))
+
+(* -- the public constructor ------------------------------------------- *)
+
+(* The REFERENCE reducer the accelerator walk confirms compile-time
+   partials with: v0, no accelerators, no prim host (a prim aborts the
+   confirmation), bounded. *)
+exception No_prims
+
+let reference_reduce f args =
+  let m = start_core ~fuel:1_000_000 ~size_cap:10_000_000 ~program:f ~args () in
+  match run ~host:(fun ~site:_ ~name:_ ~args:_ -> raise No_prims) m with
+  | Prim_eval.Normal (t, _) -> Some t
+  | _ -> None
+  | exception No_prims -> None
+
+(* fast1/fast2 are the v0 counting law plus a pinned accelerator
+   registry; they never combine with the distinct-work law *)
+let start ?(mode = Canonical) ?trace ?(garden = []) ?(accel : Accel.registry option)
+    ~fuel ~size_cap ~program ~args () =
+  match (accel, mode) with
+  | None, _ -> start_core ~mode ?trace ~garden ~fuel ~size_cap ~program ~args ()
+  | Some _, Sharing -> invalid_arg "Flat.start: accelerators run under v0 counting only"
+  | Some r, Canonical ->
+      let reduce = reference_reduce in
+      let st = Accel.start ~reduce r in
+      let program = Accel.prepare ~reduce st program in
+      let args = List.map (Accel.prepare ~reduce st) args in
+      start_core ~mode ?trace ~garden ~accel:st ~fuel ~size_cap ~program ~args ()

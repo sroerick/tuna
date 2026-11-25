@@ -36,8 +36,31 @@
    (built at run time) is simply not accelerated - slower, never
    wrong.
 
-   COST.  An accelerated call charges [cost] steps (1 for every v1
-   entry).  Fast-mode step counts are fast-mode facts, recorded on the
+   HIGHER-ORDER NATIVES (fast2).  list-fold, list-map and list-filter
+   take a function argument the native cannot run itself, so they
+   answer a PLAN: the applications the reference would perform, in the
+   reference's order, which the core schedules on its own stack (each
+   one an ordinary application - prims journal, partials accelerate).
+   The orders, read off the compiled stdlib: list-fold f z xs computes
+   every partial (f h) left to right on the way down, then applies
+   them right to left to z; list-map and list-filter evaluate (g h) /
+   (pred h) left to right at partial time.  tests/accel_tests.ml
+   checks the orders with a logging prim host: same journal, same
+   answer.
+
+   COMPILE-TIME PARTIALS (fast2).  (rec-val #5) or (list-filter pred)
+   with a closed argument is reduced by the COMPILER, so the program
+   holds the partial tree and the run never sees the registered
+   function applied.  [prepare] therefore also recognises partials:
+   for each registered function F (its tree embedded from
+   stdlib/v1/trees) and each k < arity, F applied to k marker trees is
+   reduced once to a SKELETON with holes; a program node that fits a
+   skeleton is then CONFIRMED by reducing F on the captured arguments
+   with the reference engine and comparing structurally.  The skeleton
+   is only a filter; the confirmation makes the match exact.
+
+   COST.  An accelerated call charges [cost] steps (1 for every
+   entry; a plan's applications are counted as they run).  Fast-mode step counts are fast-mode facts, recorded on the
    run row by its semantics; they are not v0 counts.  Natives with
    super-linear work (int-mul) decline past a size bound so the native
    side cannot be made unbounded by one call; the reference path is
@@ -45,14 +68,35 @@
 
 open Tuna.Tree
 
+(* a native's answer: a value, or (higher-order) the applications the
+   reference would perform, for the core to schedule *)
+type answer = Value of t | Plan of plan
+
+and plan = { fn : t; xs : t list; finish : finish }
+    (* apply [fn] to each of [xs] left to right, then [finish] *)
+
+and finish =
+  | Build of (t list -> t list -> t)  (* xs, results -> the value *)
+  | Fold_back of t
+      (* the results are partials g_i; apply them right to left
+         starting from this seed *)
+
 type entry = {
   name : string;
   hash : string;  (* sha256 hex of the registered tree *)
   size : int;  (* its node count: the cheap prefilter *)
   arity : int;
   cost : int;  (* steps charged per accelerated call *)
-  impl : t list -> t option;  (* None = decline *)
+  impl : t list -> answer option;  (* None = decline *)
 }
+
+type registry = {
+  semantics : string;
+  entries : entry list;  (* preference order for a node fitting several *)
+  static_partials : bool;  (* recognise compile-time partials (fast2+) *)
+}
+
+let value f args = Option.map (fun t -> Value t) (f args)
 
 (* -- list and string helpers ----------------------------------------- *)
 
@@ -209,12 +253,57 @@ let int_cmp =
       in
       Some (unary (if c < 0 then 0 else if c = 0 then 1 else 2) Leaf))
 
+(* -- records and higher-order lists (fast2) ---------------------------- *)
+
+let first = function Fork (l, _) -> l | _ -> Leaf
+let second = function Fork (_, r) -> r | _ -> Leaf
+
+(* rec-get key rec: the LEFTMOST entry whose first is key (the right
+   fold keeps the nearer match) -> some (first (second kv)), else none *)
+let rec_find key r = List.find_opt (fun kv -> first kv = key) (elems r)
+
+let rec_get = function
+  | [ key; r ] ->
+      Some (match rec_find key r with Some kv -> Stem (first (second kv)) | None -> Leaf)
+  | _ -> None
+
+let rec_val = function
+  | [ key; r ] -> Some (match rec_find key r with Some kv -> first (second kv) | None -> Leaf)
+  | _ -> None
+
+let rec_has = function [ key; r ] -> Some (bool (rec_find key r <> None)) | _ -> None
+
+let list_fold = function
+  | [ f; z; xs ] -> Some (Plan { fn = f; xs = elems xs; finish = Fold_back z })
+  | _ -> None
+
+let list_map = function
+  | [ g; xs ] -> Some (Plan { fn = g; xs = elems xs; finish = Build (fun _ rs -> list_of rs Leaf) })
+  | _ -> None
+
+(* keep x when (pred x) is a stem; a leaf or a fork drops it *)
+let list_filter = function
+  | [ pred; xs ] ->
+      Some
+        (Plan
+           { fn = pred;
+             xs = elems xs;
+             finish =
+               Build
+                 (fun xs rs ->
+                   list_of
+                     (List.filter_map
+                        (fun (x, r) -> match r with Stem _ -> Some x | _ -> None)
+                        (List.combine xs rs))
+                     Leaf) })
+  | _ -> None
+
 (* -- the registry ------------------------------------------------------ *)
 
 (* fast1: stdlib v1.3 (stdlib/v1/manifest).  PINNED: changing any row
    is a new semantics version. *)
-let fast1 =
-  let e name hash size arity impl = { name; hash; size; arity; cost = 1; impl } in
+let fast1_entries =
+  let e name hash size arity impl = { name; hash; size; arity; cost = 1; impl = value impl } in
   [ e "tree-eq" "fd549d45e1e2e481488d0c0ff4ec9c4de263fca5a511e623bbbba0bd6291de03" 406 2 tree_eq;
     e "list-append" "500eaee618df21a52bd4355ba2d60cf9639d108dd45a39bcb17841abb26a26e2" 307 2 list_append;
     e "list-length" "b0f08c694e75ab698415377cf023c14be878e92b82bf87b3dfb30c3f7e6095e8" 298 1 list_length;
@@ -225,7 +314,27 @@ let fast1 =
     e "int-mul" "fb3f462a1b191e5065ebd21018ee85cd7b8116f9693f282fe9527dd13411f5fa" 6213 2 int_mul;
     e "int-cmp" "de0a52cae88f868eea5a6fb128068dd88cd2a3a69898638c0222176ad3be8a40" 5613 2 int_cmp ]
 
-let registry_of_semantics = function "fast1" -> Some fast1 | _ -> None
+let fast1 = { semantics = "fast1"; entries = fast1_entries; static_partials = false }
+
+(* fast2: fast1's rows plus records and the higher-order list family,
+   and compile-time partial recognition.  PINNED like fast1. *)
+let fast2 =
+  let e name hash size arity impl = { name; hash; size; arity; cost = 1; impl } in
+  { semantics = "fast2";
+    static_partials = true;
+    entries =
+      [ e "rec-val" "1132bbd758d195165b345c89dc31b242e20902243ebda70ba7789c25762c034d" 888 2 (value rec_val);
+        e "rec-has" "e20bc94f9ebc66df748e4c91aa3505b1fa6afba238692e686ca0f91021d7a52e" 887 2 (value rec_has);
+        e "rec-get" "25ae72255db18f143b1b238656b6249e2f1473b97ccefa32d6479a00ebdf760b" 867 2 (value rec_get);
+        e "list-filter" "e51fbd4cdae60fa5d2d276001c921beeaae7e6c11a97db87dba927ebc7f7a615" 406 2 list_filter;
+        e "list-map" "b0bd1e1934d18dba698eeb2b9e42aca5e68e8c33146666958143dbb0488371c0" 340 2 list_map;
+        e "list-fold" "3a4225df7bd383bc2f1a6b3d0fa0a0bb84632f90e1415825a2be683503fabc4f" 326 3 list_fold ]
+      @ fast1_entries }
+
+let registry_of_semantics = function
+  | "fast1" -> Some fast1
+  | "fast2" -> Some fast2
+  | _ -> None
 
 (* -- per-run state --------------------------------------------------- *)
 
@@ -236,20 +345,134 @@ module Phys = Hashtbl.Make (struct
   let hash = Hashtbl.hash
 end)
 
+(* a partial-application skeleton: F applied to k markers, reduced, with
+   the markers replaced by holes *)
+type skel = SLeaf | SStem of skel | SFork of skel * skel | Hole of int
+
 type state = {
   entries : entry list;
+  skels : (entry * int * skel) list;  (* entry, k args, skeleton *)
+  trees : (entry * t) list;  (* registered trees available for confirming *)
   mutable roots : (t * entry) list;  (* the one physical copy per found entry *)
   partials : (entry * t list) Phys.t;
   mutable calls : int;
   mutable declines : int;
 }
 
-let start entries =
-  { entries; roots = []; partials = Phys.create 1024; calls = 0; declines = 0 }
+(* distinctive marker trees: deterministic, size 40ish, unlikely to
+   occur inside a reduced partial by accident (and harmless if they do:
+   every skeleton match is confirmed by reduction) *)
+let markers =
+  let st = Random.State.make [| 0x7a11; 0xacce1 |] in
+  let rec gen d =
+    if d = 0 then Leaf
+    else
+      match Random.State.int st 3 with
+      | 0 -> Stem (gen (d - 1))
+      | _ -> Fork (gen (d - 1), gen (d - 1))
+  in
+  Array.init 3 (fun _ -> Fork (Stem (Fork (gen 4, gen 4)), Stem (gen 5)))
+
+let skeleton_of p0 k =
+  let found = Array.make k false in
+  let rec go t =
+    match Array.find_index (fun m -> m = t) (Array.sub markers 0 k) with
+    | Some i -> found.(i) <- true; Hole i
+    | None -> (
+        match t with
+        | Leaf -> SLeaf
+        | Stem a -> SStem (go a)
+        | Fork (a, b) -> SFork (go a, go b))
+  in
+  let s = go p0 in
+  if Array.for_all Fun.id found then Some s else None
+
+let tree_of_hash =
+  let tbl =
+    lazy
+      (let h = Hashtbl.create 128 in
+       List.iter (fun (hash, ternary) -> Hashtbl.replace h hash ternary) Accel_trees.all;
+       h)
+  in
+  fun hash ->
+    match Hashtbl.find_opt (Lazy.force tbl) hash with
+    | None -> None
+    | Some ternary -> (
+        match Tuna.Canon.of_string ternary with Ok t -> Some t | Error _ -> None)
+
+(* [reduce f args]: the REFERENCE engine (v0, no accelerators, no prim
+   host), bounded; None when it does not finish normally *)
+(* trees and skeletons are pure functions of the (pinned) registry:
+   computed once per process, not per run *)
+let derived : (string, (entry * t) list * (entry * int * skel) list) Hashtbl.t =
+  Hashtbl.create 4
+
+let start ?reduce (r : registry) =
+  let trees, skels =
+    match (r.static_partials, reduce) with
+    | true, Some _ when Hashtbl.mem derived r.semantics -> Hashtbl.find derived r.semantics
+    | true, Some reduce ->
+        let trees =
+          List.filter_map
+            (fun e -> Option.map (fun t -> (e, t)) (tree_of_hash e.hash))
+            r.entries
+        in
+        let skels =
+          List.concat_map
+            (fun (e, f) ->
+              List.filter_map
+                (fun k ->
+                  match reduce f (Array.to_list (Array.sub markers 0 k)) with
+                  | Some p0 -> Option.map (fun s -> (e, k, s)) (skeleton_of p0 k)
+                  | None -> None)
+                (List.init (e.arity - 1) (fun i -> i + 1)))
+            trees
+        in
+        Hashtbl.replace derived r.semantics (trees, skels);
+        (trees, skels)
+    | _ -> ([], [])
+  in
+  { entries = r.entries; skels; trees; roots = []; partials = Phys.create 1024;
+    calls = 0; declines = 0 }
+
+(* fit [node] to a skeleton, capturing the holes; structural equality
+   for a repeated hole *)
+let fit sk node k =
+  let caps = Array.make k None in
+  let rec m sk node =
+    match (sk, node) with
+    | Hole i, _ -> (
+        match caps.(i) with
+        | None -> caps.(i) <- Some node; true
+        | Some x -> x == node || x = node)
+    | SLeaf, Leaf -> true
+    | SStem s, Stem n -> m s n
+    | SFork (a, b), Fork (x, y) -> m a x && m b y
+    | _ -> false
+  in
+  if m sk node then Some (Array.to_list (Array.map Option.get caps)) else None
 
 (* the once-per-run walk: replace every registered subtree with one
-   physical copy (same structure, so the program's hash is unchanged) *)
-let prepare st t =
+   physical copy (same structure, so the program's hash is unchanged),
+   and (fast2) remember every confirmed compile-time partial *)
+let prepare ?reduce st t =
+  let confirm node =
+    match (node, reduce) with
+    | Fork _, Some reduce when st.skels <> [] ->
+        let rec try_ = function
+          | [] -> ()
+          | (e, k, sk) :: rest -> (
+              match fit sk node k with
+              | None -> try_ rest
+              | Some args -> (
+                  let f = List.assq e st.trees in
+                  match reduce f args with
+                  | Some p when p = node -> Phys.replace st.partials node (e, args)
+                  | _ -> try_ rest))
+        in
+        try_ st.skels
+    | _ -> ()
+  in
   let sizes = List.map (fun e -> e.size) st.entries in
   let check node n =
     if not (List.mem n sizes) then node
@@ -276,7 +499,9 @@ let prepare st t =
         let a', na = go a in
         let b', nb = go b in
         let n = na + nb + 1 in
-        (check (if a' == a && b' == b then t else Fork (a', b')) n, n)
+        let node = check (if a' == a && b' == b then t else Fork (a', b')) n in
+        if not (List.exists (fun (r, _) -> r == node) st.roots) then confirm node;
+        (node, n)
   in
   fst (go t)
 

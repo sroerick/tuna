@@ -455,9 +455,10 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict =
                         match run.S.r_semantics with
                         | "v0" -> Ok (Eng.Canonical, None)
                         | "v1" -> Ok (Eng.Sharing, None)
-                        | "fast1" ->
-                            Ok (Eng.Canonical, Tuna_interp.Accel.registry_of_semantics "fast1")
-                        | s -> Error s
+                        | s -> (
+                            match Tuna_interp.Accel.registry_of_semantics s with
+                            | Some r -> Ok (Eng.Canonical, Some r)
+                            | None -> Error s)
                       in
                       let nrows = List.length js' in
                       (match mode with
@@ -599,9 +600,10 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict =
                                match run.S.r_semantics with
                                | "v0" -> Ok (Eng.Canonical, None)
                                | "v1" -> Ok (Eng.Sharing, None)
-                               | "fast1" ->
-                                   Ok (Eng.Canonical, Tuna_interp.Accel.registry_of_semantics "fast1")
-                               | s -> Error s
+                               | s -> (
+                                   match Tuna_interp.Accel.registry_of_semantics s with
+                                   | Some r -> Ok (Eng.Canonical, Some r)
+                                   | None -> Error s)
                              in
                              (match mode with
                               | Error s ->
