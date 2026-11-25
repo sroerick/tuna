@@ -82,19 +82,39 @@
       in-tree .sabra source uses cond as a form head or an atom
       starting with #. |))))
   (subsection t4-json-codec
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 T4 LANDED. server/lib/json_codec.ml (rim; common/, compiler and interpreter untouched) and POST /api/tool/run. EVIDENCE: tests/tool_language_tests.ml json codec suite 27/27 - every type round-trips; encoded ints, tags, strings and records are byte-identical to the trees the reader's own literals build (42, -7, #5, "hi", [[#1 3] [#2 "x"]]); a JSON observation encodes to exactly the gate-receipt fixture's tree; unknown fields, floats, unknown enum names and shared tags are refused with their JSON path. scripts/verify-15-tool-language.sh 15.5 live: the gate verdict called as a JSON tool answers pass / fail / unverified (about 67k steps each), every tool run replay-verifies like any run, and a mistyped field is a 400 naming inputs[0].value.exit. TL3 (no taker) is OPEN: nothing outside tuna calls /api/tool/run yet, which is why the project stays planned. The next move is a consumer (an erde tool that calls a sabra program by hash), not more language.|) *)
    (details
     (doc (|
-      A rim codec, host OCaml beside Tuna.Cstr, that maps JSON to the
-      dialect record conventions and back: object -> record sorted by
-      key (keys through a declared schema of name -> tag, never
-      guessed), array -> list, string -> cstr, integer -> law-5 int,
-      true/false -> bool, null -> none. The codec is total and
-      round-trips on the documented subset; anything else (floats,
-      unknown keys) is a 400 naming the field. A run endpoint accepts
-      a JSON request plus a schema reference and answers the result
-      decoded through the same schema, beside the raw result hash and
-      run id. The calculus never sees JSON. |))))
+      A rim codec (server/lib/json_codec.ml, host OCaml, Yojson.Basic
+      like the rest of the server) maps JSON to the existing tree
+      conventions and back. Trees are untyped - leaf is false, nil,
+      none and the empty record at once - so BOTH directions are
+      type-directed through a declared type, never guessed:
+
+        "bool" | "int" | "string" | "tag" | "tree"
+        {"list": T}  {"option": T}
+        {"record": {"<field>": [<tag>, T], ...}}
+        {"enum": {"<name>": <tag>, ...}}
+
+      bool is law 1, int law 5 (canonical only on decode, OCaml-int
+      range), string Cstr, tag law 4 (#0..#4096), list law 2, option
+      law 3 (null = none), record the dialect convention sorted by tag,
+      enum a tag named both ways, tree a raw ternary escape hatch. An
+      unknown field or enum name, a float, a repeated key or a tree of
+      the wrong shape is an error naming its JSON path.
+
+      POST /api/tool/run {program_hash, inputs: [{type, value}],
+      result_type, grants, fuel, size_cap, semantics} encodes the
+      inputs and runs through the SAME Run.execute_run as POST
+      /api/runs - one boundary, one journal, replay unchanged; JSON
+      never reaches the calculus or the store. It answers the run row
+      and journal plus result (decoded through result_type, null
+      unless the run finished normal) and result_error (the program's
+      answer did not have the declared shape: still a 201, the run
+      happened). A bad type or input is a 400 before anything runs.
+      Tools are content-addressed: the endpoint takes a program hash,
+      never source. |))))
   (subsection failure-definitions
    (status planned)
    (details
@@ -118,4 +138,4 @@
   (test "T2: a pinned name with a matching prefix compiles to the same tree as the unpinned source; a wrong prefix is a compile error naming both hashes; a pin on a lambda parameter is an error")
   (test "T2: verdict-std.sabra (helpers deleted, stdlib names pinned) answers as verdict.sabra on every gate-receipt policy case, and its pins all hold in the lock /api/programs reports")
   (test "T3: each cond and #n form compiles to the identical tree and step count as its hand-written twin, and verdict.sabra rewritten with cond and #n compiles to the hash of the current verdict.sabra")
-  (test "T4: a JSON request with a declared schema round-trips through the codec, and a run over it answers the decoded result plus the run id")))
+  (test "T4: every codec type round-trips and matches the reader's literal trees; the gate verdict called through POST /api/tool/run with a JSON observation answers pass, fail and unverified as JSON, each run replay-verified, and a mistyped field is a 400 naming its path")))

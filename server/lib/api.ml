@@ -573,6 +573,86 @@ let post_run pool auth req =
                                , `List (List.map journal_json js) )
                              ]))))
 
+(* POST /api/tool/run (borg/tool-language.borg T4): a run whose inputs
+   and result are JSON, typed by the Json_codec type language.  Body:
+
+     {"program_hash": "<hex>",
+      "inputs": [{"type": T, "value": <json>}, ...],
+      "result_type": T,
+      "grants": [...], "fuel": n, "size_cap": n, "semantics": "v0"|"v1"}
+
+   Each input is encoded to its tree at the rim and the run goes through
+   the SAME Run.execute_run as POST /api/runs - one boundary, one journal,
+   replay unchanged (the run row holds trees; JSON never reaches the
+   calculus or the store).  The answer is the ordinary run JSON plus
+   "result": the result tree decoded through result_type (null when the
+   run did not finish normal), and "result_error" when the tree does not
+   have the declared shape - an error about the PROGRAM's answer, so the
+   run still answers 201 with its row and journal.  A bad type or input
+   value is a 400 naming its JSON path, before anything runs. *)
+let post_tool_run pool auth req =
+  body_json req >>= function
+  | Error msg -> j_err msg
+  | Ok j -> (
+      let fuel = Option.value (get_int_opt j "fuel") ~default:10_000 in
+      let size_cap = Option.value (get_int_opt j "size_cap") ~default:10_000 in
+      let semantics = Option.value (get_string_opt j "semantics") ~default:"v0" in
+      let ( let* ) = Result.bind in
+      let parsed =
+        let* program_hash =
+          Option.to_result ~none:"missing \"program_hash\""
+            (get_string_opt j "program_hash")
+        in
+        let* result_ty =
+          match J.Util.member "result_type" j with
+          | `Null -> Error "missing \"result_type\""
+          | t -> Json_codec.ty_of_json ~path:"result_type" t
+        in
+        let* rev =
+          List.fold_left
+            (fun acc (i, inp) ->
+              let* acc = acc in
+              let path = Printf.sprintf "inputs[%d]" i in
+              let* ty =
+                Json_codec.ty_of_json ~path:(path ^ ".type")
+                  (J.Util.member "type" inp)
+              in
+              let* tree =
+                Json_codec.encode ~path:(path ^ ".value") ty
+                  (J.Util.member "value" inp)
+              in
+              Ok (tree :: acc))
+            (Ok [])
+            (List.mapi (fun i x -> (i, x)) (get_list j "inputs"))
+        in
+        Ok (program_hash, result_ty, List.rev rev)
+      in
+      match parsed with
+      | Error msg -> j_err msg
+      | Ok (program_hash, result_ty, input_trees) ->
+          Run.execute_run pool ~caller:auth.auth_id ~program_hash ~input_trees
+            ~grant_ids:(strings_of j "grants") ~fuel ~semantics ~size_cap ()
+          >>= (function
+                | Error (code, msg) -> j_err ~code msg
+                | Ok (row, js) ->
+                    let result, result_error =
+                      match (row.Store.r_status, row.Store.r_result_ternary) with
+                      | Store.Run_status.Normal, Some t -> (
+                          match Tuna.Canon.of_string t with
+                          | Error (_, m) -> (`Null, `String m)
+                          | Ok tree -> (
+                              match Json_codec.decode ~path:"result" result_ty tree with
+                              | Ok v -> (v, `Null)
+                              | Error m -> (`Null, `String m)))
+                      | _ -> (`Null, `Null)
+                    in
+                    j_ok ~code:201
+                      (`Assoc
+                        [ ("run", run_json row)
+                        ; ("result", result)
+                        ; ("result_error", result_error)
+                        ; ("journal", `List (List.map journal_json js)) ])))
+
 (* run-row level verify response; the divergence is addressed structure,
    not prose (replay.divergence-surface) *)
 (* verdict_json: the addressed divergence surface (replay.divergence-
@@ -2979,6 +3059,7 @@ let api_routes pool =
     ; Web.post "/api/programs/:hash/patch"
         (with_auth pool (patch_program pool))
     ; Web.post "/api/runs" (with_auth pool (post_run pool))
+    ; Web.post "/api/tool/run" (with_auth pool (post_tool_run pool))
     ; Web.get "/api/runs" (with_auth pool (list_runs pool))
     ; Web.get "/api/runs/verify" (with_auth pool (verify_sweep pool))
     ; Web.get "/api/runs/:id/trace" (with_auth pool (get_run_trace pool))

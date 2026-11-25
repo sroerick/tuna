@@ -130,6 +130,126 @@ let identity =
           ((Lazy.force original).Bracket.hash_hex
           <> (Lazy.force std).Bracket.hash_hex)) ]
 
+(* -- T4: the JSON codec ------------------------------------------------ *)
+
+module C = Tuna_server.Json_codec
+module J = Yojson.Basic
+
+let ty s = match C.ty_of_json (J.from_string s) with
+  | Ok t -> t | Error m -> Alcotest.failf "type %s: %s" s m
+
+let enc t v = match C.encode (ty t) (J.from_string v) with
+  | Ok x -> x | Error m -> Alcotest.failf "encode %s: %s" v m
+
+let roundtrip name t v =
+  Alcotest.test_case ("round trip: " ^ name) `Quick (fun () ->
+      match C.decode (ty t) (enc t v) with
+      | Ok back ->
+          Alcotest.(check string) "same JSON" (J.to_string (J.from_string v))
+            (J.to_string back)
+      | Error m -> Alcotest.failf "decode: %s" m)
+
+(* the codec's tree must be the tree the reader's own literal builds *)
+let same_as_reader name t v src =
+  Alcotest.test_case ("matches the reader: " ^ name) `Quick (fun () ->
+      Alcotest.(check string) "ternary"
+        (Canon.encode (Bracket.compile_source src).Bracket.tree)
+        (Canon.encode (enc t v)))
+
+let refused name t v sub =
+  Alcotest.test_case ("refused: " ^ name) `Quick (fun () ->
+      let r =
+        match C.ty_of_json (J.from_string t) with
+        | Error m -> Error m
+        | Ok ty -> C.encode ty (J.from_string v)
+      in
+      match r with
+      | Ok _ -> Alcotest.fail "expected an error"
+      | Error m ->
+          Alcotest.(check bool) (Printf.sprintf "%S names %S" m sub) true
+            (let n = String.length sub in
+             let rec go i = i + n <= String.length m && (String.sub m i n = sub || go (i + 1)) in
+             go 0))
+
+let obs_type =
+  {|{"record": {"gate": [1, "string"], "project": [2, "string"],
+     "command": [3, "string"], "rev": [4, "string"], "tree_clean": [5, "int"],
+     "diff_hash": [6, "string"], "exit": [7, "int"], "log_hash": [8, "string"],
+     "counts": [9, {"list": "int"}], "adapter": [10, "string"],
+     "runner": [11, "string"], "started_at": [12, "string"]}}|}
+
+let verdict_type = {|{"enum": {"pass": 1, "fail": 2, "unverified": 3}}|}
+
+let obs_json ?(exit = 0) counts =
+  Printf.sprintf
+    {|{"started_at": "2026-11-24T00:00:00Z", "gate": "tuna/runtest",
+       "project": "tuna", "command": "make -C tuna test", "rev": "%s",
+       "tree_clean": 1, "diff_hash": "", "exit": %d, "log_hash": "%s",
+       "counts": %s, "adapter": "alcotest-v1", "runner": "runner"}|}
+    (String.make 40 'a') exit (String.make 64 'b') counts
+
+let codec =
+  [ roundtrip "bool" {|"bool"|} "true";
+    roundtrip "int zero" {|"int"|} "0";
+    roundtrip "int 42" {|"int"|} "42";
+    roundtrip "int -7" {|"int"|} "-7";
+    roundtrip "int large" {|"int"|} "1152921504606846975";
+    roundtrip "string with unicode" {|"string"|} {|"día ☃ / \\ x"|};
+    roundtrip "tag" {|"tag"|} "9";
+    roundtrip "tree" {|"tree"|} {|"21100"|};
+    roundtrip "list" {|{"list": "int"}|} "[1, 2, 3]";
+    roundtrip "option none" {|{"option": "int"}|} "null";
+    roundtrip "option some" {|{"option": "int"}|} "5";
+    roundtrip "record (decoded in tag order)"
+      {|{"record": {"a": [1, "int"], "b": [2, {"list": "bool"}]}}|}
+      {|{"a": 1, "b": [true, false]}|};
+    roundtrip "enum" verdict_type {|"unverified"|};
+    same_as_reader "int literal" {|"int"|} "42" "42";
+    same_as_reader "negative int literal" {|"int"|} "-7" "-7";
+    same_as_reader "tag literal" {|"tag"|} "5" "#5";
+    same_as_reader "string literal" {|"string"|} {|"hi"|} {|"hi"|};
+    same_as_reader "record = bracket pairs, sorted by tag"
+      {|{"record": {"a": [1, "int"], "b": [2, "string"]}}|}
+      {|{"b": "x", "a": 3}|} {|[[#1 3] [#2 "x"]]|};
+    refused "unknown field" {|{"record": {"a": [1, "int"]}}|} {|{"a": 1, "z": 2}|}
+      "$.z: unknown field";
+    refused "float" {|"int"|} "1.5" "floats have no tuna encoding";
+    refused "nested path" {|{"list": {"record": {"a": [1, "int"]}}}|}
+      {|[{"a": 1}, {"a": "x"}]|} "$[1].a";
+    refused "unknown enum name" verdict_type {|"maybe"|} "unknown enum name";
+    refused "shared tag in a record type"
+      {|{"record": {"a": [1, "int"], "b": [1, "int"]}}|} "{}" "share tag 1";
+    refused "tag past the cap" {|"tag"|} "4097" "a tag is 0..4096";
+    Alcotest.test_case "decode refuses a non-canonical int" `Quick (fun () ->
+        match C.decode C.Int (T.Fork (T.Leaf, T.Fork (T.Leaf, T.Leaf))) with
+        | Ok _ -> Alcotest.fail "a trailing false bit is not canonical"
+        | Error _ -> ());
+    Alcotest.test_case "JSON observation = the fixture's observation tree" `Quick
+      (fun () ->
+        Alcotest.(check string) "ternary"
+          (Canon.encode (observation (Some (93, 93, 0, 0))))
+          (Canon.encode (enc obs_type (obs_json "[93, 93, 0, 0]"))));
+    Alcotest.test_case "verdict over JSON decodes to pass / fail / unverified" `Quick
+      (fun () ->
+        let verdict obs =
+          let host ~site:_ ~name ~args:_ = `Error ("prim " ^ name) in
+          match
+            Tuna_interp.Eval.eval ~host ~fuel:50_000_000 ~size_cap:1_000_000
+              ~program:(Lazy.force original).Bracket.tree
+              [ enc obs_type obs; enc {|{"list": "string"}|} "[]" ]
+          with
+          | Tuna_interp.Eval.Normal (t, _) -> (
+              match C.decode (ty verdict_type) t with
+              | Ok (`String v) -> v
+              | Ok _ | Error _ -> Alcotest.fail "verdict did not decode")
+          | _ -> Alcotest.fail "verdict did not finish"
+        in
+        Alcotest.(check string) "pass" "pass" (verdict (obs_json "[93, 93, 0, 0]"));
+        Alcotest.(check string) "fail" "fail" (verdict (obs_json ~exit:1 "[93, 93, 0, 0]"));
+        Alcotest.(check string) "unverified" "unverified"
+          (verdict (obs_json "[0, 0, 0, 0]"))) ]
+
 let () =
   Alcotest.run "tuna tool-language"
-    [ ("verdict-std agrees", agreement); ("program identity", identity) ]
+    [ ("verdict-std agrees", agreement); ("program identity", identity);
+      ("json codec", codec) ]

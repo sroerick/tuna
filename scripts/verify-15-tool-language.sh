@@ -15,6 +15,10 @@
 #        programs for one function); tests/tool_language_tests.ml holds
 #        the extensional proof - the same answer on every policy case.
 #   15.4 REPL LOCK - an eval round reports the names it resolved.
+#   15.5 T4 TOOL RUN - the verdict called through POST /api/tool/run with
+#        a JSON observation answers "pass" / "fail" / "unverified" as
+#        JSON; a run row and journal come back like /api/runs; a bad
+#        input value is a 400 naming its JSON path before anything runs.
 #
 # Env: as scripts/verify-lib.sh (a live dev server; TUNA_HTTP_PORT,
 # TUNA_SMOKE_TOKEN or the dev boot token).
@@ -102,6 +106,46 @@ names = sorted(e["name"] for e in r.get("lock", []))
 if code != 200 or r.get("ternary") != "200" or names != ["comb-s", "true"]:
     die("15.4 REPL eval must answer 200 with lock [comb-s, true]: %s %r" % (code, j))
 print("  (comb-s true true %200) -> 200, lock [comb-s, true]")
+
+print("[15.5] T4 the verdict as a JSON tool call")
+obs_type = {"record": {
+    "gate": [1, "string"], "project": [2, "string"], "command": [3, "string"],
+    "rev": [4, "string"], "tree_clean": [5, "int"], "diff_hash": [6, "string"],
+    "exit": [7, "int"], "log_hash": [8, "string"],
+    "counts": [9, {"list": "int"}], "adapter": [10, "string"],
+    "runner": [11, "string"], "started_at": [12, "string"]}}
+verdict_type = {"enum": {"pass": 1, "fail": 2, "unverified": 3}}
+def obs(exit_status, counts):
+    return {"gate": "tuna/runtest", "project": "tuna",
+            "command": "make -C tuna test", "rev": "a" * 40, "tree_clean": 1,
+            "diff_hash": "", "exit": exit_status, "log_hash": "b" * 64,
+            "counts": counts, "adapter": "alcotest-v1", "runner": "verify-15",
+            "started_at": "2026-11-25T00:00:00Z"}
+def tool(o):
+    return post("/api/tool/run", {
+        "program_hash": orig,
+        "inputs": [{"type": obs_type, "value": o},
+                   {"type": {"list": "string"}, "value": []}],
+        "result_type": verdict_type, "fuel": 50000000, "size_cap": 1000000})
+for o, want in [(obs(0, [93, 93, 0, 0]), "pass"), (obs(1, [93, 93, 0, 0]), "fail"),
+                (obs(0, [0, 0, 0, 0]), "unverified")]:
+    code, j = tool(o)
+    if code != 201 or j.get("result") != want or j["run"]["status"] != "normal":
+        die("15.5 verdict(%r) must answer %r: %s %r" % (o["exit"], want, code,
+            {k: j.get(k) for k in ("result", "result_error", "error")}))
+    req = urllib.request.Request(base + "/api/runs/" + j["run"]["id"],
+        headers={"Authorization": "Bearer " + tok})
+    full = json.load(urllib.request.urlopen(req, timeout=300))
+    if full["run"].get("verify_status") != "verified":
+        die("15.5 a tool run must replay-verify like any run: %r"
+            % full["run"].get("verify_status"))
+    print("  exit %d counts %r -> %r (run %s, %d steps, replay verified)" % (
+        o["exit"], o["counts"], j["result"], j["run"]["id"][:8], j["run"]["step_count"]))
+bad = obs(0, [93, 93, 0, 0]); bad["exit"] = "zero"
+code, j = tool(bad)
+if code != 400 or "inputs[0].value.exit" not in j.get("error", ""):
+    die("15.5 a mistyped field must be a 400 naming its path: %s %r" % (code, j))
+print("  mistyped exit -> 400 naming inputs[0].value.exit")
 PY
 
-echo "ACCEPT 15 OK: combinators shared, names pin and lock, the verdict reads three ways"
+echo "ACCEPT 15 OK: combinators shared, names pin and lock, the verdict reads three ways and answers JSON"

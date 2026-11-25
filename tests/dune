@@ -153,13 +153,14 @@
  (action
   (run %{exe:compiler_tests.exe})))
 
-; tool-language T2 (borg/tool-language.borg): verdict-std.sabra, the
+; tool-language T2 + T4 (borg/tool-language.borg): verdict-std.sabra, the
 ; verdict written against the seeded stdlib with pinned names, answers
-; as verdict.sabra on every gate-receipt policy case.  No PG, no HTTP.
+; as verdict.sabra on every gate-receipt policy case; the JSON codec
+; round-trips and matches the reader's literals.  No PG, no HTTP.
 (executable
  (name tool_language_tests)
  (modules tool_language_tests)
- (libraries tuna tuna_interp tuna_compiler alcotest))
+ (libraries tuna tuna_interp tuna_compiler tuna_server yojson alcotest))
 
 (rule
  (alias runtest)
