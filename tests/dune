@@ -367,3 +367,17 @@
  (action
   (bash
    "if command -v node >/dev/null 2>&1; then node %{workspace_root}/tools/filmstrip_cdp.mjs; else echo 'filmstrip_cdp: skip (node absent)'; fi")))
+
+; eval-modes E1 (borg/eval-modes.borg): the staged template vocabulary
+; renders correctly and a page written over it specialises at compile
+; time, answering as the live render.  No PG, no HTTP.
+(executable
+ (name eval_modes_tests)
+ (modules eval_modes_tests)
+ (libraries tuna tuna_interp tuna_compiler alcotest))
+
+(rule
+ (alias runtest)
+ (deps eval_modes_tests.exe ../stdlib/v1/core.defs)
+ (action
+  (run %{exe:eval_modes_tests.exe})))

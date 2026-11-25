@@ -643,3 +643,43 @@ out-of-band squatter — the port-squat was only found because /health
 404ed with a foreign error page.
 
 ---
+
+## F15 — STAGING DOES NOT PAY ON ITS OWN (eval-modes EM1)
+
+> borg/eval-modes.borg pre-registration (EM1): on the target page,
+> request-path v0 steps of the staged template exceed 1% of the live
+> (unstaged) render.
+
+**Status: OBSERVED 2026-11-25** (eval-modes E1 make). The page is a
+`<ul>` of todo items through the staged template
+`<li>{2} <small>by {3}</small></li>` (stdlib v1.3 `tmpl-compile`,
+`tmpl-each`). Live = the template supplied at request time; staged =
+`(page-fn "<template>")` specialised at compile time; same output
+bytes in every case.
+
+| todos | live steps | staged request steps | ratio | parse moved to compile |
+|---|---|---|---|---|
+| 2 | 1,367,842 | 538,319 | 39% | 829,525 |
+| 20 | 6,456,586 | 5,627,063 | 87% | 829,525 |
+
+What staging DID: the whole parse (829,525 steps) left the request
+path, exactly as the chapter's 2026-11-25 int-mul experiment
+predicted (13.47M -> 7,029 there). What it could not do: the residual
+is data-proportional work - about 270k steps per item, roughly 10k per
+escaped data character (five in-calculus `tree-eq` compares per char
+in `html-esc-char`, plus `list-append` per segment). No binding-time
+rearrangement removes work that depends on the request's data.
+
+A second observation, not a failure definition: a renderer written
+naively (parse interleaved with the data walk) and then specialised at
+compile time is 1.7x-3.6x SLOWER than the live staged library - the
+compiler lifts closed subterms but does not stage an interleaved
+recursion. Staging stays a property of how the vocabulary is written.
+
+CONSEQUENCE (recorded, as the chapter planned): E2 accelerators are the
+answer to the residual, not more staging. The first set the chapter
+names (tree-eq, list-append, int-*) covers exactly the per-char cost
+measured here; html-escape is added as a candidate. EM1 stands as
+observed; the 1% line is not retuned.
+
+---

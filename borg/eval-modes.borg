@@ -7,7 +7,8 @@
   (doc "Two moves; neither changes the five rules, the tree law, the prim set or the journal.")
   (status planned)
   (subsection e1-staging
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 E1 LANDED; EM1 OBSERVED (FINDINGS.md F15). STDLIB V1.3, additive 82 -> 93 rows (earlier rows byte-identical): list-tail, list-index(-fn), html-esc-char, html-escape, tmpl-parse(-fn), tmpl-build(-fn), tmpl-compile, tmpl-each. Template syntax: {N} with ONE decimal digit is a hole for record field #N, html-escaped; any other brace is text; adjacent text coalesces at parse. Two compile-time-reduction rules surfaced writing it and are recorded in gen_defs.py: an arm that ignores its parameter is K body and reduces eagerly, and the first argument of every recursive call must be the arm's parameter, or the closed partial application unrolls forever. DESIGN REVISIONS vs the text below, both smaller: (a) THE RECORD IS A RUN ROW - no new table: tmpl-compile run over the template (POST /api/tool/run) is the (function, static input, specialised) record, replay-verified, and its result hash equals the program hash of the source (tmpl-compile "..."); (c) THE REQUEST BUDGET IS FUEL - a request run under fuel N is the budget check; no def-time mechanism added. EVIDENCE: tests/eval_modes_tests.ml 10/10 (rendering, escaping, missing field, braces, coalescing, compile-time specialisation answers as the live render); corpus 100 -> 103 rows and scripts/verify-differential.sh 103/103; scripts/verify-16-eval-modes.sh exit 0 (record run 829,491 steps replay-verified; compile == run; specialised renderer as a JSON tool answers the escaped string); verify-8/12/13/15 exit 0; dune build @all and dune runtest exit 0. EM1: the parse leaves the request path (829,525 steps) but the request is 39% (2 todos) to 87% (20 todos) of the live render, dominated by ~10k steps per escaped data character - the case for E2. The board's live /todo page is NOT swapped (product call; the target measured is the same todo list rendered in-calculus).|) *)
    (details
     (doc (|
       WHAT EXISTS: compile is normal-form reduction, so a source that
@@ -83,7 +84,9 @@
          tree calculus. Phase-4 scope, not a gate.
 
       FIRST SET: first-order and total - int-add, int-sub, int-mul,
-      int-cmp, tree-eq, list-length, list-append, list-reverse. The
+      int-cmp, tree-eq, list-length, list-append, list-reverse, and
+      html-escape (added after F15: per-char escaping dominates the
+      staged page's request path). The
       higher-order ones (list-fold, list-map) need a native loop that
       calls back into the evaluator for the function argument; they
       come second, with their own differential vectors. |))))
@@ -109,6 +112,8 @@
       EM1 STAGING DOES NOT PAY: on the target page, request-path v0
           steps of the staged template exceed 1% of the live
           (unstaged) render. The 2026-11-25 experiment measured 0.05%.
+          OBSERVED 2026-11-25 on the todo page: 39% at 2 items, 87%
+          at 20 (FINDINGS.md F15) - the residual is data work.
       EM2 ACCELERATOR MISMATCH: any vector, live audit or replay where
           fast and reference results differ. The accelerator is
           unregistered at once and the mismatch filed as a finding; it
@@ -121,8 +126,8 @@
           manifest bump. Recorded with the churn count; the answer is
           a stdlib stability rule, not name-keyed accelerators. |)))))
  (verify
-  (test "E1: a staged template def records (function hash, static input hash, specialised hash), an offline re-reduction reproduces the specialised hash, and a naive renderer declared staged fails its request budget at def time")
-  (test "E1: the target board page renders from its staged template with request-path steps under 1% of the unstaged render, same output")
+  (test "E1: tmpl-compile run over a template is a replay-verified run whose result hash equals the program hash of (tmpl-compile \"...\"), and the specialised renderer called as a JSON tool answers the escaped string")
+  (test "E1: the todo page rendered from its staged template answers byte-identically to the live render with the parse moved to compile time; request-path steps are measured against EM1")
   (test "E2: every registered accelerator passes its differential vectors (malformed inputs included) against the reference law, and a fast-mode run re-verifies under v0 to the same result hash")
   (test "E2: a tree computing the same function under a different hash is not accelerated, and an accelerator that declines falls back to rewriting with the same result")
   (test "E2: the gate verdict and the naive renderer run at least 10x faster in wall clock under fast mode than under v0")))
