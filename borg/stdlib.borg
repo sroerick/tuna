@@ -280,7 +280,16 @@
       6. CORE UNTOUCHED [8.6]: byte-identical since 0185b1a (the
          commit the vocabulary work starts after; the rim-eio
          flat.ml changes are prior), gate
-         TUNA_STDLIB_BASELINE-overridable. |))))
+         TUNA_STDLIB_BASELINE-overridable. RESCOPED 2026-11-25
+         (owner decision, roerick): the law is the one stated in
+         acceptance 6 - untouched in the landing commit, and no
+         stdlib def may NEED a core change - not "byte-identical
+         forever". 8.6 now proves it directly: every stdlib entry
+         of the differential corpus (62) agrees on plain v0 across
+         refeval, the Common Lisp twin and the tuna CLI; the
+         compiler rule (sexp.ml only since f429d515) is kept.
+         Interpreter changes land under their own chapters
+         (eval-modes E2, the size-check fix). |))))
   (subsection pre-registered-failures
    (status implemented)
    (details
