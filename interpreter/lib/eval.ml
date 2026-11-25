@@ -51,8 +51,8 @@ type mode = Prim_eval.mode = Canonical | Sharing
 (* Same API and behavior as before.  [~mode:Sharing] opts into the
    distinct-work law (borg/sharing.borg).  [~trace] attaches a
    firing-event collector (borg/trace.borg): observation only. *)
-let eval ?host ?deadline ?(mode = Canonical) ?trace ~fuel ~size_cap ~program args =
-  Drive.eval ?host ?deadline ~mode ?trace ~fuel ~size_cap ~program args
+let eval ?host ?deadline ?(mode = Canonical) ?trace ?accel ~fuel ~size_cap ~program args =
+  Drive.eval ?host ?deadline ~mode ?trace ?accel ~fuel ~size_cap ~program args
 
 (* Back-compat alias: callers that reached the identity-monad engine as
    [Eval.Engine] (sharing/trace test suites) get the flat driver, which

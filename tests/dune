@@ -381,3 +381,18 @@
  (deps eval_modes_tests.exe ../stdlib/v1/core.defs)
  (action
   (run %{exe:eval_modes_tests.exe})))
+
+; eval-modes E2 (borg/eval-modes.borg): accelerators under fast1 answer
+; exactly as their reference trees on generated vectors (malformed
+; inputs included), on the whole differential corpus, and only for the
+; registered hashes.  No PG.
+(executable
+ (name accel_tests)
+ (modules accel_tests)
+ (libraries tuna tuna_interp tuna_compiler alcotest))
+
+(rule
+ (alias runtest)
+ (deps accel_tests.exe ../stdlib/v1/core.defs (glob_files ../scripts/diff-corpus/*.corpus))
+ (action
+  (run %{exe:accel_tests.exe})))

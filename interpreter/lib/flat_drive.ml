@@ -101,9 +101,9 @@ module Make (M : MONAD) = struct
   let eval ?(host : host =
              fun ~site:_ ~name:_ ~args:_ ->
                M.return (`Error "no prim host at this boundary"))
-      ?(deadline = Float.infinity) ?(mode = Canonical) ?trace ?(garden = [])
+      ?(deadline = Float.infinity) ?(mode = Canonical) ?trace ?(garden = []) ?accel
       ~fuel ~size_cap ~program args : result M.t =
-    let m = Flat.start ~mode ?trace ~garden ~fuel ~size_cap ~program ~args () in
+    let m = Flat.start ~mode ?trace ~garden ?accel ~fuel ~size_cap ~program ~args () in
     M.catch
       (fun () ->
         M.bind (drive ~deadline ~host m) (fun () ->
@@ -118,10 +118,10 @@ module Make (M : MONAD) = struct
   let eval_result ?(host : host =
                     fun ~site:_ ~name:_ ~args:_ ->
                       M.return (`Error "no prim host at this boundary"))
-      ?(deadline = Float.infinity) ?(mode = Canonical) ?trace ?(garden = [])
+      ?(deadline = Float.infinity) ?(mode = Canonical) ?trace ?(garden = []) ?accel
       ~fuel ~size_cap ~program args :
       (result * int * (string * string * string) list) M.t =
-    let m = Flat.start ~mode ?trace ~garden ~fuel ~size_cap ~program ~args () in
+    let m = Flat.start ~mode ?trace ~garden ?accel ~fuel ~size_cap ~program ~args () in
     M.catch
       (fun () ->
         M.bind (drive ~deadline ~host m) (fun () ->

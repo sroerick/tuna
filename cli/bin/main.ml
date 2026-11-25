@@ -78,6 +78,7 @@ let eval_compiled_cmd argv off =
      --fuel/--cap/--semantics (v0 canonical | v1 distinct-work) *)
   let fuel = ref 10000 and cap = ref 10000 and rest = ref [] in
   let mode = ref Tuna_interp.Eval.Canonical in
+  let accel = ref None in
   let rec go i =
     if i >= Array.length argv then ()
     else
@@ -89,6 +90,8 @@ let eval_compiled_cmd argv off =
             (match argv.(i + 1) with
              | "v1" -> Tuna_interp.Eval.Sharing
              | _ -> Tuna_interp.Eval.Canonical);
+          (* fast1 (borg/eval-modes.borg E2): v0 counting + accelerators *)
+          accel := Tuna_interp.Accel.registry_of_semantics argv.(i + 1);
           go (i + 2)
       | arg -> rest := arg :: !rest; go (i + 1)
   in
@@ -102,7 +105,7 @@ let eval_compiled_cmd argv off =
   in
   let args = List.rev_map Tuna.Canon.parse !rest in
   print_result
-    (Tuna_interp.Eval.eval ~fuel:!fuel ~size_cap:!cap ~mode:!mode ~program args)
+    (Tuna_interp.Eval.eval ~fuel:!fuel ~size_cap:!cap ~mode:!mode ?accel:!accel ~program args)
 
 let () =
   match Sys.argv.(1) with

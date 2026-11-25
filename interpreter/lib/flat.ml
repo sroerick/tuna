@@ -63,6 +63,10 @@ type frame =
   | KFinish of t * t * int
       (* close a gated firing (f, c, tick0) exactly once its whole
          dispatch subtree has produced an answer *)
+  | KAccelPartial of Accel.entry * t list
+      (* fast1 (borg/eval-modes.borg E2): the value about to be
+         delivered is a registered function applied to these args;
+         remember it so its next application can run natively *)
 
 type mode = Prim_eval.mode = Canonical | Sharing
 
@@ -96,6 +100,8 @@ type machine = {
 ; size_cap : int
 ; mutable sharing : sharing option
 ; trace : Prim_eval.trace option
+; accel : Accel.state option
+      (* fast1 accelerators; None under v0/v1 (no change to either law) *)
 }
 
 (* -- physical-node digest cache (same content law as the memo keys) --- *)
@@ -120,8 +126,21 @@ let rec digest_of s (t : t) =
 
 (* -- start ------------------------------------------------------------- *)
 
-let start ?(mode = Canonical) ?trace ?(garden = []) ~fuel ~size_cap ~program
-    ~args () =
+let start ?(mode = Canonical) ?trace ?(garden = []) ?accel ~fuel ~size_cap
+    ~program ~args () =
+  (* fast1 is the v0 counting law plus accelerators; it never combines
+     with the distinct-work law *)
+  let accel =
+    match (accel, mode) with
+    | None, _ -> None
+    | Some _, Sharing -> invalid_arg "Flat.start: accelerators run under v0 counting only"
+    | Some entries, Canonical -> Some (Accel.start entries)
+  in
+  let program, args =
+    match accel with
+    | None -> (program, args)
+    | Some st -> (Accel.prepare st program, List.map (Accel.prepare st) args)
+  in
   let sharing =
     match mode with
     | Canonical -> None
@@ -160,6 +179,7 @@ let start ?(mode = Canonical) ?trace ?(garden = []) ~fuel ~size_cap ~program
     ; size_cap
     ; sharing
     ; trace
+    ; accel
     }
   in
   if size program > size_cap || List.exists (fun a -> size a > size_cap) args
@@ -185,6 +205,11 @@ let result m = m.done_
    firings rendered as (fun_hex, arg_hex, result_ternary) for
    persistence.  The core computes; the driver persists.  Both are
    no-ops / empty under Canonical mode. *)
+(* fast1 bookkeeping: accelerated calls answered natively, and calls a
+   native declined (rewritten as v0 instead) *)
+let accel_calls m = match m.accel with Some st -> st.Accel.calls | None -> 0
+let accel_declines m = match m.accel with Some st -> st.Accel.declines | None -> 0
+
 let garden_hits m =
   match m.sharing with Some s -> s.garden_hits | None -> 0
 
@@ -347,6 +372,11 @@ let rec deliver m r =
        | KForkAfterFirst v -> set_eval m r v
        | KFinish (ff, cc, tick0) ->
            share_finish m ff cc ~tick0 r;
+           deliver m r
+       | KAccelPartial (e, args) ->
+           (match m.accel with
+            | Some st -> Accel.remember st r (e, args)
+            | None -> ());
            deliver m r)
 
 and set_eval m f x =
@@ -361,6 +391,45 @@ let deliver_checked m r =
     m.done_ <- Some (Prim_eval.Size_exhausted m.steps)
   end
   else deliver m r
+
+(* -- accelerators (fast1) ---------------------------------------------- *)
+
+(* Before a triage firing of [f] on [m.x]: if [f] is a registered tree
+   or a remembered partial of one, either answer natively (args
+   complete, native accepts: [cost] steps, one value), or note the
+   partial (args incomplete: a frame below the firing remembers its
+   value), or fall through (declined / not registered) to the v0
+   rewrite.  Returns true when the application is fully handled. *)
+let accel_step m f =
+  match m.accel with
+  | None -> false
+  | Some st -> (
+      match Accel.lookup st f with
+      | None -> false
+      | Some (e, args) ->
+          let args = args @ [ m.x ] in
+          if List.length args < e.Accel.arity then begin
+            m.k <- KAccelPartial (e, args) :: m.k;
+            false
+          end
+          else (
+            match e.Accel.impl args with
+            | None ->
+                st.Accel.declines <- st.Accel.declines + 1;
+                false
+            | Some r ->
+                if m.fuel < e.Accel.cost then begin
+                  m.f <- None;
+                  m.done_ <- Some (Prim_eval.Fuel_exhausted m.steps)
+                end
+                else begin
+                  m.fuel <- m.fuel - e.Accel.cost;
+                  m.steps <- m.steps + e.Accel.cost;
+                  st.Accel.calls <- st.Accel.calls + 1;
+                  emit m Prim_eval.Kfire "accel" None None e.Accel.name;
+                  deliver_checked m r
+                end;
+                true))
 
 (* -- one elementary step ---------------------------------------------- *)
 
@@ -390,6 +459,7 @@ let step m =
             | Stem a1 ->
                 deliver_checked m (Fork (a1, m.x));
                 Some m
+            | Fork _ when accel_step m f -> Some m
             | Fork _ -> (
                 match share_gate m f m.x with
                 | `Fuel ->

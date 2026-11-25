@@ -683,3 +683,39 @@ measured here; html-escape is added as a candidate. EM1 stands as
 observed; the 1% line is not retuned.
 
 ---
+
+## F16 — ACCELERATORS DO NOT PAY FOR THE GATE VERDICT (eval-modes EM3, half)
+
+> borg/eval-modes.borg pre-registration (EM3): the gate verdict and the
+> naive renderer under fast mode are not at least 10x faster in wall
+> clock than v0.
+
+**Status: OBSERVED for the verdict half, 2026-11-25** (eval-modes E2
+make; registry fast1, nine accelerators). Same answers in every row;
+wall clock on this laptop, single run each.
+
+| workload | v0 | fast1 | wall |
+|---|---|---|---|
+| verdict.sabra (helpers inline) | 67,192 steps, 0.566s | 67,192 steps, 0 native | 1.0x |
+| verdict-std.sabra (stdlib names) | 55,195 steps, 0.099s | 18,798 steps, 65 native | 2.5x |
+| todo page, staged, 20 items | 5,627,063 steps, 11.1s | 133,139 steps, 261 native | 46.7x |
+| todo page, live, 20 items | 6,456,586 steps, 12.7s | 161,314 steps, 668 native | 31.4x |
+| int-mul experiment (naive renderer) | 13,465,953 steps, 24.6s | 12,431 steps, 17 native | 460x |
+
+The renderer half clears 10x by one to two orders of magnitude; the
+verdict half does not. Two causes, both structural:
+1. verdict.sabra carries its helpers INLINE (let-bound), so no subtree
+   carries a registered hash and nothing is accelerated - the
+   tool-language T2 finding (dictionary literals and let-bound helpers
+   are different trees) now has a price. verdict-std.sabra, which
+   pins stdlib names, is accelerated.
+2. What remains in verdict-std is record lookup and list walking
+   (rec-get, list-fold, list-filter), which fast1 does not cover: the
+   higher-order and record families are the chapter's second set.
+
+ASIDE (not a failure definition): v0 costs ~8us per step on
+verdict.sabra but ~1.8us on verdict-std.sabra. Flat.deliver_checked
+computes Tree.size - O(n) - on every delivered value, so per-step cost
+grows with value size. Pre-existing; recorded, not changed here.
+
+---

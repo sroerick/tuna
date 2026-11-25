@@ -112,7 +112,7 @@ let first_diff_path (a : Tuna.Tree.t) (b : Tuna.Tree.t) : string =
    sequentially from [rows].  Answers come from the journal (accepted
    results consumed in order); no grant check, no live host.  Returns
    (outcome, rows consumed). *)
-let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ~program
+let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ?accel ~program
     ~inputs ~fuel ~size_cap (rows : S.journal list) : (outcome * int) =
   let arr = Array.of_list rows in
   let next = ref 0 in
@@ -191,7 +191,7 @@ let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ~program
         incr next;
         return answer)
   in
-  Eng.eval ~host ~mode ~fuel ~size_cap ~deadline ~program inputs
+  Eng.eval ~host ~mode ?accel ~fuel ~size_cap ~deadline ~program inputs
   >>= fun outcome -> return (outcome, !next)
 
 (* -- prim contract versioning (replay.prim-versioning) --------------- *)
@@ -453,8 +453,10 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict =
                          refuses a future version as unverifiable. *)
                       let mode =
                         match run.S.r_semantics with
-                        | "v0" -> Ok Eng.Canonical
-                        | "v1" -> Ok Eng.Sharing
+                        | "v0" -> Ok (Eng.Canonical, None)
+                        | "v1" -> Ok (Eng.Sharing, None)
+                        | "fast1" ->
+                            Ok (Eng.Canonical, Tuna_interp.Accel.registry_of_semantics "fast1")
                         | s -> Error s
                       in
                       let nrows = List.length js' in
@@ -465,10 +467,10 @@ let verify pool ?(deadline = Float.infinity) ~(run : S.run) () : verdict =
                                 (Printf.sprintf
                                    "unknown semantics version %S for this build"
                                    s))
-                       | Ok mode ->
+                       | Ok (mode, accel) ->
                       catch
                         (fun () ->
-                            execute_fed ~mode ~program ~inputs ~fuel:run.S.r_fuel
+                            execute_fed ~mode ?accel ~program ~inputs ~fuel:run.S.r_fuel
                               ~size_cap:run.S.r_size_cap ~deadline js'
                             >>= fun (outcome, consumed) ->
                           if is_deadline outcome then
@@ -595,8 +597,10 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict =
                                 row's own law, same as verify *)
                              let mode =
                                match run.S.r_semantics with
-                               | "v0" -> Ok Eng.Canonical
-                               | "v1" -> Ok Eng.Sharing
+                               | "v0" -> Ok (Eng.Canonical, None)
+                               | "v1" -> Ok (Eng.Sharing, None)
+                               | "fast1" ->
+                                   Ok (Eng.Canonical, Tuna_interp.Accel.registry_of_semantics "fast1")
                                | s -> Error s
                              in
                              (match mode with
@@ -606,11 +610,11 @@ let reexecute pool ?(deadline = Float.infinity) ~run_id () : verdict =
                                        (Printf.sprintf
                                           "unknown semantics version %S for this build"
                                           s))
-                              | Ok mode ->
+                              | Ok (mode, accel) ->
                              let nrows = List.length js' in
                              catch
                                (fun () ->
-                                  execute_fed ~mode ~program ~inputs ~fuel:run.S.r_fuel
+                                  execute_fed ~mode ?accel ~program ~inputs ~fuel:run.S.r_fuel
                                     ~size_cap:run.S.r_size_cap ~deadline js'
                                   >>= fun (outcome, consumed) ->
                                   if consumed < nrows then

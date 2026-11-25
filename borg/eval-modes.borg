@@ -1,11 +1,11 @@
 (project tuna-eval-modes
  (doc "Tuna book chapter: evaluation modes - make tuna fast enough to answer a request (render a page, answer a tool call) while the five rewrite rules stay the only semantics. Two moves: E1 staging, which already works at compile time and needs a convention, a record and a vocabulary; E2 accelerators, native implementations of pure stdlib trees keyed by hash, under a new semantics version with reference re-verification. Named and deferred: recorded calls and job mode. Research question, stated so it can be refuted: can request-path cost fall by orders of magnitude WITHOUT an impure evaluation mode - no new effect, no unjournaled host call, no change to what any program tree means - so that every fast answer stays checkable, offline, against the reference law?")
- (status planned)
+ (status partial)
  (convention ocaml-dune)
  (* agent note (|2026-11-25 chapter authored (roerick + Claude) after the tool-language chapter. OWNER DIRECTION, this date: no impure evaluation mode; distinguish in the core, not by bracket syntax, a function that is precompiled (templates) from one that runs live; keep everything runnable OFFLINE (no first-class dependency on a server to record or check a run). EVIDENCE that shapes the moves, measured in-tree this date: (1) Bracket.compile reduces the whole program to normal form (bracket.ml artifact.steps counts compile-time firings), so (render tmpl) written in a source is specialised at compile time today. Experiment (throwaway exe, stdlib/v1 dictionary, template [13 0 11 7 0 14 9 0 6 12], data 42): NAIVE render (lambda (t) (lambda (d) (list-map (lambda (s) (if d (int-mul s s) (tree-eq s int-zero))) t))) specialises in 2 steps and still costs 13,465,951 steps per request; STAGED render (lambda (t) ((lambda (pre) (lambda (d) (list-map (lambda (x) (if d x (tree-eq x int-zero))) pre))) (list-map (lambda (s) (int-mul s s)) t))) pays 13,461,209 steps once at compile and 7,029 per request; same result hash. Staging is a binding-time property of how the program is WRITTEN, not something the evaluator can add. (2) The same experiment is the accelerator case: ~2M v0 steps per in-calculus int-mul of operands under 15 (the F6 slope math-prims.borg already recorded). PRECEDENT: Urbit's Nock runs its stdlib through 'jets' (native code matched to known formulas); its known failure class is jet mismatch, answered by a run-both-and-compare mode. This chapter uses the neutral word accelerator.|) *)
  (section eval-modes
   (doc "Two moves; neither changes the five rules, the tree law, the prim set or the journal.")
-  (status planned)
+  (status partial)
   (subsection e1-staging
    (status implemented)
    (* agent note (|2026-11-25 E1 LANDED; EM1 OBSERVED (FINDINGS.md F15). STDLIB V1.3, additive 82 -> 93 rows (earlier rows byte-identical): list-tail, list-index(-fn), html-esc-char, html-escape, tmpl-parse(-fn), tmpl-build(-fn), tmpl-compile, tmpl-each. Template syntax: {N} with ONE decimal digit is a hole for record field #N, html-escaped; any other brace is text; adjacent text coalesces at parse. Two compile-time-reduction rules surfaced writing it and are recorded in gen_defs.py: an arm that ignores its parameter is K body and reduces eagerly, and the first argument of every recursive call must be the arm's parameter, or the closed partial application unrolls forever. DESIGN REVISIONS vs the text below, both smaller: (a) THE RECORD IS A RUN ROW - no new table: tmpl-compile run over the template (POST /api/tool/run) is the (function, static input, specialised) record, replay-verified, and its result hash equals the program hash of the source (tmpl-compile "..."); (c) THE REQUEST BUDGET IS FUEL - a request run under fuel N is the budget check; no def-time mechanism added. EVIDENCE: tests/eval_modes_tests.ml 10/10 (rendering, escaping, missing field, braces, coalescing, compile-time specialisation answers as the live render); corpus 100 -> 103 rows and scripts/verify-differential.sh 103/103; scripts/verify-16-eval-modes.sh exit 0 (record run 829,491 steps replay-verified; compile == run; specialised renderer as a JSON tool answers the escaped string); verify-8/12/13/15 exit 0; dune build @all and dune runtest exit 0. EM1: the parse leaves the request path (829,525 steps) but the request is 39% (2 todos) to 87% (20 todos) of the live render, dominated by ~10k steps per escaped data character - the case for E2. The board's live /todo page is NOT swapped (product call; the target measured is the same todo list rendered in-calculus).|) *)
@@ -42,7 +42,8 @@
       Target workload: a real page in the board chapter's surface,
       rendered from a staged template over a todo record list. |))))
   (subsection e2-accelerators
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 E2 LANDED as run semantics "fast1"; EM2 not triggered; EM3 OBSERVED for the verdict half (FINDINGS.md F16). CODE: interpreter/lib/accel.ml (registry fast1, pinned: tree-eq, list-append, list-length, list-reverse, html-escape, int-add, int-sub, int-mul, int-cmp at their stdlib v1.3 hashes; cost 1 step per accelerated call; int natives decline non-canonical ints, int-mul declines past 4M bit-products); interpreter/lib/flat.ml consults it before a triage firing under fast1 only (v0 and v1 unchanged; fast1 with v1 is refused). RECOGNITION without hashing every firing: a once-per-run walk (Accel.prepare) computes subtree sizes, hashes only size matches, and replaces every registered subtree with one physical copy (structure and program hash unchanged); a partial application (tree-eq a) is remembered when its value is delivered (KAccelPartial frame, physical-identity table). Soundness argument in accel.ml: a physical node that is the value of (F a) IS structurally (F a), so its later application is F a b wherever it appears. HOST: run.ml accepts semantics fast1 (the row records it), replay.ml re-executes fast1 rows under fast1, cli --semantics fast1 runs it offline. EVIDENCE: tests/accel_tests.ml 15/15 - registry rows equal the frozen stdlib hashes and sizes; 60 generated vectors per accelerator (malformed lists, junk trees, non-canonical ints, negative zero) agree with the reference; every canonical int pair (60) answered natively; every normal corpus entry answers identically under fast1; a runtime partial (tree-eq x) is answered per element; append by explicit recursion (no registered subtree) is not accelerated; a declined call rewrites as v0. scripts/verify-16-eval-modes.sh 16.4: the staged renderer as a JSON tool under fast1 answers the same string in 5,402 steps vs v0 273,560, replay-verifies under fast1, and a v0 re-run gives the identical result hash (tier 2); an unknown semantics is a 400. verify-1..16 all exit 0 (verify-10 run at the commit: its core-untouched guard compares the tree to HEAD), differential 103/103, dune build @all and runtest exit 0. The accelerator suite costs ~3.4 min of runtest, almost all of it the reference side of the int vectors. TIER 3 (proofs) not attempted. The live /todo page and tuna.town are unchanged.|) *)
    (details
     (doc (|
       An ACCELERATOR is a native implementation of a pure stdlib tree,
@@ -83,6 +84,10 @@
          Rocq or Lean, building on the existing Coq formalisations of
          tree calculus. Phase-4 scope, not a gate.
 
+      SECOND SET (after F16): rec-get / rec-val and the higher-order
+      list family (list-fold, list-map, list-filter), which is what
+      the verdict still spends its steps on.
+
       FIRST SET: first-order and total - int-add, int-sub, int-mul,
       int-cmp, tree-eq, list-length, list-append, list-reverse, and
       html-escape (added after F15: per-char escaping dominates the
@@ -120,7 +125,9 @@
           is never patched in place under the same semantics version.
       EM3 ACCELERATORS DO NOT PAY: the gate verdict and the naive
           renderer under fast mode are not at least 10x faster in wall
-          clock than v0.
+          clock than v0. OBSERVED 2026-11-25 for the verdict half
+          (FINDINGS.md F16): naive renderer 460x, staged page 47x,
+          verdict-std 2.5x, inline verdict.sabra 1.0x.
       EM4 HASH FRAGILITY: stdlib revisions keep moving the hashes
           accelerators are keyed on, so registrations churn with each
           manifest bump. Recorded with the churn count; the answer is
