@@ -1,0 +1,41 @@
+;; verdict-std.sabra - the gate-receipt verdict (scripts/gate-receipts/
+;; verdict.sabra) written against the shared stdlib instead of carrying
+;; its helpers inline (borg/tool-language.borg T2 + T3).  Every stdlib
+;; name is pinned to the 12-hex prefix of its stdlib/v1/manifest hash, so
+;; the source compiles only against a dictionary that still holds those
+;; exact trees.  scripts/verify-15-tool-language.sh posts it to
+;; /api/programs and requires verdict.sabra's program hash.
+;;
+;; Inputs: obs (the observation record), skip-allowed (gate slugs).
+;; Output: %10 pass, %110 fail, %1110 unverified.
+;; Field tags: #1 gate, #5 tree_clean, #6 diff_hash, #7 exit, #9 counts.
+
+(lambda (obs)
+  (lambda (skip-allowed)
+    (let
+      ((gate (rec-val@1132bbd758d1 #1 obs))
+       (tree-clean (rec-val@1132bbd758d1 #5 obs))
+       (diff-hash (rec-val@1132bbd758d1 #6 obs))
+       (exit-status (rec-val@1132bbd758d1 #7 obs))
+       (counts (rec-val@1132bbd758d1 #9 obs)))
+      (let
+        ((parsed (is-fork@d2de9f7505ed counts))
+         (run (first@3e53024bd13e counts))
+         (failed (first@3e53024bd13e (second@6b30f5d88a98 (second@6b30f5d88a98 counts))))
+         (skipped (first@3e53024bd13e (second@6b30f5d88a98 (second@6b30f5d88a98 (second@6b30f5d88a98 counts)))))
+         (skip-member
+           (list-fold@3a4225df7bd3
+             (lambda (slug) (lambda (acc) (bool-or@a07a9d92cbaa (tree-eq@fd549d45e1e2 slug gate) acc)))
+             %0
+             skip-allowed)))
+        ;; the chapter's v1 policy, top to bottom: first match wins.
+        ;; cond leans on the dictionary's if, which a cond form cannot pin:
+        ;; it is the one unpinned name, and the compile's lock reports it.
+        (cond
+          ((not@1f6cae19aff4 (tree-eq@fd549d45e1e2 exit-status %200)) %110)
+          ((not@1f6cae19aff4 parsed) %1110)
+          ((tree-eq@fd549d45e1e2 run %200) %1110)
+          ((not@1f6cae19aff4 (tree-eq@fd549d45e1e2 failed %200)) %110)
+          ((bool-and@2adfdbefa180 (not@1f6cae19aff4 (tree-eq@fd549d45e1e2 skipped %200)) (not@1f6cae19aff4 skip-member)) %1110)
+          ((bool-and@2adfdbefa180 (tree-eq@fd549d45e1e2 tree-clean %200) (is-leaf@aff47bf318ed diff-hash)) %1110)
+          (else %10))))))

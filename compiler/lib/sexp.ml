@@ -225,6 +225,42 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = [])
             pending := { var_id = vid; name = a; off } :: !pending;
             Var ({ id = vid; span = { off; len = String.length a }; name = a }))
   in
+  (* name@<hex>: a dictionary name pinned to the tree it must resolve to
+     (borg/tool-language.borg T2).  The pin is 8..64 lowercase hex, a
+     prefix of the resolved tree's sha256.  It changes no tree - a
+     holding pin reads exactly as the bare name - it only refuses to
+     compile against a dictionary whose entry has moved.  A lambda
+     parameter cannot be pinned (it has no tree at parse time). *)
+  let resolve_pinned scope off (a : string) : Ir.t =
+    let at = String.index a '@' in
+    let name = String.sub a 0 at in
+    let pin = String.sub a (at + 1) (String.length a - at - 1) in
+    let bad msg =
+      raise
+        (Ir.Error
+           ([], Printf.sprintf "pinned name %S at offset %d: %s" a off msg))
+    in
+    if not (is_var_atom name) then bad "the part before @ must be a name";
+    let hex c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') in
+    let plen = String.length pin in
+    if plen < 8 || plen > 64 || not (String.for_all hex pin) then
+      bad "the pin must be 8 to 64 lowercase hex digits";
+    if List.mem name scope then bad "a lambda parameter cannot be pinned";
+    let tree, from_dict =
+      match Hashtbl.find_opt dict name with
+      | Some t -> (t, true)
+      | None -> (
+          match builtin_tree name with
+          | Some t -> (t, false)
+          | None -> bad (Printf.sprintf "%s is not in the dictionary" name))
+    in
+    let found = Tuna.Hash.hex_of_tree tree in
+    if not (String.starts_with ~prefix:pin found) then
+      bad (Printf.sprintf "expected %s, found %s" pin found);
+    (if from_dict then
+       match on_resolve with Some f -> f name off | None -> ());
+    Tree_lit ({ id = fresh (); span = { off; len = String.length a }; tree })
+  in
   (* [a b c] and every keyed-literal pair share this construction: the
      cons chain (pair a (pair b (pair c 0))).  pair is the Leaf literal,
      the terminal 0 the leaf literal. *)
@@ -516,6 +552,8 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = [])
                 let sp : Ir.span = { off; len = String.length a } in
                 Tree_lit ({ id = fresh (); span = sp; tree = nat n Tuna.Tree.Leaf })
               else if is_var_atom a then resolve_atom scope off a
+              else if String.index_opt a '@' |> Option.fold ~none:false ~some:(fun i -> i > 0)
+              then resolve_pinned scope off a
               else
                 raise
                   (Ir.Error

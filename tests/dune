@@ -153,6 +153,24 @@
  (action
   (run %{exe:compiler_tests.exe})))
 
+; tool-language T2 (borg/tool-language.borg): verdict-std.sabra, the
+; verdict written against the seeded stdlib with pinned names, answers
+; as verdict.sabra on every gate-receipt policy case.  No PG, no HTTP.
+(executable
+ (name tool_language_tests)
+ (modules tool_language_tests)
+ (libraries tuna tuna_interp tuna_compiler alcotest))
+
+(rule
+ (alias runtest)
+ (deps
+  tool_language_tests.exe
+  ../stdlib/v1/core.defs
+  ../scripts/gate-receipts/verdict.sabra
+  ../scripts/dialect/verdict-std.sabra)
+ (action
+  (run %{exe:tool_language_tests.exe})))
+
 ; M5 store integration tests: require a live postgres (scripts/dev.sh
 ; start-pg); skipped silently when it is down.  The migrations tree is
 ; passed in so the test executable can bootstrap a fresh cluster.

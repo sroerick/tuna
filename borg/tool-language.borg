@@ -33,7 +33,8 @@
       routes; disagreement is a finding about the compiler or the
       claim, never patched by copying agora's tree. |))))
   (subsection t2-pinned-names
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 T2 LANDED. READER (compiler/lib/sexp.ml): name@<8..64 lowercase hex> resolves like the bare name, then requires the resolved tree's sha256 to start with the pin; a moved pin is a compile error naming both hashes; a pinned lambda parameter or unknown name is an error; a bare @x keeps its old unexpected-token error. HOST (server/lib/repl_cmd.ml, api.ml): the REPL's dictionary assembly is factored into Repl_cmd.effective_dictionary, and POST /api/programs now compiles against it - it had compiled with NO dictionary, which is the real reason verdict.sabra carried its helpers inline. Additive: a source that compiled before has no free names, so it never reads the dictionary (verify-15 shows verdict.sabra's hash unchanged, lock empty). Every compile answers a lock (name + sha256 per resolved name) on /api/programs and REPL eval/def rounds, and the program row's ir JSON stores it. FINDING (intensional calculus, not a defect): scripts/dialect/verdict-std.sabra - the verdict with its helpers deleted and stdlib names pinned - is a DIFFERENT TREE (4a6c06b8) from verdict.sabra (acc95b05): dictionary literals and let-bound helpers are different programs for one function. tests/tool_language_tests.ml proves it extensionally equal on all 11 gate-receipt policy cases, prim-free, and pins the hash difference so nobody swaps it in under a published receipt's program hash. EVIDENCE: dune build @all exit 0; dune runtest exit 0 (compiler suite 31 tool-language cases incl. 11 pin cases; tool_language_tests 12/12); verify-differential 100/100; scripts/verify-15-tool-language.sh exit 0 on an isolated dev instance (ACCEPT 15 OK); verify-12 (twin-order scratch copy) ACCEPT 12 OK; verify-8 8.1-8.5 green, 8.6 the known missing-baseline harness fault. verify-13-board.sh exits 1 at board_probe view-1 result twin mismatch - IDENTICALLY on main (2808a184, run side by side in a throwaway worktree), so it predates this chapter; recorded, not chased here (board chapter scope).|) *)
    (details
     (doc (|
       A source names a dictionary entry AND the tree it expects:
@@ -51,7 +52,11 @@
       silently compiling to a different program. Out of scope: fetching
       a tree by hash alone (a name-free import) - that needs the store
       at parse time and belongs to a linking chapter if T2 proves
-      insufficient. |))))
+      insufficient.
+
+      THE DOOR: POST /api/programs compiles against the caller's
+      effective dictionary (std under identity, as the REPL does), so
+      pins mean the same thing whichever door a source uses. |))))
   (subsection t3-reader-sugar
    (status implemented)
    (* agent note (|2026-11-25 T3 LANDED (compiler/lib/sexp.ml only; interpreter, IR, bracket and common untouched). cond builds exactly the IR of the hand-written if nest, so twin equality holds by construction; #n is a Tree_lit of stem^n(leaf), capped at #4096 (a tag is a key or a counter; the cap keeps a typo from minting a huge literal). EVIDENCE: tests/compiler_tests.ml tool-language suite, 20 cases green, including scripts/dialect/verdict-cond.sabra (verdict.sabra rewritten with cond and #1/#5/#6/#7/#9) compiling to verdict.sabra's exact hash and step count - the gate-receipts source itself is left to its chapter's owner to switch; corpus 98 -> 100 (dialect_tag-literal, dialect_cond), verify-differential 100/100; dune build @all and dune runtest exit 0. verify-12-dialect.sh exits 1 at 12.1(v0.2) on a STALE FIXTURE that predates this chapter: since dialect v0.3 (f899b547) keyed literals sort by key name, and the script's 4-field twin still lists key-who before key-when; a scratch copy with only that twin reordered passes all of 12.1-12.6 (ACCEPT 12 OK) on an isolated dev instance. Also seen: scripts/dialect/bridge_probe.py reads /tmp/tuna-dev/bootstrap.token and ignores TUNA_DEV_DIR, so on a machine with another dev instance it needs TUNA_SMOKE_TOKEN. Neither harness fix is made here (dialect chapter scope).|) *)
@@ -110,5 +115,6 @@
   (test "T1: comb-i, comb-s, comb-b, comb-c and comb-w compile from their textbook sources to agora's published hashes 75bae64a, 6ab5ad37, e4b1abc3, a9d528d5 and a24e4471; the 76 earlier manifest rows are unchanged")
   (test "T1: corpus rows exercise each combinator's law (I x = x, S f g x = f x (g x), B f g x = f (g x), C f x y = f y x, W f x = f x x) and agree across engines")
   (test "T2: a pinned name with a matching prefix compiles to the same tree as the unpinned source; a wrong prefix is a compile error naming both hashes; a pin on a lambda parameter is an error")
+  (test "T2: verdict-std.sabra (helpers deleted, stdlib names pinned) answers as verdict.sabra on every gate-receipt policy case, and its pins all hold in the lock /api/programs reports")
   (test "T3: each cond and #n form compiles to the identical tree and step count as its hand-written twin, and verdict.sabra rewritten with cond and #n compiles to the hash of the current verdict.sabra")
   (test "T4: a JSON request with a declared schema round-trips through the codec, and a run over it answers the decoded result plus the run id")))

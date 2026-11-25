@@ -345,6 +345,14 @@ let whoami _pool auth _req =
 
 (* -- programs -------------------------------------------------------- *)
 
+(* tool-language T2: the lock a compile reports - each dictionary name
+   the source resolved, with the sha256 of the tree it read as. *)
+let lock_json (lock : (string * string) list) : J.t =
+  `List
+    (List.map
+       (fun (n, h) -> `Assoc [ ("name", `String n); ("hash", `String h) ])
+       lock)
+
 let post_program pool auth req =
   Web.body req >>= fun body ->
   match J.from_string body with
@@ -375,6 +383,15 @@ let post_program pool auth req =
             Option.value (get_int_opt j "compile_size_cap")
               ~default:B.default_compile_size_cap
           in
+          (* tool-language T2: the caller's effective dictionary (the
+             REPL's, std under identity), so a source can name stdlib
+             defs - pinned or not - instead of copying them inline.  A
+             source that compiled before has no free names, so it never
+             consults the dictionary and keeps its hash. *)
+          Repl_cmd.effective_dictionary pool ~caller:auth.auth_id
+          >>= function
+          | Error msg -> j_err msg
+          | Ok dictionary ->
           let resolved = ref [] in
           match
             (try
@@ -382,6 +399,7 @@ let post_program pool auth req =
                  (B.compile_source src ~fuel:compile_fuel
                     ~size_cap:compile_size_cap
                     ~deadline:(Run.compile_deadline_now ())
+                    ~dictionary
                     ~on_resolve:(fun name off ->
                         resolved := (name, off) :: !resolved))
              with
@@ -405,12 +423,16 @@ let post_program pool auth req =
                 |> List.sort (fun (a, ca) (b, cb) ->
                        if ca <> cb then cb - ca else compare a b)
               in
-              let ir = J.to_string (ir_json_of_artifact ~resolved:counts art) in
+              let lock = Repl_cmd.lock_of ~dictionary counts in
+              let ir =
+                J.to_string (ir_json_of_artifact ~resolved:counts ~lock art)
+              in
               let hash = art.B.hash_hex in
               Store.upsert_program pool ~hash ~ternary:art.B.ternary ~ir:(Some ir)
                 ~created_by ~source:(Some src)
               >>= fun _row ->
-               (j_ok ~code:201 (`Assoc [ ("hash", `String hash) ])))
+               (j_ok ~code:201
+                  (`Assoc [ ("hash", `String hash); ("lock", lock_json lock) ])))
       | None, None ->
            (j_err "body must contain \"ternary\" or \"source\"")
 
@@ -1024,7 +1046,8 @@ let outcome_json (o : Repl_cmd.outcome) : J.t =
           (List.map
              (fun (n, t) ->
                `Assoc [ ("name", `String n); ("ternary", `String t) ])
-             o.Repl_cmd.o_dict_rows)) ]
+             o.Repl_cmd.o_dict_rows))
+    ; ("lock", lock_json o.Repl_cmd.o_lock) ]
 
 let post_repl pool auth req =
   body_json req >>= function

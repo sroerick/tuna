@@ -303,6 +303,44 @@ let tool_language_tests =
         | _ -> Alcotest.fail "expected unbound if"
         | exception Tuna_compiler.Ir.Error (_, msg) ->
             Alcotest.(check bool) ("names if: " ^ msg) true (contains "if" msg));
+    (* T2 pinned names: name@<hex prefix of the resolved tree's sha256> *)
+    (let if_hash = Tuna.Hash.hex_of_tree std_if in
+     let pin n = "if@" ^ String.sub if_hash 0 n in
+     twin "a holding 8-hex pin reads as the bare name"
+       ("(lambda (a) (" ^ pin 8 ^ " 1 2 a))") "(lambda (a) (if 1 2 a))");
+    (let if_hash = Tuna.Hash.hex_of_tree std_if in
+     twin "a full 64-hex pin reads as the bare name"
+       ("(lambda (a) (if@" ^ if_hash ^ " 1 2 a))") "(lambda (a) (if 1 2 a))");
+    (let if_hash = Tuna.Hash.hex_of_tree std_if in
+     let wrong = (if if_hash.[0] = '0' then "1" else "0") ^ String.sub if_hash 1 7 in
+     Alcotest.test_case "a moved pin is an error naming both hashes" `Quick (fun () ->
+         match comp ("(if@" ^ wrong ^ " 1 2 0)") with
+         | _ -> Alcotest.fail "expected a pin mismatch"
+         | exception Tuna_compiler.Ir.Error (_, msg) ->
+             Alcotest.(check bool) ("names expected: " ^ msg) true (contains wrong msg);
+             Alcotest.(check bool) ("names found: " ^ msg) true (contains if_hash msg)));
+    compile_error "a pin on a lambda parameter is an error"
+      "(lambda (x) x@12345678)" "" "lambda parameter cannot be pinned";
+    compile_error "a pin on an unknown name is an error" "nope@12345678" ""
+      "not in the dictionary";
+    compile_error "a 7-hex pin is too short" "pair@1234567" "" "8 to 64 lowercase hex";
+    compile_error "an uppercase pin is refused" "pair@ABCDEF12" "" "8 to 64 lowercase hex";
+    compile_error "a pin needs a name before @ (a bare @ stays a bad token)" "@12345678" ""
+      "unexpected token";
+    compile_error "a pin's name part must be a name" "x#y@12345678" "" "must be a name";
+    Alcotest.test_case "a builtin can be pinned (pair is the leaf)" `Quick (fun () ->
+        let leaf_hash = Tuna.Hash.hex_of_tree Tuna.Tree.Leaf in
+        let a = comp ("(pair@" ^ String.sub leaf_hash 0 8 ^ " 1 2)") and b = comp "(pair 1 2)" in
+        Alcotest.(check string) "identical" b.ternary a.ternary);
+    Alcotest.test_case "a pinned dictionary hit fires on_resolve with the bare name" `Quick
+      (fun () ->
+        let names = ref [] in
+        let pinned = "if@" ^ String.sub (Tuna.Hash.hex_of_tree std_if) 0 8 in
+        ignore
+          (Tuna_compiler.Bracket.compile_source ~dictionary:dict
+             ~on_resolve:(fun n _ -> names := n :: !names)
+             ("(lambda (a) (" ^ pinned ^ " 1 2 a))"));
+        Alcotest.(check (list string)) "resolved" [ "if" ] !names);
     Alcotest.test_case "verdict.sabra rewritten with cond and #n keeps its hash" `Quick
       (fun () ->
         let a = Tuna_compiler.Bracket.compile_source
