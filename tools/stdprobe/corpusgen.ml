@@ -122,6 +122,12 @@ let cases =
   ; ("stdlib_comb-b", ("(comb-b not not w)", "%10"))
   ; ("stdlib_comb-c", ("(comb-c pair w %10)", "%0"))
   ; ("stdlib_comb-w", ("(comb-w pair w)", "%10"))
+  (* tool-language T3: a #n tag keying a record read, and a three-way
+     cond over the argument's shape (a fork falls through to else). *)
+  ; ( "dialect_tag-literal",
+      ("(rec-val #2 [[#1 w] [#2 %110]])", "%10") )
+  ; ( "dialect_cond",
+      ("(cond ((is-leaf w) #1) ((is-stem w) #2) (else #3))", "%200") )
   ]
 
 let () =

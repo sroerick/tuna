@@ -235,6 +235,84 @@ let keyed_tests =
                go 0));
   ]
 
+(* tool-language T3 (borg/tool-language.borg): #n tag literals and
+   cond.  Every form is checked against its hand-written twin (dialect
+   12.1).  cond leans on the name if, so the dictionary carries the std
+   if tree, compiled here from its stdlib source. *)
+let tool_language_tests =
+  let std_if =
+    (Tuna_compiler.Bracket.compile_source
+       "(lambda (t) (lambda (f) (pair (pair f (pair %0 t)) %0)))").tree
+  in
+  let dict = [ ("if", std_if) ] in
+  let comp src = Tuna_compiler.Bracket.compile_source ~dictionary:dict src in
+  let twin name form hand =
+    Alcotest.test_case name `Quick (fun () ->
+        let a = comp form and b = comp hand in
+        Alcotest.(check string) (name ^ ": identical ternary") b.ternary a.ternary;
+        Alcotest.(check string) (name ^ ": identical hash") b.hash_hex a.hash_hex;
+        Alcotest.(check int) (name ^ ": identical steps") b.steps a.steps)
+  in
+  let cond_runs name src args expected =
+    Alcotest.test_case name `Quick (fun () ->
+        let art = comp src in
+        match
+          Tuna_interp.Eval.eval ~fuel:10000 ~size_cap:10000 ~program:art.tree
+            (List.map Tuna.Canon.parse_exn args)
+        with
+        | Tuna_interp.Eval.Normal (t, _) ->
+            Alcotest.(check string) "result" expected (Tuna.Canon.encode t)
+        | _ -> Alcotest.failf "%s: expected normal %s" name expected)
+  in
+  let cond_error name src msg = compile_error name src "" msg in
+  let read_all path =
+    let ic = open_in_bin path in
+    let s = really_input_string ic (in_channel_length ic) in
+    close_in ic; s
+  in
+  [
+    desugars "#0 is the leaf" "#0" "%0" (Some "0");
+    desugars "#1 is stem leaf" "#1" "%10" (Some "10");
+    desugars "#5 is stem^5 leaf" "#5" "%111110" (Some "111110");
+    desugars "#n inside a record pair" "[[#2 1] [#3 2]]" "[[%110 1] [%1110 2]]" None;
+    compile_error "#x is not a tag" "#x" "" "bad tag literal";
+    compile_error "# alone is not a tag" "#" "" "bad tag literal";
+    compile_error "#-1 is not a tag" "#-1" "" "bad tag literal";
+    compile_error "#4097 is past the cap" "#4097" "" "bad tag literal";
+    twin "cond with one clause is one if" "(lambda (a) (cond (a 1) (else 2)))"
+      "(lambda (a) (if 1 2 a))";
+    twin "cond nests first clause outermost"
+      "(lambda (a b) (cond (a 1) (b 2) (else 3)))"
+      "(lambda (a b) (if 1 (if 2 3 b) a))";
+    twin "cond with only else is the else body" "(cond (else 7))" "7";
+    twin "cond follows a let-bound if (shadowing wins)"
+      "(let ((if (lambda (t) (lambda (f) (lambda (c) t))))) (lambda (a) (cond (a 1) (else 2))))"
+      "(let ((if (lambda (t) (lambda (f) (lambda (c) t))))) (lambda (a) (if 1 2 a)))";
+    cond_runs "cond takes the first true clause" "(lambda (a b) (cond (a #1) (b #2) (else #3)))"
+      [ "10"; "10" ] "10";
+    cond_runs "cond falls through a false clause" "(lambda (a b) (cond (a #1) (b #2) (else #3)))"
+      [ "0"; "10" ] "110";
+    cond_runs "cond reaches else" "(lambda (a b) (cond (a #1) (b #2) (else #3)))"
+      [ "0"; "0" ] "1110";
+    cond_error "cond needs an else clause" "(lambda (a) (cond (a 1)))" "needs an (else BODY)";
+    cond_error "cond else must be last" "(lambda (a) (cond (else 1) (a 2)))"
+      "else clause must be last";
+    cond_error "cond clause needs test and body" "(lambda (a) (cond (a) (else 1)))" "";
+    Alcotest.test_case "cond without any if in scope is unbound if" `Quick (fun () ->
+        match Tuna_compiler.Bracket.compile_source "(lambda (a) (cond (a 1) (else 2)))" with
+        | _ -> Alcotest.fail "expected unbound if"
+        | exception Tuna_compiler.Ir.Error (_, msg) ->
+            Alcotest.(check bool) ("names if: " ^ msg) true (contains "if" msg));
+    Alcotest.test_case "verdict.sabra rewritten with cond and #n keeps its hash" `Quick
+      (fun () ->
+        let a = Tuna_compiler.Bracket.compile_source
+            (read_all "../scripts/dialect/verdict-cond.sabra")
+        and b = Tuna_compiler.Bracket.compile_source
+            (read_all "../scripts/gate-receipts/verdict.sabra") in
+        Alcotest.(check string) "identical hash" b.hash_hex a.hash_hex;
+        Alcotest.(check int) "identical steps" b.steps a.steps);
+  ]
+
 let int_codec_tests =
   List.map
     (fun (name, f) -> Alcotest.test_case name `Quick f)
@@ -494,6 +572,7 @@ let () =
         ("dialect", dialect_tests);
         ("dialect sugar", sugar_tests);
         ("keyed literals", keyed_tests);
+        ("tool-language", tool_language_tests);
         ("int codec", int_codec_tests);
         ("compile", compile_tests);
       ("extensional", extensional_tests);

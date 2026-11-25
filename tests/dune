@@ -142,10 +142,14 @@
 ; the suite carried 4 failures -- including every `match` row, i.e. the
 ; whole v0.3 reader form.  A test that never runs is not a gate.  The exe
 ; is self-contained (no corpus on disk, unlike flat_tests), so no
-; source_tree dep is needed.
+; source_tree dep is needed.  The tool-language suite reads the two
+; verdict sources (borg/tool-language.borg T3), hence the two files.
 (rule
  (alias runtest)
- (deps compiler_tests.exe)
+ (deps
+  compiler_tests.exe
+  ../scripts/gate-receipts/verdict.sabra
+  ../scripts/dialect/verdict-cond.sabra)
  (action
   (run %{exe:compiler_tests.exe})))
 

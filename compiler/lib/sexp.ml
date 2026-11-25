@@ -161,6 +161,10 @@ let builtin_tree = function
   | "pair" | "cons" -> Some Tuna.Tree.Leaf
   | _ -> None
 
+(* #n tag literals (borg/tool-language.borg T3) stop here: a tag is a
+   record key or a small counter, and stem^n costs n nodes. *)
+let max_tag = 4096
+
 type pending_unbound = { var_id : int; name : string; off : int }
 
 (* parse ?dictionary: the REPL's name->tree dictionary (M9).  A free
@@ -245,6 +249,7 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = [])
           | Some (Atom (_, "lambda")) -> parse_lambda start scope
           | Some (Atom (_, "let")) -> parse_let start scope
             | Some (Atom (_, "match")) -> parse_match start scope
+          | Some (Atom (_, "cond")) -> parse_cond start scope
           | Some (Atom (_, "runtime")) -> parse_runtime start scope
           | Some (Atom (_, "prim")) ->
             (* (prim "name" args...): boundary call. "prim" is reserved as
@@ -485,6 +490,31 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = [])
                 let tree = Option.get (Tuna.Int_enc.of_decimal_atom a) in
                 let sp : Ir.span = { off; len = String.length a } in
                 Tree_lit ({ id = fresh (); span = sp; tree })
+              else if a.[0] = '#' then
+                (* #n: the law-4 small nat stem^n(leaf), the record-tag
+                   literal (borg/tool-language.borg T3).  Digits only, no
+                   sign, at most max_tag; anything else after # is an
+                   error rather than an identifier. *)
+                let digits = String.sub a 1 (String.length a - 1) in
+                let n =
+                  if digits <> ""
+                     && String.length digits <= 4
+                     && String.for_all (fun c -> c >= '0' && c <= '9') digits
+                  then int_of_string digits
+                  else -1
+                in
+                if n < 0 || n > max_tag then
+                  raise
+                    (Ir.Error
+                       ([],
+                        Printf.sprintf
+                          "bad tag literal %S at offset %d (#0 .. #%d)" a off
+                          max_tag));
+                let rec nat k acc =
+                  if k = 0 then acc else nat (k - 1) (Tuna.Tree.Stem acc)
+                in
+                let sp : Ir.span = { off; len = String.length a } in
+                Tree_lit ({ id = fresh (); span = sp; tree = nat n Tuna.Tree.Leaf })
               else if is_var_atom a then resolve_atom scope off a
               else
                 raise
@@ -610,6 +640,58 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = [])
             ; arg = rhs }
     in
     desugar (List.rev !bindings)
+    (* (cond (C1 A1) (C2 A2) ... (else E)) desugars to the nested
+       stdlib conditional (if A1 (if A2 E C2) C1): condition first in
+       the source, if(THEN ELSE COND) underneath.  The IR is exactly
+       what the hand-written nest parses to, so the twin compiles to
+       the identical tree and steps by construction (dialect L2, 12.1).
+       if resolves like any atom (scope > dictionary > builtin), so a
+       source that binds its own if (verdict.sabra) gets that one - the
+       dialect letrec law: keywords may lean on stdlib names, shadowing
+       wins.  The else clause is required and last (totality, as match
+       requires every arm).  else is a keyword only in clause-head
+       position inside cond. *)
+    and parse_cond start scope =
+      advance () (* 'cond' *);
+      let err what =
+        raise (Ir.Error ([], Printf.sprintf "cond: %s at offset %d" what start))
+      in
+      let clauses = ref [] in
+      let default = ref None in
+      let rec clause_loop () =
+        match peek () with
+        | Some RP -> ()
+        | Some LP -> (
+            if !default <> None then err "the else clause must be last";
+            advance ();
+            let cstart = !pos - 1 in
+            match peek () with
+            | Some (Atom (_, "else")) ->
+                advance ();
+                let e = parse_term scope in
+                expect_rp cstart "cond else clause";
+                default := Some e;
+                clause_loop ()
+            | _ ->
+                let test = parse_term scope in
+                let body = parse_term scope in
+                expect_rp cstart "cond clause";
+                clauses := (test, body) :: !clauses;
+                clause_loop ())
+        | _ -> err "expected a (TEST BODY) or (else BODY) clause"
+      in
+      clause_loop ();
+      let e = match !default with Some e -> e | None -> err "needs an (else BODY) clause" in
+      expect_rp start "cond";
+      let sp : Ir.span = { off = start; len = !pos - start } in
+      let app fn arg = Ir.App { id = fresh (); span = sp; fn; arg } in
+      (* clauses were collected in reverse source order: fold from the
+         last clause outward so the first clause is the outermost if. *)
+      List.fold_left
+        (fun rest (test, body) ->
+          app (app (app (resolve_atom scope start "if") body) rest) test)
+        e !clauses
+
     (* (match S ((leaf) A) ((stem x) B) ((fork x y) C)) desugars to the
        triage application (((0 ((0 A) B')) C') S): a Fork-headed fork is
        the calculus's own triage (tree.ml apply case 3 dispatches on the

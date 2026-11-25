@@ -1,0 +1,9 @@
+name dialect_cond
+program 21212021212002102020102002120221110201100220201020200221020020200
+arg 200
+fuel 100000
+size_cap 100000
+
+expect_status normal
+expect_result 1110
+expect_steps 19

@@ -53,7 +53,8 @@
       at parse time and belongs to a linking chapter if T2 proves
       insufficient. |))))
   (subsection t3-reader-sugar
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 T3 LANDED (compiler/lib/sexp.ml only; interpreter, IR, bracket and common untouched). cond builds exactly the IR of the hand-written if nest, so twin equality holds by construction; #n is a Tree_lit of stem^n(leaf), capped at #4096 (a tag is a key or a counter; the cap keeps a typo from minting a huge literal). EVIDENCE: tests/compiler_tests.ml tool-language suite, 20 cases green, including scripts/dialect/verdict-cond.sabra (verdict.sabra rewritten with cond and #1/#5/#6/#7/#9) compiling to verdict.sabra's exact hash and step count - the gate-receipts source itself is left to its chapter's owner to switch; corpus 98 -> 100 (dialect_tag-literal, dialect_cond), verify-differential 100/100; dune build @all and dune runtest exit 0. verify-12-dialect.sh exits 1 at 12.1(v0.2) on a STALE FIXTURE that predates this chapter: since dialect v0.3 (f899b547) keyed literals sort by key name, and the script's 4-field twin still lists key-who before key-when; a scratch copy with only that twin reordered passes all of 12.1-12.6 (ACCEPT 12 OK) on an isolated dev instance. Also seen: scripts/dialect/bridge_probe.py reads /tmp/tuna-dev/bootstrap.token and ignores TUNA_DEV_DIR, so on a machine with another dev instance it needs TUNA_SMOKE_TOKEN. Neither harness fix is made here (dialect chapter scope).|) *)
    (details
     (doc (|
       Two forms, both total reader folds under dialect L2 and 12.1
@@ -66,7 +67,7 @@
          under the dialect letrec law: keywords may lean on stdlib
          names, resolution order stands, shadowing wins.
       TAG LITERALS. #5 reads as the law-4 small nat stem^5(leaf), the
-         tree %111110. Digits only, no sign; #0 is the leaf. Tags are
+         tree %111110. Digits only, no sign, #0 through #4096; #0 is the leaf. Tags are
          what records key on (dialect records: small-nat tags won the
          key-domain measurement), so a tag deserves a literal the way
          a law-5 int has one.
