@@ -453,13 +453,17 @@
  (action
   (run %{exe:local_tests.exe})))
 
-; the CLI binary itself (local L1, L3): std resolution, lock lines, pins,
-; eval-source with source and %ternary args; tuna run seals a record
-; deriv-check verifies, and a tampered one exits 1.
+; the CLI binary itself (local L1, L3, L4): std resolution, lock lines,
+; pins, eval-source with source and %ternary args; tuna run seals a record
+; deriv-check verifies, and a tampered one exits 1; --in/--out decode
+; through the T4 codec, so the gate verdict through the CLI answers the
+; same JSON as POST /api/tool/run.
 (rule
  (alias runtest)
- (deps cli_local.sh %{exe:../cli/bin/main.exe}
+ (deps cli_local.sh ../scripts/gate-receipts/verdict.sabra
+  %{exe:../cli/bin/main.exe}
   %{exe:../tools/deriv-check/deriv_check.exe})
  (action
   (run bash %{dep:cli_local.sh} %{exe:../cli/bin/main.exe}
-   %{exe:../tools/deriv-check/deriv_check.exe})))
+   %{exe:../tools/deriv-check/deriv_check.exe}
+   %{workspace_root}/scripts/gate-receipts/verdict.sabra)))

@@ -21,6 +21,13 @@
                                  stdin line, rounds as on /api/repl; eval
                                  and def rounds answer prims under grants
 
+   TYPED I/O (borg/local.borg L4): --in TYPE (repeatable, in order) and
+   --out TYPE take the SAME type grammar as POST /api/tool/run, written
+   as one JSON value on the command line and read through the same codec
+   library (Tuna_codec.Json_codec).  With --in the positional arguments
+   are JSON values, not source terms.  Without a type the CLI prints
+   ternary, since trees are untyped.
+
    Source compiles resolve names against the frozen stdlib
    (Tuna_stdlib.Std_dict, borg/local.borg L1): lambda param > std >
    reader builtins, as on a server for an identity with no defs. *)
@@ -45,6 +52,44 @@ let print_result = function
       Printf.printf "size_exhausted - %d\n" steps
   | Tuna_interp.Eval.Deadline_exceeded steps ->
       Printf.printf "deadline_exceeded - %d\n" steps
+
+(* typed I/O (borg/local.borg L4): --in TYPE / --out TYPE take the
+   tool-language T4 type grammar, written as one JSON value on the
+   command line, through the SAME codec library POST /api/tool/run
+   links (Tuna_codec.Json_codec) - so the CLI adds no second grammar.
+   Without a type the CLI keeps printing ternary. *)
+module C = Tuna_codec.Json_codec
+module J = Yojson.Basic
+
+let codec_type flag s =
+  match C.ty_of_json ~path:flag (J.from_string s) with
+  | Ok t -> t
+  | Error m -> prerr_endline (flag ^ ": " ^ m); exit 2
+
+let codec_value flag ty s =
+  (* the flag is the JSON path root, so an error names it as the server
+     names inputs[0].value: --in: $.exit *)
+  match C.encode ~path:(flag ^ ": $") ty (J.from_string s) with
+  | Ok t -> t
+  | Error m -> prerr_endline m; exit 2
+
+(* the answer through --out, printed as the JSON value /api/tool/run
+   answers in its "result" field; a tree that does not have the declared
+   shape is a result_error, as on the server (the run still happened) *)
+let print_typed_tree out_ty ternary =
+  let ty = codec_type "--out" out_ty in
+  match Tuna.Canon.of_string ternary with
+  | Error (_, m) -> Printf.printf "result_error %s\n" m
+  | Ok t -> (
+      match C.decode ~path:"result" ty t with
+      | Ok v -> Printf.printf "result %s\n" (J.to_string v)
+      | Error m -> Printf.printf "result_error %s\n" m)
+
+let print_result_typed out_ty = function
+  | Tuna_interp.Eval.Normal (t, _) as r ->
+      print_typed_tree out_ty (Tuna.Canon.encode t);
+      print_result r
+  | r -> print_result r
 
 let read_corpus path =
   let program = ref "" and args = ref [] and fuel = ref 1000 and cap = ref 1000 in
@@ -112,19 +157,37 @@ let compile_cmd path =
     (Tuna.Tree.size art.tree) art.steps;
   List.iter (fun (n, h) -> Printf.printf "lock %s %s\n" n h) lock
 
-(* run flags shared by eval-compiled and eval-source: argv from [first]
-   on is positional args plus optional --fuel/--cap/--semantics (v0
-   canonical | v1 distinct-work | fast1-fast3 accelerated). *)
+(* the run's inputs: either source TERMS (no --in) or JSON values typed
+   by the --in types, one value per type, in order *)
+let run_inputs positional ins =
+  match ins with
+  | [] ->
+      let compiled = List.map compile_std positional in
+      (List.map (fun (a, _) -> a.Tuna_compiler.Bracket.tree) compiled,
+       List.concat_map snd compiled)
+  | types ->
+      if List.length types <> List.length positional then (
+        prerr_endline "input: one JSON value per --in TYPE"; exit 2);
+      let types = List.map (codec_type "--in") types in
+      (List.map2 (codec_value "--in") types positional, [])
+
+(* run flags shared by eval-compiled, eval-source and run: argv from
+   [first] on is positional args plus optional --fuel/--cap/--semantics
+   (v0 canonical | v1 distinct-work | fast1-fast3 accelerated) and the
+   typed-I/O flags --in TYPE / --out TYPE (L4). *)
 let parse_run_flags argv first =
   let fuel = ref 10000 and cap = ref 10000 and rest = ref [] in
   let mode = ref Tuna_interp.Eval.Canonical in
   let accel = ref None in
+  let ins = ref [] and out = ref None in
   let rec go i =
     if i >= Array.length argv then ()
     else
       match argv.(i) with
       | "--fuel" -> fuel := int_of_string argv.(i + 1); go (i + 2)
       | "--cap" -> cap := int_of_string argv.(i + 1); go (i + 2)
+      | "--in" -> ins := argv.(i + 1) :: !ins; go (i + 2)
+      | "--out" -> out := Some argv.(i + 1); go (i + 2)
       | "--semantics" ->
           mode :=
             (match argv.(i + 1) with
@@ -136,11 +199,11 @@ let parse_run_flags argv first =
       | arg -> rest := arg :: !rest; go (i + 1)
   in
   go first;
-  (!fuel, !cap, !mode, !accel, List.rev !rest)
+  (!fuel, !cap, !mode, !accel, List.rev !ins, !out, List.rev !rest)
 
 let eval_compiled_cmd argv off =
   (* argv.(off) = program ternary, then args and run flags *)
-  let fuel, cap, mode, accel, rest = parse_run_flags argv (off + 1) in
+  let fuel, cap, mode, accel, ins, out, rest = parse_run_flags argv (off + 1) in
   let program =
     match Tuna.Canon.of_string argv.(off) with
     | Ok p -> p
@@ -148,23 +211,35 @@ let eval_compiled_cmd argv off =
         prerr_endline (Printf.sprintf "program parse error at %d: %s" off' msg);
         exit 2
   in
-  let args = List.map Tuna.Canon.parse rest in
-  print_result
-    (Tuna_interp.Eval.eval ~fuel ~size_cap:cap ~mode ?accel ~program args)
+  let args =
+    match ins with
+    | [] -> List.map Tuna.Canon.parse rest
+    | _ -> fst (run_inputs rest ins)
+  in
+  let result =
+    Tuna_interp.Eval.eval ~fuel ~size_cap:cap ~mode ?accel ~program args
+  in
+  match out with
+  | None -> print_result result
+  | Some t -> print_result_typed t result
 
 let eval_source_cmd argv off =
-  (* argv.(off) = source file; each positional arg is a source TERM
-     compiled against the same dictionary (a raw tree is %<ternary>) *)
-  let fuel, cap, mode, accel, rest = parse_run_flags argv (off + 1) in
+  (* argv.(off) = source file; each positional arg is either a source
+     TERM compiled against the same dictionary (a raw tree is
+     %<ternary>) or, with --in, a JSON value typed by those types *)
+  let fuel, cap, mode, accel, ins, out, rest = parse_run_flags argv (off + 1) in
   let art, lock = compile_std (read_file argv.(off)) in
-  let compiled = List.map compile_std rest in
-  let args = List.map (fun (a, _) -> a.Tuna_compiler.Bracket.tree) compiled in
+  let args, arg_lock = run_inputs rest ins in
   (* one lock for the whole run: program and arg terms *)
-  let lock = List.sort_uniq compare (lock @ List.concat_map snd compiled) in
+  let lock = List.sort_uniq compare (lock @ arg_lock) in
   Printf.printf "hash %s\n" art.hash_hex;
   List.iter (fun (n, h) -> Printf.printf "lock %s %s\n" n h) lock;
-  print_result
-    (Tuna_interp.Eval.eval ~fuel ~size_cap:cap ~mode ?accel ~program:art.tree args)
+  let result =
+    Tuna_interp.Eval.eval ~fuel ~size_cap:cap ~mode ?accel ~program:art.tree args
+  in
+  match out with
+  | None -> print_result result
+  | Some t -> print_result_typed t result
 
 (* tuna run: compile against std, run with the local prim host, print
    the outcome and the journal, seal the record into the local store and
@@ -182,13 +257,13 @@ let run_cmd argv off =
       | "--dir" -> dir := Some (value i); go (i + 2)
       | "--grant" -> grants := value i :: !grants; go (i + 2)
       | "--allow-host" -> hosts := value i :: !hosts; go (i + 2)
-      | ("--fuel" | "--cap" | "--semantics") as f ->
+      | ("--fuel" | "--cap" | "--semantics" | "--in" | "--out") as f ->
           ignore (value i); rest := argv.(i + 1) :: f :: !rest; go (i + 2)
       | a -> rest := a :: !rest; go (i + 1)
   in
   go (off + 1);
   let flags = Array.of_list ("tuna" :: List.rev !rest) in
-  let fuel, cap, _mode, _accel, positional = parse_run_flags flags 1 in
+  let fuel, cap, _mode, _accel, ins, out, positional = parse_run_flags flags 1 in
   let semantics =
     let rec find = function
       | "--semantics" :: s :: _ -> s
@@ -206,9 +281,8 @@ let run_cmd argv off =
     with Failure msg | Sys_error msg -> prerr_endline ("run: " ^ msg); exit 2
   in
   let art, lock = compile_std (read_file argv.(off)) in
-  let compiled = List.map compile_std positional in
-  let inputs = List.map (fun (a, _) -> a.Tuna_compiler.Bracket.tree) compiled in
-  let lock = List.sort_uniq compare (lock @ List.concat_map snd compiled) in
+  let inputs, arg_lock = run_inputs positional ins in
+  let lock = List.sort_uniq compare (lock @ arg_lock) in
   let cfg =
     { Tuna_local.Local_run.grants = List.rev !grants; allow_hosts = List.rev !hosts;
       semantics; fuel; size_cap = cap }
@@ -230,6 +304,9 @@ let run_cmd argv off =
          | None, Some e -> "error " ^ e
          | None, None -> "-"))
     d.D.d_journal;
+  (match (out, d.D.d_result_ternary) with
+   | Some t, Some ternary -> print_typed_tree t ternary
+   | _ -> ());
   Printf.printf "%s %s %d\n" (D.status_to_string d.D.d_status)
     (Option.value d.D.d_result_ternary ~default:"-") d.D.d_step_count;
   Printf.printf "record %s\n"
@@ -264,7 +341,7 @@ let repl_cmd argv off =
   in
   go off;
   let flags = Array.of_list ("tuna" :: List.rev !rest) in
-  let fuel, cap, _mode, _accel, positional = parse_run_flags flags 1 in
+  let fuel, cap, _mode, _accel, _ins, _out, positional = parse_run_flags flags 1 in
   let semantics =
     let rec find = function
       | "--semantics" :: s :: _ -> s
@@ -328,5 +405,5 @@ let () =
   | "run" when Array.length Sys.argv > 2 -> run_cmd Sys.argv 2
   | _ ->
       prerr_endline
-        "usage: tuna eval <corpus-file> | tuna compile <source-file> | tuna eval-compiled <ternary> [args...] | tuna eval-source <source-file> [arg-terms...] | tuna run <source-file> [--grant P]... | tuna repl [--dir D] [--grant P]... [--allow-host H]...";
+        "usage: tuna eval <corpus-file> | tuna compile <source-file> | tuna eval-compiled <ternary> [args...] | tuna eval-source <source-file> [arg-terms...] [--in TYPE JSON]... [--out TYPE] | tuna run <source-file> [--grant P]... | tuna repl [--dir D] [--grant P]... [--allow-host H]...";
       exit 2
