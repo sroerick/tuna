@@ -13,11 +13,13 @@ if [ ! -d "$SRC/.git" ]; then
 fi
 git -C "$SRC" fetch -q origin "$COMMIT" 2>/dev/null || true
 git -C "$SRC" checkout -q "$COMMIT"
-(cd "$SRC" && rocq makefile -f _CoqProject -o Makefile >/dev/null && make -f Makefile -j4 lists.vo)
+(cd "$SRC" && rocq makefile -f _CoqProject -o Makefile >/dev/null && make -f Makefile -j4 lists.vo department.vo)
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/jay-export.XXXX")
 trap 'rm -rf "$WORK"' EXIT
 cp "$HERE"/export/*.v "$WORK"/
-(cd "$WORK" && for v in ExportBool ExportLists ExportConcrete TyInt ExportInt TyBin ExportBin; do
+(cd "$WORK" && for v in ExportBool ExportLists ExportConcrete TyInt ExportInt TyBin ExportBin ExportHelpers ExportNatives; do
    rocq compile -Q "$SRC" BigStep -Q . TunaTy "$v.v" >/dev/null 2>&1 || { echo "rocq failed on $v.v" >&2; exit 1; }
  done)
-python3 -I "$HERE/convert.py" "$HERE" bool="$WORK/bool_vectors.out" lists="$WORK/list_vectors.out" concrete="$WORK/concrete_vectors.out" int="$WORK/int_vectors.out" bin="$WORK/bin_vectors.out"
+python3 -I "$HERE/convert.py" "$HERE" bool="$WORK/bool_vectors.out" lists="$WORK/list_vectors.out" concrete="$WORK/concrete_vectors.out" int="$WORK/int_vectors.out" bin="$WORK/bin_vectors.out" helpers="$WORK/helper_vectors.out"
+# the trees fast3 registers (borg/eval-modes.borg E3): "<name> <ternary>"
+python3 -I -c 'import re,sys; open(sys.argv[2],"w").write("".join(l+"\n" for l in re.findall(r"\"([^\"]*)\"", open(sys.argv[1]).read())))' "$WORK/natives.out" "$HERE/natives"

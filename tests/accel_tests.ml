@@ -338,7 +338,7 @@ let fast2_cases =
             ("(lambda (r) (rec-has #3 r))", [ compile "[[#1 %10] [#2 %110]]" ]);
             ("(lambda (xs) (list-filter is-stem xs))", [ compile "[%0 %10 %0 %10]" ]);
             ("(lambda (xs) (list-map not xs))", [ compile "[%0 %10]" ]) ]);
-    Alcotest.test_case "every corpus entry answers identically under fast2" `Quick (fun () ->
+    Alcotest.test_case "every corpus entry answers identically under fast2 and fast3" `Quick (fun () ->
         let dir = "../scripts/diff-corpus" in
         let n = ref 0 in
         Array.iter
@@ -359,10 +359,13 @@ let fast2_cases =
                   let fuel = int_of_string fu and size_cap = int_of_string sc in
                   let r0, _, _ = run ~fuel ~size_cap ~fast:false (tree p) [ tree a ] in
                   let r2, _, _ = run ~fuel ~size_cap ~reg:A.fast2 ~fast:true (tree p) [ tree a ] in
+                  let fast3 = Option.get (A.registry_of_semantics "fast3") in
+                  let r3, _, _ = run ~fuel ~size_cap ~reg:fast3 ~fast:true (tree p) [ tree a ] in
                   match r0 with
                   | Tuna_interp.Prim_eval.Normal _ ->
                       incr n;
-                      Alcotest.(check string) file (show r0) (show r2)
+                      Alcotest.(check string) (file ^ " fast2") (show r0) (show r2);
+                      Alcotest.(check string) (file ^ " fast3") (show r0) (show r3)
                   | _ -> ())
               | _ -> ())
           (Sys.readdir dir);

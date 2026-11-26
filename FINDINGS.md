@@ -847,3 +847,48 @@ written; typing at ~1us/step costs ~0.5s for a 21-bit input, too slow
 for a request path until his checker is accelerated.
 
 ---
+
+## F19 — JAY'S CHECKER UNDER fast3: ~150x FEWER STEPS, NOT ON THE TIGHT LAW (eval-modes E3)
+
+Date: 2026-11-25. Chapter: borg/eval-modes.borg E3; typing.borg TY2/TY3.
+
+EXACT natives first (E2's law: answer exactly what the tree answers,
+or decline): his helpers `equal`, `is_concrete`, `get_tagged`,
+`get_label`, `row_prog`, and `infer` on concrete trees (his
+`concrete_is_self_typed`) all agree with his spec lemmas (222/222
+vectors) but cut the 21-bit Bin from 482k typing steps to 326k (~1.5x).
+WHY: his checker is bracket-compiled, so it works at partial
+application (`equal @ p` builds `equal1 p`; `tp @ F` dispatches on F)
+and evaluates results it discards - his own `rows_f_hit` needs the
+fallback `fam @ n` to terminate even on a hit, so every ontology lookup
+(~3.2k steps) walks every row. A native entered at full arity sees
+none of that work.
+
+OWNER DECISION (option B): fast3 natives follow his clause-by-clause
+characterisations (typing.v `TA` / `INF`, rows.v `row_head`) and may
+skip discarded work - same answer whenever the reference terminates,
+decline on a prim-carrying ontology; v0, fast1, fast2 unchanged.
+Mechanisms: families (template-keyed), continuation plans, wrapper
+partials, and one EXACT closed form (`equal @ p` = `equal1 p`, his
+`equal_eval`), which removed the last big cost (the Bin guard's three
+`equal` partials: 11.8k -> 86 steps).
+
+| vector | v0 steps / wall | fast3 steps / wall |
+|---|---|---|
+| 21-bit Bin | 482,048 / 0.38s | 3,229 (0.67%) / 0.077s (20%) |
+| 21-bit Int | 506,616 / 0.38s | 5,714 (1.1%) / 0.084s (22%) |
+| infer typing itself | 5,167,788 / 3.5s | 31,414 (0.61%) / 0.033s (0.9%) |
+| typing list append | 3,162,749 / 3.1s | 158,019 (5.0%) / 0.47s (15%) |
+
+EM5 (mismatch) NOT TRIGGERED: all 278 vendored vectors give his stated
+result under fast3; generated cases on four of his ontologies (440
+infer / tp cases, v0 finished on all) agree; 200 random `equal1 p`
+equal v0's `equal @ p`; a prim-carrying ontology is declined; the
+differential corpus answers identically under fast3. EM6 (does not
+pay) OBSERVED FOR WALL CLOCK ONLY: steps are under 1% for Bin/Int, but
+wall stays 15-22% on mid-size inputs because fast2's once-per-run
+recognition walk over the 125k-node checker program (~0.06s) now
+dominates; the natives' own run is ~0.012s. Fix candidates: cache the
+prepared program per hash across runs (a typed tool reuses one checker
+program), or a cheaper walk. Not done here.
+

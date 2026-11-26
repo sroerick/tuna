@@ -231,10 +231,11 @@ let compile_deadline_now () =
 (* Run semantics (borg/sharing.borg): the row names the accounting
    law.  'v0' = canonical (a step per triage firing); 'v1' = the
    distinct-work law (memoized firings, prim-containing firings never
-   memoized, in-flight re-entry = Loop); 'fast1' / 'fast2' = the v0
-   counting law plus a pinned accelerator registry (borg/eval-modes.borg
-   E2): an accelerated call is one step, so its counts are fast-mode
-   facts.
+   memoized, in-flight re-entry = Loop); 'fast1' / 'fast2' / 'fast3' =
+   the v0 counting law plus a pinned accelerator registry
+   (borg/eval-modes.borg E2; fast3 adds Jay's checker under E3's
+   narrowed law): an accelerated call is one step, so its counts are
+   fast-mode facts.
    Unknown values are a request error at the boundary; execute itself
    trusts the validated row. *)
 let semantics_ok = function

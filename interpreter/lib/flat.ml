@@ -73,6 +73,9 @@ type frame =
   | KFoldBack of t list
       (* fast2 list-fold: partials still to apply, innermost first;
          the delivered value is the accumulator *)
+  | KThen of (t -> Accel.answer)
+      (* fast3 continuation plan (borg/eval-modes.borg E3): the
+         delivered value is the scheduled application's; continue *)
 
 type mode = Prim_eval.mode = Canonical | Sharing
 
@@ -385,7 +388,33 @@ let rec deliver m r =
            | [] -> deliver m r
            | g :: gs ->
                m.k <- KFoldBack gs :: rest;
-               set_eval m g r))
+               set_eval m g r)
+       | KThen k ->
+           (* each continuation is charged one step *)
+           if m.fuel < 1 then begin
+             m.f <- None;
+             m.done_ <- Some (Prim_eval.Fuel_exhausted m.steps)
+           end
+           else begin
+             m.fuel <- m.fuel - 1;
+             m.steps <- m.steps + 1;
+             run_answer m (k r)
+           end)
+
+(* a native's answer, or a continuation's *)
+and run_answer m = function
+  | Accel.Value v -> deliver m v
+  | Accel.Plan p -> start_plan m p
+  | Accel.Seq (a, k) ->
+      m.k <- KThen k :: m.k;
+      run_answer m a
+  | Accel.Then (f, args, k) -> (
+      match args with
+      | [] -> invalid_arg "Flat: a continuation plan applies to at least one argument"
+      | a :: more ->
+          m.k <- KThen k :: m.k;
+          List.iter (fun x -> m.k <- KGo x :: m.k) (List.rev more);
+          set_eval m f a)
 
 (* a plan's results are in: build the value, or fold the partials back *)
 and finish_plan m xs results = function
@@ -471,10 +500,19 @@ let accel_step m f =
       | None -> false
       | Some (e, args) ->
           let args = args @ [ m.x ] in
-          if List.length args < e.Accel.arity then begin
-            m.k <- KAccelPartial (e, args) :: m.k;
-            false
-          end
+          if List.length args < e.Accel.arity then
+            match match e.Accel.partial with Some pf -> pf args | None -> None with
+            | Some v when m.fuel >= e.Accel.cost ->
+                (* fast3: a proved closed form of the partial value *)
+                m.fuel <- m.fuel - e.Accel.cost;
+                m.steps <- m.steps + e.Accel.cost;
+                st.Accel.calls <- st.Accel.calls + 1;
+                Accel.remember st v (e, args);
+                deliver_checked m v;
+                true
+            | _ ->
+                m.k <- KAccelPartial (e, args) :: m.k;
+                false
           else (
             match e.Accel.impl args with
             | None ->
@@ -493,6 +531,7 @@ let accel_step m f =
                   match r with
                   | Accel.Value v -> deliver_checked m v
                   | Accel.Plan p -> start_plan m p
+                  | Accel.Then _ | Accel.Seq _ -> run_answer m r
                 end;
                 true))
 
@@ -517,6 +556,10 @@ let step m =
             Some m
         | None -> (
             match f with
+            | (Leaf | Stem _)
+              when (match m.accel with Some st -> st.Accel.wrappers | None -> false)
+                   && accel_step m f ->
+                Some m
             | Leaf ->
                 (* wrapper: application, not a step *)
                 deliver_checked m (Stem m.x);

@@ -4,7 +4,7 @@
  (convention ocaml-dune)
  (* agent note (|2026-11-25 chapter authored (roerick + Claude) after the tool-language chapter. OWNER DIRECTION, this date: no impure evaluation mode; distinguish in the core, not by bracket syntax, a function that is precompiled (templates) from one that runs live; keep everything runnable OFFLINE (no first-class dependency on a server to record or check a run). EVIDENCE that shapes the moves, measured in-tree this date: (1) Bracket.compile reduces the whole program to normal form (bracket.ml artifact.steps counts compile-time firings), so (render tmpl) written in a source is specialised at compile time today. Experiment (throwaway exe, stdlib/v1 dictionary, template [13 0 11 7 0 14 9 0 6 12], data 42): NAIVE render (lambda (t) (lambda (d) (list-map (lambda (s) (if d (int-mul s s) (tree-eq s int-zero))) t))) specialises in 2 steps and still costs 13,465,951 steps per request; STAGED render (lambda (t) ((lambda (pre) (lambda (d) (list-map (lambda (x) (if d x (tree-eq x int-zero))) pre))) (list-map (lambda (s) (int-mul s s)) t))) pays 13,461,209 steps once at compile and 7,029 per request; same result hash. Staging is a binding-time property of how the program is WRITTEN, not something the evaluator can add. (2) The same experiment is the accelerator case: ~2M v0 steps per in-calculus int-mul of operands under 15 (the F6 slope math-prims.borg already recorded). PRECEDENT: Urbit's Nock runs its stdlib through 'jets' (native code matched to known formulas); its known failure class is jet mismatch, answered by a run-both-and-compare mode. This chapter uses the neutral word accelerator.|) *)
  (section eval-modes
-  (doc "Two moves; neither changes the five rules, the tree law, the prim set or the journal.")
+  (doc "Three moves (E3 added 2026-11-25); none changes the five rules, the tree law, the prim set or the journal.")
   (status partial)
   (subsection e1-staging
    (status implemented)
@@ -97,6 +97,57 @@
       higher-order ones (list-fold, list-map) need a native loop that
       calls back into the evaluator for the function argument; they
       come second, with their own differential vectors. |))))
+  (subsection e3-checker-natives
+   (status implemented)
+   (* agent note (|2026-11-25 E3 LANDED as run semantics "fast3"; EM5 not triggered; EM6 OBSERVED for wall clock only (FINDINGS F19). CODE: interpreter/lib/accel.ml (families, Jay natives, fast3 registry; trees from reference/jay-typing-rules/natives via interpreter/lib/jay_trees.ml), interpreter/lib/flat.ml (KThen frame, wrapper partials and partial closed forms, both fast3-only). One EXACT closed form beyond the law text: equal @ p answers equal1 p (his equal_eval). EVIDENCE: tests/jay_tests.ml - all 278 vendored vectors (incl. 222 helper spec vectors) give his stated result under v0 and under fast3; tests/fast3_tests.ml - 200 equal1 cases, 440 generated infer/tp cases on four of his ontologies (v0 finished on all, fast3 agrees), prim-carrying ontology declined; tests/accel_tests.ml corpus case answers identically under fast3. Steps: 21-bit Bin 3,229 vs 482,048 (0.67%); wall 20% (the per-run recognition walk over the 125k-node program dominates).|) *)
+   (* agent note (|2026-11-25 OWNER DECISION (roerick, this date), after measurement: exact helper natives for Jay's checker pay ~1.5x only (equal, is_concrete, get_tagged, get_label, row_prog, and infer on concrete trees; 222/222 agree with his spec lemmas), because his compiled checker does its work at partial application and evaluates some results it discards (his own rows_f_hit needs the fallback to terminate even on a hit). Owner chose the narrowed law below ("B seems fine") over keeping E2's exact law and the ~10k steps per tag.|) *)
+   (details
+    (doc (|
+      Natives for the typing chapter's checker (typing.borg: Barry
+      Jay's infer and tp, vendored under reference/jay-typing-rules),
+      under a NEW run semantics "fast3" = fast2's rows unchanged plus
+      the rows below. v0 stays the semantics; fast1 and fast2 are
+      unchanged and stay pinned.
+
+      WHAT IS NEW, each a stated departure from E2:
+      (a) KEYED BY TEMPLATE. infer O and tp O are not fixed trees: the
+          ontology O is substituted into them literally (a section
+          variable in his Rocq). A FAMILY is registered as its program
+          at two parameter values; the sites where they differ are the
+          parameter's, and a node fits when it is the template with
+          one tree at every site. Literal substitution makes the fit
+          exact - no confirmation reduction is needed - and the hash
+          rule of E2 is kept in spirit: a different tree computing the
+          same function is still not accelerated. Families: infer[O],
+          tp[O], and his ontology row row[m, D, rest].
+      (b) CONTINUATION PLANS. A native may answer "apply f to these
+          arguments, then continue with the result", repeatedly; the
+          core schedules every application on its own stack, so
+          recursion re-enters the native, fuel counts every scheduled
+          step, prims would journal, and divergence exhausts fuel as
+          in the tree. Each continuation is charged one step.
+      (c) WRAPPER PARTIALS. A partial application whose value is a
+          stem (a constructor, not a firing, when applied) is followed
+          through that wrapper application; fast1/fast2 do not, so
+          their counts are unchanged.
+      (d) THE NARROWED LAW (the owner's decision). A checker native
+          follows his clause-by-clause characterisations (typing.v:
+          TA for tp, INF for infer, row_head for a row) and runs the
+          ontology's own guards and eliminators as trees. It answers
+          EXACTLY what the reference answers WHENEVER THE REFERENCE
+          TERMINATES. It may skip work the reference performs and then
+          discards (partial-application work, a lookup's remaining
+          rows after a hit), so it may answer where the reference
+          diverges or runs out of fuel inside such discarded work;
+          never a different answer. Re-verification under v0 exposes
+          that case as a fuel-out. It DECLINES when the ontology
+          contains a prim call, so no effect is ever skipped.
+
+      CHECKING: every vendored Jay vector agrees under fast3; his
+      helper spec vectors agree; generated values and types (well-,
+      ill-typed and junk) agree between fast3 and v0 on ontologies
+      O_list and O_bin; an ontology carrying a prim is declined; the
+      corpus answers identically under fast3. |))))
   (subsection deferred
    (status planned)
    (details
@@ -133,10 +184,19 @@
       EM4 HASH FRAGILITY: stdlib revisions keep moving the hashes
           accelerators are keyed on, so registrations churn with each
           manifest bump. Recorded with the churn count; the answer is
-          a stdlib stability rule, not name-keyed accelerators. |)))))
+          a stdlib stability rule, not name-keyed accelerators.
+      EM5 CHECKER NATIVE MISMATCH: any input where fast3 and v0 both
+          finish with different results, or fast3 accepts a run whose
+          ontology carries a prim. Treated as EM2.
+      EM6 CHECKER NATIVES DO NOT PAY: typing the 21-bit Bin value
+          (typing.borg TY2) under fast3 takes more than a tenth of its
+          v0 steps or wall clock. |)))))
  (verify
   (test "E1: tmpl-compile run over a template is a replay-verified run whose result hash equals the program hash of (tmpl-compile \"...\"), and the specialised renderer called as a JSON tool answers the escaped string")
   (test "E1: the todo page rendered from its staged template answers byte-identically to the live render with the parse moved to compile time; request-path steps are measured against EM1")
   (test "E2: every registered accelerator passes its differential vectors (malformed inputs included) against the reference law, and a fast-mode run re-verifies under v0 to the same result hash")
   (test "E2: a tree computing the same function under a different hash is not accelerated, and an accelerator that declines falls back to rewriting with the same result")
-  (test "E2: the gate verdict and the naive renderer run at least 10x faster in wall clock under fast mode than under v0")))
+  (test "E2: the gate verdict and the naive renderer run at least 10x faster in wall clock under fast mode than under v0")
+  (test "E3: every vendored Jay vector and helper spec vector answers identically under fast3 and v0")
+  (test "E3: generated values and types agree between fast3 and v0 on O_list and O_bin wherever v0 finishes, and an ontology carrying a prim is declined")
+  (test "E3: typing the 21-bit Bin value under fast3 takes at most a tenth of its v0 steps (EM6)")))

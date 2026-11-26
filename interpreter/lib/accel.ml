@@ -1,4 +1,4 @@
-(* Tuna_interp.Accel: accelerators (borg/eval-modes.borg E2).
+(* Tuna_interp.Accel: accelerators (borg/eval-modes.borg E2, E3).
 
    An accelerator is a native implementation of a PURE stdlib tree,
    keyed by that tree's sha256.  Under the "fast1" run semantics the
@@ -66,13 +66,37 @@
    run row by its semantics; they are not v0 counts.  Natives with
    super-linear work (int-mul) decline past a size bound so the native
    side cannot be made unbounded by one call; the reference path is
-   fuel-bounded as always. *)
+   fuel-bounded as always. 
+   FAST3 (E3): fast2's rows unchanged, plus Barry Jay's type checker
+   (typing.borg; trees in reference/jay-typing-rules/natives, embedded
+   as Jay_trees).  New mechanisms, used only by fast3's registry:
+   FAMILIES - infer[O], tp[O] and row[m,D,rest] are programs with
+   their parameters substituted literally, recognised by a template
+   derived from the program at Leaf and at K per parameter (exact, no
+   confirmation); CONTINUATION PLANS (Then / Seq answers, KThen frame)
+   - a native applies a tree or runs its own call, then continues;
+   WRAPPER PARTIALS - a partial whose value is a stem is followed
+   through its constructor application; PARTIAL CLOSED FORMS - Jay's
+   equal answers at one argument with equal1 p (his equal_eval).  The
+   checker natives obey E3's NARROWED LAW: the reference's answer
+   whenever the reference terminates (they skip work it discards, so
+   they may answer where it diverges inside that work), and they
+   decline when a parameter carries a prim. *)
 
 open Tuna.Tree
 
 (* a native's answer: a value, or (higher-order) the applications the
    reference would perform, for the core to schedule *)
-type answer = Value of t | Plan of plan
+type answer =
+  | Value of t
+  | Plan of plan
+  | Then of t * t list * (t -> answer)
+      (* fast3 continuation plan: apply the tree to these arguments
+         (curried, at least one) on the core's stack, then continue
+         with its value *)
+  | Seq of answer * (t -> answer)
+      (* fast3: run a native's own answer for a call it makes itself
+         (no tree application, no partial), then continue *)
 
 and plan = { fn : t; xs : t list; finish : finish }
     (* apply [fn] to each of [xs] left to right, then [finish] *)
@@ -90,12 +114,38 @@ type entry = {
   arity : int;
   cost : int;  (* steps charged per accelerated call *)
   impl : t list -> answer option;  (* None = decline *)
+  partial : (t list -> t option) option;
+      (* fast3: the exact value of a PARTIAL application (fewer args
+         than arity), proved closed form; None everywhere else *)
+}
+
+(* a FAMILY (fast3, borg/eval-modes.borg E3): a program built from
+   parameters by literal substitution (Jay's infer O, tp O and
+   row m D rest), registered as the program with every parameter Leaf
+   and, per parameter, with that one set to K.  The sites where a
+   variant differs from the base are that parameter's; a node fits
+   when it is the template with one tree at all of a parameter's
+   sites.  Recognition is exact: no confirmation is needed. *)
+type ctx = { member : string -> t array -> t }
+    (* the member of a named family at these parameters, as the one
+       physical tree the run uses for it *)
+
+type family = {
+  fname : string;
+  base : t;
+  vary : t array;  (* one program per parameter *)
+  farity : int;
+  fimpl : ctx -> t array -> t list -> answer option;
 }
 
 type registry = {
   semantics : string;
   entries : entry list;  (* preference order for a node fitting several *)
   static_partials : bool;  (* recognise compile-time partials (fast2+) *)
+  families : family list;
+  wrapper_partials : bool;
+      (* follow a partial through a wrapper application (a stem or leaf
+         applied: a constructor, not a firing); fast1/fast2 do not *)
 }
 
 let value f args = Option.map (fun t -> Value t) (f args)
@@ -300,12 +350,184 @@ let list_filter = function
                      Leaf) })
   | _ -> None
 
+(* -- Barry Jay's checker (fast3, borg/eval-modes.borg E3) -------------
+
+   Every native below follows a lemma or a clause of his Rocq
+   development (reference/jay-typing-rules, typing.v / rows.v /
+   tree.v), with the names his code uses.  Values: Lf = Leaf,
+   Sm = Stem, Fk = Fork. *)
+
+let jk = Stem Leaf (* 'K *)
+let ji = Fork (Stem (Stem Leaf), Stem Leaf) (* 'I *)
+let jki = Fork (Leaf, ji) (* 'KI = 'K1 'I *)
+let jbt b = if b then jk else jki
+let jfst = Fork (Stem ji, Fork (Leaf, Stem Leaf)) (* guard_of = 'fst *)
+let jsnd = Fork (Stem ji, Fork (Leaf, Fork (Leaf, ji))) (* elim_of = 'snd *)
+let jlabel n = Fork (Stem (Stem Leaf), Fork (Leaf, n))
+
+let label_of = function Fork (Stem (Stem Leaf), Fork (Leaf, n)) -> Some n | _ -> None
+
+let tag_of = function
+  | Fork (Stem (Fork (Leaf, f)), Fork (Stem (Stem Leaf), Fork (Leaf, n))) -> Some (f, n)
+  | _ -> None
+
+let label_pair u v = match (u, v) with Stem (Stem Leaf), Fork (Leaf, _) -> true | _ -> false
+
+let rec concreteb = function
+  | Leaf -> true
+  | Stem u -> concreteb u
+  | Fork (u, v) -> (not (label_pair u v)) && concreteb u && concreteb v
+
+let reservedb t = tag_of t <> None || label_of t <> None
+
+let jtri a b c = Fork (Fork (a, b), c)
+let jk1 x = Fork (Leaf, x)
+let js2 u v = Fork (Stem u, v)
+let jis_leaf = jtri jk (jk1 jki) (jk1 (jk1 jki))
+
+(* tree.v equal1: equal_eval proves equal @ p ==> equal1 p *)
+let rec equal1 = function
+  | Leaf -> jis_leaf
+  | Stem p1 -> jtri jki (equal1 p1) (jk1 (jk1 jki))
+  | Fork (p1, p2) ->
+      jtri jki (jk1 jki) (js2 (js2 (equal1 p1) (jk1 (equal1 p2))) (jk1 (jk1 jki)))
+
+(* equal_bt (equal1_eq / equal1_neq), is_concrete_spec,
+   get_tagged_spec, get_label_spec *)
+let j_equal = function [ p; q ] -> Some (jbt (p = q)) | _ -> None
+let j_equal_partial = function [ p ] -> Some (equal1 p) | _ -> None
+let j_is_concrete = function [ n ] -> Some (jbt (concreteb n)) | _ -> None
+
+let j_get_tagged = function
+  | [ t ] -> Some (match tag_of t with Some (f, n) -> Stem (Fork (f, n)) | None -> Leaf)
+  | _ -> None
+
+let j_get_label = function
+  | [ t ] -> Some (match label_of t with Some n -> Stem n | None -> Leaf)
+  | _ -> None
+
+(* onStem1: continue on Sm v, else Lf *)
+let on_stem r k = match r with Stem v -> k v | _ -> Value Leaf
+let pass r = Value r
+
+(* row m D rest @ n (rows.v row_head): K1 (Sm D) on a hit; on a miss
+   the value of rest @ n.  The tree evaluates rest @ n on a hit too and
+   discards it; skipping that is the E3 narrowed law. *)
+let j_row _ps_ctx ps args =
+  match (ps, args) with
+  | [| m; d; rest |], [ n ] ->
+      Some (if m = n then Value (Fork (Leaf, Stem d)) else Then (rest, [ n ], pass))
+  | _ -> None
+
+(* tp O @ F @ U, clause by clause (typing.v tp_body / ord_cl / abs_cl /
+   stem_cl / fk_cl / s_cl / tri_cl; TA and tp_inv) *)
+let rec j_tp ctx ps args =
+  match (ps, args) with
+  | [| o |], [ f; u ] ->
+      let tp = ctx.member "tp" [| o |] in
+      let ap g x k = Seq (tp_call ctx o g x, k) in
+      Some
+        (match label_of f with
+         | Some n ->
+             (* abs_cl: let Sm D = O @ n @ tp in elim_of D @ n @ tp @ U *)
+             Then (o, [ n; tp ], fun r -> on_stem r (fun d -> Then (jsnd, [ d; n; tp; u ], pass)))
+         | None -> (
+             match f with
+             | Leaf -> Value (Stem (Stem u)) (* leaf_cl *)
+             | Stem g -> Value (if label_pair g u then Leaf else Stem (Fork (g, u))) (* stem_cl *)
+             | Fork (x, y) -> (
+                 if reservedb x then Value Leaf
+                 else
+                   match x with
+                   | Leaf -> Value (Stem y) (* K1 Y *)
+                   | Stem g ->
+                       (* s_cl: V = G # U, W = Y # U, V # W *)
+                       ap g u (fun r ->
+                           on_stem r (fun v -> ap y u (fun r -> on_stem r (fun w -> ap v w pass))))
+                   | Fork (f0, f1) -> (
+                       (* tri_cl, with F2 = y *)
+                       if label_of u <> None then Value Leaf
+                       else
+                         match u with
+                         | Leaf -> Value (Stem f0)
+                         | Stem xx -> ap f1 xx pass
+                         | Fork (xx, yy) -> ap y xx (fun r -> on_stem r (fun g -> ap g yy pass))))))
+  | _ -> None
+
+(* the native's own recursive call: the value of tp O @ g @ x, with no
+   partial application (E3 law (d): its partial work is discarded) *)
+and tp_call ctx o g x =
+  match j_tp ctx [| o |] [ g; x ] with Some a -> a | None -> assert false
+
+(* infer O @ t (typing.v infer_body / tag_cl / plain_cl; INF and
+   infer_inv) *)
+let rec j_infer ctx ps args =
+  match (ps, args) with
+  | [| o |], [ t ] ->
+      let tp = ctx.member "tp" [| o |] in
+      let inf u k = Seq (infer_call ctx o u, k) in
+      Some
+        (match t with
+         | Leaf -> Value (Stem Leaf)
+         | Stem u -> inf u (fun r -> on_stem r (fun uu -> Value (Stem (Stem uu))))
+         | Fork (u1, u2) -> (
+             match tag_of t with
+             | Some (f, n) ->
+                 (* tag_cl: concrete name, carrier typed, guard admits it *)
+                 if not (concreteb n) then Value Leaf
+                 else
+                   inf f
+                     ( fun r ->
+                         on_stem r (fun ff ->
+                             Then
+                               ( o, [ n; tp ],
+                                 fun r ->
+                                   on_stem r (fun d ->
+                                       Then
+                                         ( jfst, [ d; ff ],
+                                           fun g -> Value (if g = jk then Stem (jlabel n) else Leaf) ))
+                               )) )
+             | None ->
+                 (* plain_cl: U1, U2, then (Sm U1) # U2 *)
+                 inf u1 (fun r ->
+                     on_stem r (fun a ->
+                         inf u2 (fun r -> on_stem r (fun b -> Seq (tp_call ctx o (Stem a) b, pass)))))))
+  | _ -> None
+
+and infer_call ctx o u = match j_infer ctx [| o |] [ u ] with Some a -> a | None -> assert false
+
+let jay_tree name =
+  match List.assoc_opt name Jay_trees.all with
+  | None -> invalid_arg ("Accel: no Jay tree " ^ name)
+  | Some ternary -> (
+      match Tuna.Canon.of_string ternary with Ok t -> t | Error _ -> invalid_arg name)
+
+let jay_entries =
+  lazy
+    (List.map
+       (fun (name, arity, impl) ->
+         let t = jay_tree name in
+         { name = "jay-" ^ name; hash = Tuna.Hash.hex_of_tree t; size = size t; arity; cost = 1;
+           impl = value impl;
+           partial = (if name = "equal" then Some j_equal_partial else None) })
+       [ ("equal", 2, j_equal); ("is_concrete", 1, j_is_concrete); ("get_tagged", 1, j_get_tagged);
+         ("get_label", 1, j_get_label) ])
+
+let jay_families =
+  lazy
+    (List.map
+       (fun (name, k, arity, fimpl) ->
+         { fname = name; base = jay_tree (name ^ ".0");
+           vary = Array.init k (fun i -> jay_tree (Printf.sprintf "%s.%d" name (i + 1)));
+           farity = arity; fimpl })
+       [ ("infer", 1, 1, j_infer); ("tp", 1, 2, j_tp); ("row", 3, 1, j_row) ])
+
 (* -- the registry ------------------------------------------------------ *)
 
 (* fast1: stdlib v1.3 (stdlib/v1/manifest).  PINNED: changing any row
    is a new semantics version. *)
 let fast1_entries =
-  let e name hash size arity impl = { name; hash; size; arity; cost = 1; impl = value impl } in
+  let e name hash size arity impl = { name; hash; size; arity; cost = 1; impl = value impl; partial = None } in
   [ e "tree-eq" "fd549d45e1e2e481488d0c0ff4ec9c4de263fca5a511e623bbbba0bd6291de03" 406 2 tree_eq;
     e "list-append" "500eaee618df21a52bd4355ba2d60cf9639d108dd45a39bcb17841abb26a26e2" 307 2 list_append;
     e "list-length" "b0f08c694e75ab698415377cf023c14be878e92b82bf87b3dfb30c3f7e6095e8" 298 1 list_length;
@@ -316,14 +538,17 @@ let fast1_entries =
     e "int-mul" "fb3f462a1b191e5065ebd21018ee85cd7b8116f9693f282fe9527dd13411f5fa" 6213 2 int_mul;
     e "int-cmp" "de0a52cae88f868eea5a6fb128068dd88cd2a3a69898638c0222176ad3be8a40" 5613 2 int_cmp ]
 
-let fast1 = { semantics = "fast1"; entries = fast1_entries; static_partials = false }
+let fast1 = { semantics = "fast1"; entries = fast1_entries; static_partials = false; families = [];
+  wrapper_partials = false }
 
 (* fast2: fast1's rows plus records and the higher-order list family,
    and compile-time partial recognition.  PINNED like fast1. *)
 let fast2 =
-  let e name hash size arity impl = { name; hash; size; arity; cost = 1; impl } in
+  let e name hash size arity impl = { name; hash; size; arity; cost = 1; impl; partial = None } in
   { semantics = "fast2";
     static_partials = true;
+    families = [];
+    wrapper_partials = false;
     entries =
       [ e "rec-val" "1132bbd758d195165b345c89dc31b242e20902243ebda70ba7789c25762c034d" 888 2 (value rec_val);
         e "rec-has" "e20bc94f9ebc66df748e4c91aa3505b1fa6afba238692e686ca0f91021d7a52e" 887 2 (value rec_has);
@@ -333,9 +558,21 @@ let fast2 =
         e "list-fold" "3a4225df7bd383bc2f1a6b3d0fa0a0bb84632f90e1415825a2be683503fabc4f" 326 3 list_fold ]
       @ fast1_entries }
 
+(* fast3: fast2's rows unchanged, plus Jay's checker (E3): helper
+   natives by hash, infer / tp / row as families, continuation plans,
+   wrapper partials, and the narrowed law of E3 (d). *)
+let fast3 =
+  lazy
+    { semantics = "fast3";
+      static_partials = true;
+      families = Lazy.force jay_families;
+      wrapper_partials = true;
+      entries = fast2.entries @ Lazy.force jay_entries }
+
 let registry_of_semantics = function
   | "fast1" -> Some fast1
   | "fast2" -> Some fast2
+  | "fast3" -> Some (Lazy.force fast3)
   | _ -> None
 
 (* -- per-run state --------------------------------------------------- *)
@@ -359,6 +596,12 @@ type state = {
   partials : (entry * t list) Phys.t;
   mutable calls : int;
   mutable declines : int;
+  fskels : (family * skel) list;
+  wrappers : bool;
+  mutable froots : (t * string * t array * entry) list;
+      (* family members found or built: tree, family, parameters *)
+  mutable prim_free : (t * bool) list;
+      (* memo per family parameter (physical): it has no prim call *)
 }
 
 (* distinctive marker trees: deterministic, size 40ish, unlikely to
@@ -402,12 +645,58 @@ let tree_of_hash =
     | Some ternary -> (
         match Tuna.Canon.of_string ternary with Ok t -> Some t | Error _ -> None)
 
+(* the family's template.  A parameter site: the base has Leaf, exactly
+   one variant has K there and the others Leaf.  Elsewhere all programs
+   agree.  None when they are not of that form, or a parameter has no
+   site. *)
+let family_skel fam =
+  let k = Array.length fam.vary in
+  let found = Array.make k false in
+  let site b vs =
+    if b <> Leaf then None
+    else
+      let hit = ref None and ok = ref true in
+      Array.iteri
+        (fun j v ->
+          match v with
+          | Leaf -> ()
+          | Stem Leaf when !hit = None -> hit := Some j
+          | _ -> ok := false)
+        vs;
+      if !ok then !hit else None
+  in
+  let rec d b vs =
+    match site b vs with
+    | Some i -> found.(i) <- true; Some (Hole i)
+    | None -> (
+        match b with
+        | Leaf -> if Array.for_all (fun v -> v = Leaf) vs then Some SLeaf else None
+        | Stem x -> (
+            match Array.map (function Stem y -> Some y | _ -> None) vs with
+            | ys when Array.for_all Option.is_some ys ->
+                Option.map (fun s -> SStem s) (d x (Array.map Option.get ys))
+            | _ -> None)
+        | Fork (x, y) -> (
+            match Array.map (function Fork (u, v) -> Some (u, v) | _ -> None) vs with
+            | ps when Array.for_all Option.is_some ps -> (
+                let ps = Array.map Option.get ps in
+                match d x (Array.map fst ps) with
+                | None -> None
+                | Some l -> Option.map (fun r -> SFork (l, r)) (d y (Array.map snd ps)))
+            | _ -> None))
+  in
+  match d fam.base fam.vary with
+  | Some sk when Array.for_all Fun.id found -> Some sk
+  | _ -> None
+
 (* [reduce f args]: the REFERENCE engine (v0, no accelerators, no prim
    host), bounded; None when it does not finish normally *)
 (* trees and skeletons are pure functions of the (pinned) registry:
    computed once per process, not per run *)
 let derived : (string, (entry * t) list * (entry * int * skel) list) Hashtbl.t =
   Hashtbl.create 4
+
+let family_skels : (string, (family * skel) list) Hashtbl.t = Hashtbl.create 4
 
 let start ?reduce (r : registry) =
   let trees, skels =
@@ -434,8 +723,24 @@ let start ?reduce (r : registry) =
         (trees, skels)
     | _ -> ([], [])
   in
+  let fskels =
+    match Hashtbl.find_opt family_skels r.semantics with
+    | Some f -> f
+    | None ->
+        let f =
+          List.map
+            (fun fam ->
+              match family_skel fam with
+              | Some sk -> (fam, sk)
+              | None -> invalid_arg ("Accel: family template malformed: " ^ fam.fname))
+            r.families
+        in
+        Hashtbl.replace family_skels r.semantics f;
+        f
+  in
   { entries = r.entries; skels; trees; roots = []; partials = Phys.create 1024;
-    calls = 0; declines = 0 }
+    calls = 0; declines = 0; fskels; froots = []; wrappers = r.wrapper_partials;
+    prim_free = [] }
 
 (* fit [node] to a skeleton, capturing the holes; structural equality
    for a repeated hole *)
@@ -453,6 +758,53 @@ let fit sk node k =
     | _ -> false
   in
   if m sk node then Some (Array.to_list (Array.map Option.get caps)) else None
+
+(* no prim call anywhere in [t]: a plain walk (the start walk is
+   already linear in the program), memoised per parameter.  A
+   structural-hash memo per node was tried first and lost: similar
+   subtrees of a large ontology collide in its buckets. *)
+let rec no_prim t =
+  Tuna.Cprim.shape t = None
+  && match t with Leaf -> true | Stem a -> no_prim a | Fork (a, b) -> no_prim a && no_prim b
+
+let prim_free st t =
+  match List.assq_opt t st.prim_free with
+  | Some b -> b
+  | None ->
+      let b = no_prim t in
+      st.prim_free <- (t, b) :: st.prim_free;
+      b
+
+let rec instantiate sk ps =
+  match sk with
+  | SLeaf -> Leaf
+  | SStem s -> Stem (instantiate s ps)
+  | SFork (a, b) -> Fork (instantiate a ps, instantiate b ps)
+  | Hole i -> ps.(i)
+
+(* register [node] as the member of [fam] at [ps]; its native declines
+   when a parameter carries a prim (E3 law (d): no effect is skipped) *)
+let rec add_member st fam ps node =
+  let pure = lazy (Array.for_all (prim_free st) ps) in
+  let impl args = if Lazy.force pure then fam.fimpl (ctx st) ps args else None in
+  st.froots <-
+    (node, fam.fname, ps,
+     { name = fam.fname; hash = ""; size = 0; arity = fam.farity; cost = 1; impl; partial = None })
+    :: st.froots
+
+and ctx st =
+  { member =
+      (fun name ps ->
+        let same_ps a b = Array.length a = Array.length b && Array.for_all2 ( == ) a b in
+        match List.find_opt (fun (_, n, p, _) -> n = name && same_ps p ps) st.froots with
+        | Some (r, _, _, _) -> r
+        | None -> (
+            match List.find_opt (fun (f, _) -> f.fname = name) st.fskels with
+            | None -> invalid_arg ("Accel.member: no family " ^ name)
+            | Some (fam, sk) ->
+                let node = instantiate sk ps in
+                add_member st fam ps node;
+                node)) }
 
 (* the once-per-run walk: replace every registered subtree with one
    physical copy (same structure, so the program's hash is unchanged),
@@ -503,14 +855,44 @@ let prepare ?reduce st t =
         let n = na + nb + 1 in
         let node = check (if a' == a && b' == b then t else Fork (a', b')) n in
         if not (List.exists (fun (r, _) -> r == node) st.roots) then confirm node;
+        List.iter
+          (fun (fam, sk) ->
+            if not (List.exists (fun (r, _, _, _) -> r == node) st.froots) then
+              match fit sk node (Array.length fam.vary) with
+              | Some ps -> add_member st fam (Array.of_list ps) node
+              | None -> ())
+          st.fskels;
         (node, n)
   in
   fst (go t)
 
 (* is [f] a registered tree or a remembered partial of one? *)
+(* structural equality that short-circuits on shared subtrees: a family
+   member rebuilt by its own recursion (Z unfolding) shares all but its
+   top few nodes with the member the walk found *)
+let rec same a b =
+  a == b
+  || match (a, b) with
+     | Leaf, Leaf -> true
+     | Stem x, Stem y -> same x y
+     | Fork (x, y), Fork (u, v) -> same x u && same y v
+     | _ -> false
+
 let lookup st f =
   match List.assq_opt f st.roots with
   | Some e -> Some (e, [])
-  | None -> if Phys.length st.partials = 0 then None else Phys.find_opt st.partials f
+  | None -> (
+      match if Phys.length st.partials = 0 then None else Phys.find_opt st.partials f with
+      | Some p -> Some p
+      | None -> (
+          match st.froots with
+          | [] -> None
+          | froots -> (
+              match List.find_opt (fun (r, _, _, _) -> r == f) froots with
+              | Some (_, _, _, e) -> Some (e, [])
+              | None -> (
+                  match List.find_opt (fun (r, _, _, _) -> same r f) froots with
+                  | Some (_, _, _, e) -> Some (e, [])
+                  | None -> None))))
 
 let remember st value partial = Phys.replace st.partials value partial

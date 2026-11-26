@@ -38,3 +38,12 @@ adds List[A], updates) our `O_int` (O_list plus a wrapped Int) and `O_bin` (O_li
 and Int). His full `paper_ontology` is not exported yet.
 
 Checked by `tests/jay_tests.ml` (see the tuna metatheory chapter, rung 4).
+
+fast3 (borg/eval-modes.borg E3) registers some of these trees natively:
+`natives` lists them as `<name> <ternary>` (his helpers by hash; infer,
+tp and row at base parameter Lf and with each parameter set to K, from
+which the engine derives their templates), written by
+`export/ExportNatives.v`.  `export/ExportHelpers.v` prints suite
+"helpers": his helper programs (equal, is_concrete, get_tagged,
+get_label, resv, row_prog, rows) against the values his spec lemmas
+state.

@@ -17,6 +17,11 @@
 #   16.5 E2 FAST2 - records, the higher-order list family and
 #        compile-time partials: the same call answers the same string in
 #        fewer steps than fast1, and replay-verifies under fast2.
+#   16.6 E3 FAST3 - the run semantics carrying Jay's checker natives is
+#        accepted by the server, keeps fast2's rows (the same call
+#        answers the same result hash in no more steps than fast2), and
+#        its row replay-verifies under fast3.  The checker natives
+#        themselves are gated by tests/fast3_tests.ml and jay_tests.ml.
 #
 # Env: as scripts/verify-lib.sh (a live dev server; TUNA_HTTP_PORT,
 # TUNA_SMOKE_TOKEN or the dev boot token).
@@ -120,6 +125,19 @@ if full["run"].get("verify_status") != "verified" or f2["result_hash"] != fast["
         % (full["run"].get("verify_status"), f2["result_hash"]))
 print("  fast2 %d steps (fast1 %d, v0 %d), replay verified, same result hash"
       % (f2["step_count"], fast["step_count"], v0_run["step_count"]))
+
+print("[16.6] E3 fast3: accepted, fast2's rows kept, replay-verified")
+code, j = tool("fast3")
+if code != 201 or j.get("result") != want or j["run"]["semantics"] != "fast3":
+    die("16.6 fast3 must answer %r: %s %r" % (want, code, {k: j.get(k) for k in ("result", "error")}))
+f3 = j["run"]
+if f3["result_hash"] != fast["result_hash"] or not f3["step_count"] <= f2["step_count"]:
+    die("16.6 fast3 must give the same result in no more steps than fast2: %s %d vs %d"
+        % (f3["result_hash"], f3["step_count"], f2["step_count"]))
+code, full = call("GET", "/api/runs/" + f3["id"])
+if full["run"].get("verify_status") != "verified":
+    die("16.6 a fast3 run must replay-verify under its own law: %r" % full["run"].get("verify_status"))
+print("  fast3 %d steps (fast2 %d), replay verified, same result hash" % (f3["step_count"], f2["step_count"]))
 PY
 
-echo "ACCEPT 16 OK: a staged template is a recorded, replayable run and a callable tool; fast1 and fast2 agree with v0"
+echo "ACCEPT 16 OK: a staged template is a recorded, replayable run and a callable tool; fast1, fast2 and fast3 agree with v0"

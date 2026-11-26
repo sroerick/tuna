@@ -9,9 +9,15 @@
    exactly - a Sm T type, Lf for a refusal, or a value for an evaluation
    example.
 
-   All 30 run under `dune runtest` (~25s): whole-expression typing is
+   All run under `dune runtest` (~40s): whole-expression typing is
    millions of v0 steps (infer typing itself is 5.2M), ~1us/step since
-   the core caches subtree sizes for the cap check. *)
+   the core caches subtree sizes for the cap check.
+
+   FAST3 (borg/eval-modes.borg E3): every vector runs a second time
+   under run semantics fast3 (his checker's natives) and must give the
+   same stated result.  Suite "helpers" is his helper programs (equal,
+   is_concrete, get_tagged, get_label, resv, row_prog, rows) against
+   the values his spec lemmas state. *)
 
 module F = Tuna_interp.Flat
 module T = Tuna.Tree
@@ -38,18 +44,22 @@ let tree id =
 
 let host ~site:_ ~name ~args:_ = `Error ("prim " ^ name)
 
-let vector line =
+let fast3 = lazy (Option.get (Tuna_interp.Accel.registry_of_semantics "fast3"))
+
+let vector ?accel line =
   match String.split_on_char ' ' line with
   | [ suite; label; p; args; want ] ->
+      let sem = match accel with Some _ -> "fast3" | None -> "v0" in
       Some
-        ( suite,
+        ( (match accel with Some _ -> "fast3-" ^ suite | None -> suite),
           Alcotest.test_case label `Quick (fun () ->
               let args = if args = "-" then [] else List.map tree (String.split_on_char ',' args) in
-              let m = F.start ~fuel:20_000_000_000 ~size_cap:500_000_000 ~program:(tree p) ~args () in
+              let accel = Option.map Lazy.force accel in
+              let m = F.start ?accel ~fuel:20_000_000_000 ~size_cap:500_000_000 ~program:(tree p) ~args () in
               match F.run ~host m with
               | Tuna_interp.Prim_eval.Normal (got, _) ->
                   Alcotest.(check bool)
-                    (Printf.sprintf "%s/%s: Jay's stated result (%s)" suite label want)
+                    (Printf.sprintf "%s/%s under %s: Jay's stated result (%s)" suite label sem want)
                     true (got = tree want)
               | _ -> Alcotest.fail (label ^ ": no normal form within budget")) )
   | _ -> None
@@ -124,11 +134,13 @@ let ty1 =
         |> check "corpus" known_nonconcrete_corpus) ]
 
 let () =
-  let vs = List.filter_map vector (lines "vectors") in
+  let vs =
+    List.filter_map vector (lines "vectors") @ List.filter_map (vector ~accel:fast3) (lines "vectors")
+  in
   let suites = List.sort_uniq compare (List.map fst vs) in
   let shape =
     Alcotest.test_case "every vector line is well formed and every id resolves" `Quick (fun () ->
-        Alcotest.(check int) "vector count" (List.length (lines "vectors")) (List.length vs);
+        Alcotest.(check int) "vector count (v0 and fast3)" (2 * List.length (lines "vectors")) (List.length vs);
         List.iter
           (fun l ->
             match String.split_on_char ' ' l with

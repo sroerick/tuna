@@ -98,10 +98,12 @@ scripts/      dev.sh orchestration, verify_*.sh acceptance scripts
 - After any change: `dune build --root . @all && dune runtest --root .` must be green
   before commit. Commit early, commit small.
 - Before any change to the accelerators (`interpreter/lib/accel.ml`, the
-  fast path in `interpreter/lib/flat.ml`, or the fast1/fast2 registries):
+  fast path in `interpreter/lib/flat.ml`, or the fast1/fast2/fast3 registries):
   `dune build --root . @tests/accel-full` must also be green. `runtest`
   runs only a smoke set of the int vectors (their reference side is slow
-  in-calculus arithmetic); the full set is the accelerator gate.
+  in-calculus arithmetic); the full set is the accelerator gate. fast3
+  (Jay's checker natives, eval-modes E3) is gated by `tests/fast3_tests.ml`
+  and the fast3 half of `tests/jay_tests.ml`, both in `runtest`.
 - `borge lint && borge report` must stay clean; if a stanza's reality
   changes, update the borg book in the same commit (status flips are
   make-pass work; docstring/details edits accompany code).
