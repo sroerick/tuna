@@ -7,7 +7,9 @@
 #        caller must have no defs of its own (checked: the REPL dict
 #        command answers no rows), so its effective dictionary is std.
 #        Run against an instance seeded from stdlib/v1/manifest
-#        (verify-8 checks that); a mismatch is LO1 drift.
+#        (verify-8 checks that); a mismatch is LO1 drift.  A source
+#        both sides refuse (a moved pin, a non-std name) must be
+#        refused with the same compile message.
 #
 # Env: as scripts/verify-lib.sh (a live dev server; TUNA_HTTP_PORT,
 # TUNA_SMOKE_TOKEN or the dev boot token).
@@ -39,7 +41,8 @@ if own:
 probes = ["(not true)", "(list-length [1 2 3])",
           "(lambda (xs) (list-map (lambda (x) (int-add x 1)) xs))",
           "(lambda (not) (not 0))", "(comb-s true true)",
-          "(rec-get #1 [[#1 42]])"]
+          "(rec-get #1 [[#1 42]])",
+          "list-fold@3a4225df", "list-fold@00000000"]
 sources = [(p, p) for p in probes] + [(f, open(f).read()) for f in files]
 
 def cli_compile(src):
@@ -63,12 +66,19 @@ for label, src in sources:
         sh, serr = d["hash"], None
         slock = {e["name"]: e["hash"] for e in d.get("lock", [])}
     except urllib.error.HTTPError as e:
-        sh, slock, serr = None, None, e.read().decode()[:200]
+        body = e.read().decode()
+        try: serr = json.loads(body).get("error", body)
+        except ValueError: serr = body
+        sh, slock = None, None
     if (ch is None) != (sh is None):
         raise SystemExit("18.1: %s compiles on one side only (cli: %s / server: %s)"
                          % (label, cerr or "ok", serr or "ok"))
     if ch is None:
-        print("  %-40s both refuse" % label[:40]); n += 1; continue
+        # same refusal: the CLI's compile message appears in the 400 body
+        if cerr not in serr:
+            raise SystemExit("18.1: %s refused differently: cli %r server %r"
+                             % (label, cerr, serr))
+        print("  %-40s both refuse, same message" % label[:40]); n += 1; continue
     if ch != sh:
         raise SystemExit("18.1 LO1 DRIFT: %s cli %s != server %s" % (label, ch, sh))
     if clock != slock:

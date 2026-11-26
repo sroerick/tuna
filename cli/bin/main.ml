@@ -146,7 +146,10 @@ let eval_source_cmd argv off =
      compiled against the same dictionary (a raw tree is %<ternary>) *)
   let fuel, cap, mode, accel, rest = parse_run_flags argv (off + 1) in
   let art, lock = compile_std (read_file argv.(off)) in
-  let args = List.map (fun t -> (fst (compile_std t)).tree) rest in
+  let compiled = List.map compile_std rest in
+  let args = List.map (fun (a, _) -> a.Tuna_compiler.Bracket.tree) compiled in
+  (* one lock for the whole run: program and arg terms *)
+  let lock = List.sort_uniq compare (lock @ List.concat_map snd compiled) in
   Printf.printf "hash %s\n" art.hash_hex;
   List.iter (fun (n, h) -> Printf.printf "lock %s %s\n" n h) lock;
   print_result

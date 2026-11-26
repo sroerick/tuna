@@ -451,3 +451,11 @@
  (deps local_tests.exe ../stdlib/v1/manifest)
  (action
   (run %{exe:local_tests.exe})))
+
+; the CLI binary itself (local L1): std resolution, lock lines, pins,
+; eval-source with source and %ternary args.
+(rule
+ (alias runtest)
+ (deps cli_local.sh %{exe:../cli/bin/main.exe})
+ (action
+  (run bash %{dep:cli_local.sh} %{exe:../cli/bin/main.exe})))
