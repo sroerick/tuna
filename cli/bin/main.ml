@@ -15,10 +15,11 @@
                                  local host; seals a derivation record that
                                  tools/deriv-check verifies (borg/local.borg L3)
      tuna repl [--dir D] [--identity N] [--input TERM]... [--fuel N]
-               [--cap N] [--semantics S]
+               [--cap N] [--semantics S] [--grant PRIM]... [--allow-host H]...
                                  the REPL grammar over a local directory
-                                 (borg/local.borg L2): one command per
-                                 stdin line, rounds as on /api/repl
+                                 (borg/local.borg L2/L3): one command per
+                                 stdin line, rounds as on /api/repl; eval
+                                 and def rounds answer prims under grants
 
    Source compiles resolve names against the frozen stdlib
    (Tuna_stdlib.Std_dict, borg/local.borg L1): lambda param > std >
@@ -238,9 +239,12 @@ let run_cmd argv off =
 
 (* tuna repl: one round per stdin line against the local store.  A
    failed round prints "error <msg>" and the session goes on; the exit
-   status is 1 if any round failed, so a piped transcript is a check. *)
+   status is 1 if any round failed, so a piped transcript is a check.
+   Eval and def rounds answer prims under --grant/--allow-host, as
+   `tuna run` does, and seal a run record per round. *)
 let repl_cmd argv off =
   let dir = ref None and identity = ref None and inputs = ref [] in
+  let grants = ref [] and hosts = ref [] in
   let rest = ref [] in
   let value i =
     if i + 1 < Array.length argv then argv.(i + 1)
@@ -252,13 +256,25 @@ let repl_cmd argv off =
       | "--dir" -> dir := Some (value i); go (i + 2)
       | "--identity" -> identity := Some (value i); go (i + 2)
       | "--input" -> inputs := value i :: !inputs; go (i + 2)
+      | "--grant" -> grants := value i :: !grants; go (i + 2)
+      | "--allow-host" -> hosts := value i :: !hosts; go (i + 2)
       | ("--fuel" | "--cap" | "--semantics") as f ->
           ignore (value i); rest := argv.(i + 1) :: f :: !rest; go (i + 2)
       | a -> rest := a :: !rest; go (i + 1)
   in
   go off;
   let flags = Array.of_list ("tuna" :: List.rev !rest) in
-  let fuel, cap, mode, accel, positional = parse_run_flags flags 1 in
+  let fuel, cap, _mode, _accel, positional = parse_run_flags flags 1 in
+  let semantics =
+    let rec find = function
+      | "--semantics" :: s :: _ -> s
+      | _ :: r -> find r
+      | [] -> "v0"
+    in
+    find (Array.to_list flags)
+  in
+  if not (Tuna_local.Local_run.semantics_ok semantics) then (
+    prerr_endline ("repl: unknown semantics " ^ semantics); exit 2);
   if positional <> [] then (
     prerr_endline ("repl: unexpected argument " ^ List.hd positional);
     exit 2);
@@ -277,7 +293,10 @@ let repl_cmd argv off =
     with Failure msg | Sys_error msg -> prerr_endline ("repl: " ^ msg); exit 2
   in
   let inputs = List.rev_map (fun t -> (fst (compile_std t)).tree) !inputs in
-  let opts = { Tuna_local.Local_repl.fuel; size_cap = cap; mode; accel; inputs } in
+  let opts =
+    { Tuna_local.Local_repl.fuel; size_cap = cap; semantics;
+      grants = List.rev !grants; allow_hosts = List.rev !hosts; inputs }
+  in
   let tty = Unix.isatty Unix.stdin in
   let failed = ref false in
   let rec loop () =
@@ -309,5 +328,5 @@ let () =
   | "run" when Array.length Sys.argv > 2 -> run_cmd Sys.argv 2
   | _ ->
       prerr_endline
-        "usage: tuna eval <corpus-file> | tuna compile <source-file> | tuna eval-compiled <ternary> [args...] | tuna eval-source <source-file> [arg-terms...] | tuna run <source-file> [--grant P]... | tuna repl [--dir D]";
+        "usage: tuna eval <corpus-file> | tuna compile <source-file> | tuna eval-compiled <ternary> [args...] | tuna eval-source <source-file> [arg-terms...] | tuna run <source-file> [--grant P]... | tuna repl [--dir D] [--grant P]... [--allow-host H]...";
       exit 2

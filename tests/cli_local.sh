@@ -47,4 +47,16 @@ sed 's/"prim":"now"/"prim":"uuid"/' "$rec" > "$T/bad.json"
 [ $rc -eq 1 ] || fail "tampered record: deriv-check exit $rc, want 1"
 out=$("$CLI" run "$T/r.sabra" '"k"' --dir "$T/local" --fuel 100000 --cap 100000) || fail "ungranted run"
 grep -q 'error grant denial: no live grant for prim echo' <<<"$out" || fail "denial not journaled: $out"
+
+# L3 in the repl: eval rounds answer prims, and --grant reaches the host
+RD=$T/repl; mkdir -p "$RD"
+printf '(lambda (x) (runtime (prim "store/put" "k" x)))\n' \
+  | "$CLI" repl --dir "$RD" --input 42 --grant store/put --fuel 100000 --cap 100000 >/dev/null \
+  || fail "repl with a granted prim failed"
+[ -d "$RD/kv" ] && [ -n "$(ls -A "$RD/kv")" ] || fail "granted repl prim did not run"
+RD2=$T/repl2; mkdir -p "$RD2"
+printf '(lambda (x) (runtime (prim "store/put" "k" x)))\n' \
+  | "$CLI" repl --dir "$RD2" --input 42 --fuel 100000 --cap 100000 >/dev/null \
+  || fail "repl with an ungranted prim failed"
+[ ! -d "$RD2/kv" ] || fail "ungranted repl prim ran"
 echo "cli_local: ok"

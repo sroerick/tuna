@@ -110,8 +110,8 @@ let fresh_dir () =
   d
 
 let opts =
-  { LR.fuel = 1_000_000; size_cap = 1_000_000;
-    mode = Tuna_interp.Eval.Canonical; accel = None; inputs = [] }
+  { LR.fuel = 1_000_000; size_cap = 1_000_000; semantics = "v0";
+    grants = []; allow_hosts = []; inputs = [] }
 
 let run st line =
   match LR.execute st opts line with
@@ -348,6 +348,44 @@ let test_run_denial () =
   check_verified "denied run" d;
   server_replay d
 
+(* L3 in the repl: eval and def rounds answer prims under the session's
+   grants; a denial is the server's error ANSWER, never an exception, and
+   a round seals no record (L2's op-log shape is unchanged) *)
+let test_repl_prims () =
+  let st = LS.open_ (fresh_dir ()) in
+  let inputs = [ (compile "42").Bracket.tree ] in
+  let key s = (compile (Printf.sprintf "%S" s)).Bracket.tree in
+  let run_with grants line =
+    match LR.execute st { opts with LR.grants = grants; inputs } line with
+    | Ok o -> o
+    | Error e -> Alcotest.failf "%s: %s" line e
+  in
+  let first = run_with [ "store/put" ] {|(lambda (x) (runtime (prim "store/put" "k" x)))|} in
+  Alcotest.(check (option string)) "granted prim answers" (Some "normal")
+    first.LR.status;
+  (match LS.kv_get st (key "k") with
+   | Some t ->
+       Alcotest.(check string) "the prim really ran"
+         (Hash.hex_of_tree (compile "42").Bracket.tree) (Hash.hex_of_tree t)
+   | None -> Alcotest.fail "granted store/put wrote nothing");
+  let denied =
+    run_with [] {|(lambda (x) (runtime (prim "store/put" "k2" x)))|}
+  in
+  Alcotest.(check (option string)) "denial is a finished round"
+    (Some "normal") denied.LR.status;
+  Alcotest.(check bool) "a denied prim has no effect" true
+    (LS.kv_get st (key "k2") = None);
+  let msg = "grant denial: no live grant for prim store/put" in
+  let encoded = Tuna.Canon.encode (Tuna.Cstr.encode msg) in
+  let has_text =
+    try
+      ignore (Str.search_forward (Str.regexp_string encoded) denied.LR.ternary 0);
+      true
+    with Not_found -> false
+  in
+  Alcotest.(check bool) "the denial text is the answer" true has_text;
+  Alcotest.(check int) "rounds seal no record" 0 (List.length (LS.ops st))
+
 (* the registry step: fast1-fast3 records verify offline, and the
    accelerator really fired (fewer steps than v0) *)
 let test_run_semantics () =
@@ -385,4 +423,5 @@ let () =
       ( "l3-local-prims",
         [ Alcotest.test_case "record verifies, server replay agrees, tamper fails" `Quick test_run_record;
           Alcotest.test_case "grants are arguments" `Quick test_run_denial;
+          Alcotest.test_case "repl rounds answer prims and seal chained records" `Quick test_repl_prims;
           Alcotest.test_case "v1 and fast1-fast3 records verify offline" `Quick test_run_semantics ] ) ]

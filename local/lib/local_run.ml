@@ -114,10 +114,22 @@ let status_of = function
       (* the local host sets no deadline: evaluation is untimed *)
       failwith "deadline_exceeded without a deadline"
 
+(* what one evaluation did, before any record is built *)
+type evaluated = {
+  ev_run_id : string;
+  ev_status : D.status;
+  ev_result : Tuna.Tree.t option;
+  ev_result_ternary : string option;
+  ev_steps : int;
+  ev_journal : D.Journal.t list;
+}
+
 (* [tags]: the compiled artifact's (tree path, IR id) provenance, so a
    journal row names its callsite as the server's does; [] for a raw
-   ternary program (the server's "" as well) *)
-let execute st (cfg : config) ?(tags = []) ?parent_run_id ~program inputs : run =
+   ternary program (the server's "" as well).  The repl calls this
+   directly: its rounds answer prims under grants but seal no record, so
+   L2's op-log shape is unchanged. *)
+let eval_run st (cfg : config) ?(tags = []) ~program inputs : evaluated =
   if not (semantics_ok cfg.semantics) then
     failwith (Printf.sprintf "unknown semantics %S" cfg.semantics);
   let run_id = P.uuid () in
@@ -171,15 +183,25 @@ let execute st (cfg : config) ?(tags = []) ?parent_run_id ~program inputs : run 
     Eng.eval ~host ~mode ?accel ~fuel:cfg.fuel ~size_cap:cfg.size_cap ~program inputs
   in
   let status, result_ternary, steps = status_of outcome in
+  let result = match outcome with Eng.Normal (t, _) -> Some t | _ -> None in
+  { ev_run_id = run_id; ev_status = status; ev_result = result;
+    ev_result_ternary = result_ternary; ev_steps = steps;
+    ev_journal = List.rev !journal }
+
+(* [parent_run_id] links a run to the one it continues (a repl session's
+   previous round, on the server's model) *)
+let execute st (cfg : config) ?(tags = []) ?parent_run_id ~program inputs : run =
+  let e = eval_run st cfg ~tags ~program inputs in
   let program_ternary = Tuna.Canon.encode program in
   let input_ternaries = List.map Tuna.Canon.encode inputs in
   let record =
-    D.build ~run_id ~semantics:cfg.semantics
+    D.build ~run_id:e.ev_run_id ~semantics:cfg.semantics
       ~program_hash:(Tuna.Hash.hex_of_string program_ternary) ~program_ternary
       ~input_hashes:(List.map Tuna.Hash.hex_of_string input_ternaries)
-      ~input_ternaries ~fuel:cfg.fuel ~size_cap:cfg.size_cap ~status ~result_ternary
-      ~result_hash:(Option.map Tuna.Hash.hex_of_string result_ternary)
-      ~step_count:steps ~parent_run_id ~journal:(List.rev !journal)
+      ~input_ternaries ~fuel:cfg.fuel ~size_cap:cfg.size_cap ~status:e.ev_status
+      ~result_ternary:e.ev_result_ternary
+      ~result_hash:(Option.map Tuna.Hash.hex_of_string e.ev_result_ternary)
+      ~step_count:e.ev_steps ~parent_run_id ~journal:e.ev_journal
   in
   (* seal: the record's bytes by hash, cited from the op log *)
   let bytes = D.to_string record in
@@ -188,7 +210,7 @@ let execute st (cfg : config) ?(tags = []) ?parent_run_id ~program inputs : run 
         ignore (S.put_value st program);
         List.iter (fun t -> ignore (S.put_value st t)) inputs;
         let h = S.put_bytes st bytes in
-        ignore (S.append st ~path:("runs/" ^ run_id) ~op:"put" ~value_hash:(Some h) ());
+        ignore (S.append st ~path:("runs/" ^ e.ev_run_id) ~op:"put" ~value_hash:(Some h) ());
         h)
   in
   { record; record_hash }

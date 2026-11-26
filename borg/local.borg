@@ -76,26 +76,36 @@
       A local run host drives the pure step core (Flat_drive, as the
       server does) and answers prims from a local registry: echo, now,
       uuid, store/get and store/put over the local directory, http/get
-      only behind an explicit allowlist flag. Grants are command-line
-      arguments (--grant now, --grant store/get:<path-prefix>), checked
-      at every prim call like the server's grant rows; a missing grant
-      is a journaled error answer, never an exception. Each run writes
-      a journal with the server's row fields and hash chain
-      (Store.row_hash encoding, genesis 64 zeros) and can emit a sealed
+      only behind an explicit allowlist flag, and the math family
+      (math/add, math/sub, math/mul, math/cmp, math/neg). Grants are
+      command-line arguments and name prims: --grant echo, --grant
+      math/add, or --grant '*' for any. A grant is checked at every
+      prim call like the server's grant rows; a store key is not a
+      path, so a grant carries no path prefix. A missing grant is a
+      journaled error answer, never an exception. `tuna run` writes a
+      journal with the server's row fields and hash chain
+      (Store.row_hash encoding, genesis 64 zeros) and emits a sealed
       deriv record.
 
-      SEMANTICS GAP, a step of this move: deriv-check accepts only v0
-      and v1 today, while local runs may use fast1, fast2 or fast3.
-      Teaching deriv/lib the accelerator registries (the same ones
-      server replay already uses) is part of L3 and touches deriv/lib;
-      until it lands, the local host records fast* runs but marks
-      their deriv records as checkable by server replay only.
+      `tuna repl` answers prims the same way in its eval and def
+      rounds, under the same --grant and --allow-host flags, so an
+      offline session can use a prim without leaving the REPL. A repl
+      round is not a sealed run: L2's op-log shape (one row per
+      dictionary effect) is unchanged.
+
+      SEMANTICS GAP, RESOLVED IN THIS MOVE: deriv-check accepted only
+      v0 and v1, while local runs may use fast1, fast2 or fast3.
+      deriv/lib now resolves accelerators through
+      Accel.registry_of_semantics - the same function server replay
+      uses - so deriv-check verifies all five offline.
 
       ACCEPTANCE: a local v0 or v1 run with prims produces a deriv
       record deriv-check verifies (exit 0); flipping one journal answer
       makes it exit 1; the same program and journal answers replayed on
-      the server reproduce the result hash and step count. After the
-      registry step, the same holds for fast1, fast2 and fast3. |))))
+      the server reproduce the result hash and step count. The same
+      holds for fast1, fast2 and fast3. A repl eval round answers a
+      granted prim and answers the server's denial text for an
+      ungranted one, with no record sealed. |))))
   (subsection l4-typed-output
    (status planned)
    (details
@@ -280,7 +290,7 @@
  (verify
   (test "L1: (not true) and (list-length [1 2 3]) compile through the CLI; every corpus source compiles to the hash POST /api/programs answers for an identity with no defs on a manifest-seeded instance (tests/local_tests.ml offline; scripts/verify-18-local.sh live)")
   (test "L2: a def/eval/undef transcript gives identical result hashes and step counts in tuna repl and /api/repl for a fresh identity (scripts/verify-18-local.sh 18.2; tests/local_tests.ml l2 offline)")
-  (test "L3: a local v0/v1 run with prims emits a deriv record deriv-check verifies (exit 0); a flipped journal answer exits 1; server replay reproduces result hash and steps; after the registry step the same holds for fast1-fast3")
+  (test "L3: a local v0/v1 run with prims emits a deriv record deriv-check verifies (exit 0); a flipped journal answer exits 1; server replay reproduces result hash and steps; the same holds for fast1-fast3; a repl eval round answers a granted prim and the server's denial text for an ungranted one, sealing no record")
   (test "L4: the gate verdict through the CLI with a JSON observation answers the same JSON as /api/tool/run")
   (test "L5: after migration every identity's effective dictionary is unchanged, a past dictionary is a fold of the op log, and a def appends one tree_ops row at its dict path")
   (test "L5/L6: another identity's ops pull omits a private dictionary's rows and still verifies; after dict-visibility public the same pull includes them")
