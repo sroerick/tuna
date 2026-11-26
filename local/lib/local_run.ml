@@ -61,12 +61,17 @@ let http_get ~allow_hosts url : P.answer =
   | Some (host, port, path) -> (
       if not (List.mem host allow_hosts) then `Error "http/get: host not in allowlist"
       else
-        match Unix.getaddrinfo host (string_of_int port) [ Unix.AI_SOCKTYPE Unix.SOCK_STREAM ] with
-        | [] -> `Error ("http/get: cannot resolve host " ^ host)
-        | ai :: _ -> (
-            let sock = Unix.socket ai.Unix.ai_family Unix.SOCK_STREAM 0 in
-            Fun.protect ~finally:(fun () -> Unix.close sock) @@ fun () ->
-            try
+        (* resolution and socket creation can fail too: they are inside
+           the same answer-not-raise boundary as the exchange *)
+        try
+          match
+            Unix.getaddrinfo host (string_of_int port)
+              [ Unix.AI_SOCKTYPE Unix.SOCK_STREAM ]
+          with
+          | [] -> `Error ("http/get: cannot resolve host " ^ host)
+          | ai :: _ -> (
+              let sock = Unix.socket ai.Unix.ai_family Unix.SOCK_STREAM 0 in
+              Fun.protect ~finally:(fun () -> Unix.close sock) @@ fun () ->
               Unix.setsockopt_float sock Unix.SO_RCVTIMEO 10.;
               Unix.setsockopt_float sock Unix.SO_SNDTIMEO 10.;
               Unix.connect sock ai.Unix.ai_addr;
@@ -99,9 +104,9 @@ let http_get ~allow_hosts url : P.answer =
               in
               if String.length body > P.payload_cap then
                 `Error "http/get: body exceeds the journal payload cap"
-              else `Ok (P.str body)
-            with Unix.Unix_error (e, _, _) ->
-              `Error ("http/get: " ^ Unix.error_message e)))
+              else `Ok (P.str body))
+        with Unix.Unix_error (e, _, _) ->
+          `Error ("http/get: " ^ Unix.error_message e))
 
 (* -- the run --------------------------------------------------------- *)
 

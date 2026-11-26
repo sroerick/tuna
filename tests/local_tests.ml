@@ -404,6 +404,20 @@ let test_run_semantics () =
       server_replay d)
     [ "v1"; "fast1"; "fast2"; "fast3" ]
   |> ignore;
+  (* a fast* run that answers a prim: the journal and the accelerator
+     must both survive the registry path *)
+  List.iter
+    (fun sem ->
+      let d =
+        (run_src st (cfg ~semantics:sem ())
+           {|(lambda (x) (runtime (prim "echo" x)))|} [ {|"k"|} ])
+          .LRun.record
+      in
+      Alcotest.(check (list string)) (sem ^ " journals the prim") [ "echo" ]
+        (List.map (fun j -> j.D.Journal.j_prim) d.D.d_journal);
+      check_verified (sem ^ " with a prim") d;
+      server_replay d)
+    [ "fast1"; "fast2"; "fast3" ];
   match LRun.execute st (cfg ~semantics:"fast9" ()) ~program:Tree.Leaf [] with
   | _ -> Alcotest.fail "unknown semantics must be refused"
   | exception Failure _ -> ()
