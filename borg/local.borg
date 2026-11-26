@@ -10,7 +10,8 @@
   (doc "Six moves. L1-L4 are offline-only and each is useful alone; L5-L6 add sync. None may change the calculus, the IR, the step count or the prim set, and sync adds no route; the local tools reuse the server's row shapes so their output can be synced later without conversion.")
   (status planned)
   (subsection l1-stdlib-offline
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 L1 LANDED. CODE: stdlib/lib (library tuna_stdlib: Std_trees generated from stdlib/v1/trees by tools/stdprobe/embed_dict.py, Std_dict.dictionary) - the server's stdlib_embed (core.defs source, seeded through def rounds) is untouched, and so is the accelerators' Accel_trees embed. cli/bin/main.ml: compile resolves against Std_dict and prints a lock line per resolved std name (name sha256); NEW eval-source <file> [arg-terms...] compiles program and each arg term against std, then runs with the shared --fuel/--cap/--semantics flags (eval-compiled's flag parsing factored into parse_run_flags; the existing `tuna eval <corpus-file>` is the differential harness's, so the source-level command is eval-source, not eval). browser/bin passes the same dictionary to tunaEval. No reader builtin is a std name (pair/cons), so a source with no free names compiles exactly as before. EVIDENCE: dune build --root . @all exit 0; dune runtest --root . exit 0 (store suites skip silently with PG down); tests/local_tests.ml 3/3 - every frozen row equals the manifest (name, order, sha256, size) and round-trips, every frozen tree equals what Tuna_server.Stdlib_embed.defs compile to in seeding order, resolution order, shadowing, pins and unbound errors; scripts/verify-differential.sh 103/103; on an isolated dev instance (port 18190, fresh data dir) scripts/verify-8-stdlib.sh green (seeded = manifest) and scripts/verify-18-local.sh ACCEPT 18 OK - 19/19 sources (6 std probes + every scripts/*/*.sabra) give the same program hash and lock through the CLI as POST /api/programs for a caller with no defs; todo-v02-board.sabra is refused on both sides (key-total is a probe-identity def, not std). Manual: `tuna compile` on (not true) -> leaf, 2 steps, lock not+true; node tunaEval on (list-length [1 2 3]) -> normal 1110.|) *)
    (details
     (doc (|
       The stdlib dictionary reaches every local front end. The embed
@@ -21,8 +22,9 @@
       instance's database: an instance whose sabralib rows differ from
       the manifest is LO1 drift on that instance, not a CLI bug.
 
-      `tuna compile` and a new source-level `tuna eval` (compile, then
-      run on ternary or literal-source args) resolve names as the
+      `tuna compile` and a new source-level `tuna eval-source` (compile,
+      then run on arg terms; a raw tree is written %<ternary>) resolve
+      names as the
       server does for an identity with no defs: lambda param > std >
       reader builtins. Pins (tool-language T2) and the compile lock
       work unchanged. `--semantics` keeps taking every registered
@@ -270,7 +272,7 @@
           with the owner. |))))
  )
  (verify
-  (test "L1: (not true) and (list-length [1 2 3]) compile through the CLI; every corpus source compiles to the hash POST /api/programs answers for an identity with no defs on a manifest-seeded instance")
+  (test "L1: (not true) and (list-length [1 2 3]) compile through the CLI; every corpus source compiles to the hash POST /api/programs answers for an identity with no defs on a manifest-seeded instance (tests/local_tests.ml offline; scripts/verify-18-local.sh live)")
   (test "L2: a def/eval/undef transcript gives identical result hashes and step counts in tuna repl and /api/repl for a fresh identity")
   (test "L3: a local v0/v1 run with prims emits a deriv record deriv-check verifies (exit 0); a flipped journal answer exits 1; server replay reproduces result hash and steps; after the registry step the same holds for fast1-fast3")
   (test "L4: the gate verdict through the CLI with a JSON observation answers the same JSON as /api/tool/run")

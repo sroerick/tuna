@@ -437,3 +437,17 @@
  (deps fast3_tests.exe ../reference/jay-typing-rules/trees ../reference/jay-typing-rules/vectors)
  (action
   (run %{exe:fast3_tests.exe})))
+
+; local chapter L1 (borg/local.borg): the frozen stdlib dictionary the
+; CLI and browser compile against equals the manifest and the server's
+; seeding round, and resolves names as the server does.  No PG, no HTTP.
+(executable
+ (name local_tests)
+ (modules local_tests)
+ (libraries tuna tuna_compiler tuna_stdlib tuna_server alcotest))
+
+(rule
+ (alias runtest)
+ (deps local_tests.exe ../stdlib/v1/manifest)
+ (action
+  (run %{exe:local_tests.exe})))

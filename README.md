@@ -107,7 +107,13 @@ htmx UI: dashboard, program pages with provenance + patching, run
 tuna compile <source-file>       # hash, ternary, size, steps; compile errors carry IR paths
 tuna eval <corpus-file>          # run a diff-corpus entry (program+args+fuel+cap)
 tuna eval-compiled <ternary> [args...] [--fuel N] [--cap N]
+tuna eval-source <source-file> [arg-terms...] [--fuel N] [--cap N] [--semantics S]
 ```
+
+Source compiles resolve names against the frozen stdlib
+(`stdlib/v1/trees`, borg/local.borg L1), as a server does for an
+identity with no defs, and print a `lock <name> <sha256>` line per
+std name used. No server or database is needed.
 
 ### JSON API (bearer auth on everything; 401/400/403/404/409 by case)
 
