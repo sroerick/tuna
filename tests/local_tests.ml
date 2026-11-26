@@ -138,17 +138,22 @@ let test_store_chain () =
   Alcotest.(check (result unit string)) "chain verifies" (Ok ()) (LS.verify st);
   let o = LS.ops st in
   Alcotest.(check int) "three effect ops" 3 (List.length o);
+  Alcotest.(check string) "genesis predecessor" LS.genesis (List.hd o).LS.prev_hash;
   let last = List.nth o 2 in
   Alcotest.(check (option string)) "undef is the marker put"
     (Some LS.undef_marker) last.LS.value_hash;
   Alcotest.(check bool) "undef carries the prev binding" true
-    (last.LS.prev_hash <> None);
+    (last.LS.prev_value_hash <> None);
+  ignore (run st "def not (lambda (b) (not b))");
+  let redef = List.nth (LS.ops st) 3 in
+  Alcotest.(check (option string)) "a def after undef names the marker"
+    (Some LS.undef_marker) redef.LS.prev_value_hash;
   Alcotest.(check (option int64)) "per-path version" (Some 2L) last.LS.version;
-  Alcotest.(check (list string)) "dict is the fold" [ "inc" ]
+  Alcotest.(check (list string)) "dict is the fold" [ "inc"; "not" ]
     (List.map fst (LS.dict_hashes st));
   (* reopen: same identity, same state; a second identity is refused *)
   let st2 = LS.open_ st.LS.root in
-  Alcotest.(check (list string)) "persists" [ "inc" ] (List.map fst (LS.dict_hashes st2));
+  Alcotest.(check (list string)) "persists" [ "inc"; "not" ] (List.map fst (LS.dict_hashes st2));
   (match LS.open_ ~identity:"other" st.LS.root with
    | _ -> Alcotest.fail "a directory holds one identity"
    | exception Failure _ -> ());
@@ -160,6 +165,49 @@ let test_store_chain () =
   match LS.verify st with
   | Ok () -> Alcotest.fail "tampered log must not verify"
   | Error _ -> ()
+
+(* L6 pushes ops.jsonl as a federation window: every row must parse with
+   the server's own window parser and verify with the store's chain walk *)
+let test_window_rows () =
+  let st = LS.open_ (fresh_dir ()) in
+  ignore (run st "def inc (lambda (x) (int-add x 1))");
+  ignore (run st "undef inc");
+  let lines =
+    In_channel.with_open_bin (Filename.concat st.LS.root "ops.jsonl")
+      In_channel.input_all
+    |> String.split_on_char '\n' |> List.filter (( <> ) "")
+  in
+  let rows =
+    List.map
+      (fun l ->
+        match Tuna_server.Api.parse_tree_op_json (Yojson.Basic.from_string l) with
+        | Ok (o, prev) -> { Tuna_store.Store.w_op = o; w_prev_hash = prev }
+        | Error e -> Alcotest.failf "window parser refused %s: %s" l e)
+      lines
+  in
+  Alcotest.(check int) "two rows" 2 (List.length rows);
+  match Tuna_store.Store.verify_window_rows rows with
+  | `Ok -> ()
+  | `Bad e -> Alcotest.failf "store chain walk refused the local log: %s" e
+
+(* a crash mid-append leaves a fragment with no newline: ignored on
+   read, dropped by the next append, chain intact *)
+let test_torn_line () =
+  let st = LS.open_ (fresh_dir ()) in
+  ignore (run st "def a 1");
+  let p = Filename.concat st.LS.root "ops.jsonl" in
+  Out_channel.with_open_gen [ Open_append; Open_binary ] 0o600 p (fun oc ->
+      Out_channel.output_string oc "{\"seq\":");
+  Alcotest.(check (list string)) "fragment ignored" [ "a" ] (List.map fst (LS.dict_hashes st));
+  ignore (run st "def b 2");
+  Alcotest.(check (result unit string)) "chain intact" (Ok ()) (LS.verify st);
+  Alcotest.(check int) "two committed rows" 2 (List.length (LS.ops st));
+  (* a corrupt COMMITTED line is an error value, not a crash *)
+  Out_channel.with_open_gen [ Open_append; Open_binary ] 0o600 p (fun oc ->
+      Out_channel.output_string oc "not json\n");
+  match LR.execute st opts "dict" with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "a corrupt log must answer an error"
 
 let test_repl_rounds () =
   let st = LS.open_ (fresh_dir ()) in
@@ -175,6 +223,18 @@ let test_repl_rounds () =
   Alcotest.(check string) "list-length 3" "1110" o.LR.ternary;
   Alcotest.(check string) "get addresses the last result" "110"
     (run st "get 0").LR.ternary;
+  (* a round with no result becomes the last round, as on the server *)
+  let starved = { opts with LR.fuel = 5; inputs = [ (compile "[1 2 3]").Bracket.tree ] } in
+  (match LR.execute st starved "(lambda (xs) (list-length xs))" with
+   | Ok o -> Alcotest.(check (option string)) "starved" (Some "fuel_exhausted") o.LR.status
+   | Error e -> Alcotest.failf "starved round: %s" e);
+  (match LR.execute st opts "get 0" with
+   | Error e -> Alcotest.(check string) "get after no result" "last round produced no result tree" e
+   | Ok _ -> Alcotest.fail "get must not reach past a resultless round");
+  (* a hash argument is never a file path *)
+  (match LR.execute st opts "first-diff ../identity ../identity" with
+   | Error e -> Alcotest.(check string) "path-like hash" "unknown program hash ../identity" e
+   | Ok _ -> Alcotest.fail "a non-hash must not resolve");
   (match LR.execute st opts "eval nosuchname" with
    | Error e -> Alcotest.(check bool) "compile error text" true
                   (String.length e > 14 && String.sub e 0 14 = "compile error:")
@@ -192,4 +252,6 @@ let () =
       ( "l2-local-repl",
         [ Alcotest.test_case "op chain formula = Store.op_concat" `Quick test_op_concat;
           Alcotest.test_case "store: chain, fold, identity, tamper" `Quick test_store_chain;
+          Alcotest.test_case "log rows = federation window rows" `Quick test_window_rows;
+          Alcotest.test_case "torn final line, corrupt line" `Quick test_torn_line;
           Alcotest.test_case "rounds: std, shadow, undef, get, errors" `Quick test_repl_rounds ] ) ]

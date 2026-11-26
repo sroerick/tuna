@@ -39,26 +39,29 @@
       compile error offline and online. |))))
   (subsection l2-local-repl
    (status implemented)
-   (* agent note (|2026-11-25 L2 IMPLEMENTED (branch tuna-local-l2; merged after review). CODE: repl/lib (library tuna_repl, pure): Repl_core holds the command grammar, parse_command, lock_of and compile_with_dict moved out of server/lib/repl_cmd.ml, which now includes it (Tuna_server.Repl_cmd names unchanged); Patch moved from server/lib, which re-exports it. local/lib (library tuna_local): Local_store (identity file, values/<sha256>, ops.jsonl in the tree_ops row shape chained by a copy of Store.op_concat that a test pins equal, last) and Local_repl (rounds as Repl_cmd.execute: eval/def compile against own defs over the frozen std, run on the round's inputs and move last; undef puts the zero-length-bytes marker; get/patch/first-diff/dict structural). cli: tuna repl [--dir D] [--identity N] [--input TERM]... [--fuel N] [--cap N] [--semantics S], one command per stdin line, default dir $TUNA_LOCAL_DIR or $XDG_DATA_HOME/tuna, the server REPL's 1e6 fuel/size defaults, exit 1 if any round failed. A directory holds one identity (fixed at creation). Prim calls are not answered locally yet (L3). EVIDENCE: dune build --root . @all exit 0; dune runtest --root . exit 0 with PG up on an isolated instance (1003 OK, 0 FAIL; store, repl, fed, deriv suites ran); tests/local_tests.ml l2 suite 3/3 (op chain formula = Store.op_concat on three rows incl. NULL fields; chain verifies, per-path versions, the dict fold, undef marker with prev_hash, one identity per directory, a tampered row fails verify; rounds: std, own shadow, undef restores std, get on the last result, compile and grammar errors); scripts/verify-18-local.sh ACCEPT 18 OK - 18.2: a 15-round transcript (def, eval with and without inputs incl. a 517-step round, get, a bad path, a def shadowing std not, undef, an unbound name, an unknown command, dict) gives the same kind, status, result hash, steps, lock and dict rows through tuna repl and /api/repl, errors with the same message. The server REPL refactor re-verified live: verify-8, -12, -15, -1, -3, -16 exit 0.|) *)
+   (* agent note (|2026-11-25 L2 IMPLEMENTED (branch tuna-local-l2; merged after review). CODE: repl/lib (library tuna_repl, pure): Repl_core holds the command grammar, parse_command, lock_of and compile_with_dict moved byte-for-byte out of server/lib/repl_cmd.ml, which now includes it (Tuna_server.Repl_cmd names unchanged); Patch moved from server/lib, which re-exports it. local/lib (library tuna_local): Local_store (identity file; values/<sha256>, a non-hash name never read as a path; ops.jsonl rows = federation window rows plus local prev_value_hash, chained by a copy of Store.op_concat; last = result hash or "-" for a resultless round; a lockf'd lock held for each round; appends are one write + fsync, an uncommitted final fragment is ignored and truncated by the next append) and Local_repl (rounds as Repl_cmd.execute: eval/def compile against own defs over the frozen std; eval runs on the round's inputs and fuel, def on none with the server's fixed 1e6; every eval/def round becomes the last round, with or without a result; undef puts the zero-length-bytes marker; get/patch/first-diff/dict structural; every failure an error value). cli: tuna repl [--dir D] [--identity N] [--input TERM]... [--fuel N] [--cap N] [--semantics S], one command per stdin line, the server REPL's 1e6 defaults, exit 1 if any round failed, exit 2 on a bad flag or directory. A directory holds one identity (fixed at creation). Prim calls are not answered locally yet (L3). Known, documented differences that no round's answer shows (local_repl.ml header): get/first-diff by hash read the local value store, compile is untimed, --input is a source term, dict is byte-ordered, error texts carry no server run id. REVIEW (Fable, request changes) taken: rows now parse with Api.parse_tree_op_json and walk with Store.verify_window_rows (ints, window prev_hash; the local binding field renamed prev_value_hash here and in L5/L6); resultless rounds move last; lock, fsync and torn-line handling; hash validation; def fuel; CLI flag values; 18.2 runs as a minted identity with exact error equality. EVIDENCE: dune build --root . @all exit 0; dune runtest --root . exit 0 with PG up on an isolated instance (1005 OK, 0 FAIL); tests/local_tests.ml l2 suite 5/5 (op chain formula = Store.op_concat; chain, versions, fold, undef marker, redef after undef names the marker, one identity per directory, tamper; log rows through the server's window parser and chain walk; torn final line and corrupt committed line; rounds incl. a fuel-starved round then get, and a path-like hash); scripts/verify-18-local.sh ACCEPT 18 OK as a fresh identity - 18.1 21/21, 18.2 20/20 rounds (def, eval with and without inputs incl. 517 steps, a fuel-5 round, get on last and by hash, a successful patch, first-diff, a def shadowing std not, undef, an unbound name, an unknown command, dict) with the same kind, status, result hash, steps, lock, dict rows and error text through tuna repl and /api/repl. The server REPL refactor re-verified live: verify-8, -12, -15 (and earlier -1, -3, -16) exit 0.|) *)
    (details
     (doc (|
       `tuna repl` runs the REPL command grammar (eval, def, undef, get,
-      dict, first-diff; a bare term evaluates) against a local
-      directory, default ~/.local/share/tuna, never a database. Values
+      patch, dict, first-diff; a bare term evaluates) against a local
+      directory, default $TUNA_LOCAL_DIR, else $XDG_DATA_HOME/tuna,
+      else ~/.local/share/tuna, never a database. Values
       live in a content-addressed directory (one file per tree, named
       by its sha256). The grammar and resolution order are shared code,
       not a copy: Repl_cmd's parse and dictionary assembly are factored
       away from the store so server and CLI call one implementation.
 
-      The local store keeps one append-only op log in the tree_ops row
-      shape from the start (every field Store.tree_op_concat hashes -
-      seq, path, op, value_hash, prev_version, version, actor, ts - plus
-      op_hash, chained as Store computes it, genesis 64 zeros), so L6 can
-      push it as a federation ops window with no conversion. A def is a
-      put at dict/<identity>/<name>; an undef is a put of the undef
-      marker (L5). Each dict row also carries a LOCAL-ONLY prev_hash
-      (the value hash the name held before), outside the chained
-      fields: apply does not carry it, so it serves the laptop's own
+      The local store keeps one append-only op log whose rows are
+      federation WINDOW rows from the start (the JSON of GET
+      /api/fed/ops: every field Store.tree_op_concat hashes - seq, path,
+      op, value_hash, prev_version, version, actor, ts, as the window's
+      types - plus op_hash and prev_hash, the previous row's op_hash;
+      chained as Store computes it, genesis 64 zeros), so L6 can push it
+      with no conversion. A def is a put at dict/<identity>/<name>; an
+      undef is a put of the undef marker (L5). Each dict row also
+      carries a LOCAL-ONLY prev_value_hash (the value hash the name
+      held before, the undef marker included), outside the chained
+      fields: apply ignores it, so it serves the laptop's own
       divergence report. The current dictionary is the fold of the
       log. Hashes, not versions, because only hashes mean the same
       thing on two instances.
@@ -141,8 +144,8 @@
       resolved. It is found by comparison: for each name, the local
       dictionary and its synced copy on the server are compared by
       hash, and a mismatch is reported with both hashes and the
-      laptop's local prev_hash (L2; the server keeps none across
-      apply).
+      laptop's local prev_value_hash (L2; the server keeps none
+      across apply).
 
       L5 lands together with the dictionary-visibility read filter (L6),
       never before it, so no release serves dictionaries publicly by
@@ -242,9 +245,9 @@
       guidance at the client, not enforcement; the enforcement is the
       server's per-peer authz (a peer writes only ns/<peer>/...).
 
-      The divergence report's prev_hash is the laptop's own (L2); the
-      server side reports only its current hash, since apply does not
-      carry prev_hash.
+      The divergence report's prev_value_hash is the laptop's own (L2);
+      the server side reports only its current hash, since apply does
+      not carry it.
 
       ACCEPTANCE: an offline def and run on a laptop, then push: the
       def appears at ns/<laptop>/dict/... with the same hash, the

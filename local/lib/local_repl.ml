@@ -5,8 +5,18 @@
 
    Rounds mirror Tuna_server.Repl_cmd.execute: eval and def compile,
    run the program on the round's inputs (a def round runs with none)
-   and become the session's last result; undef, get, patch, first-diff
-   and dict are structural.  Prim calls are not answered here (L3). *)
+   and become the session's last round (with or without a result
+   tree); undef, get, patch, first-diff and dict are structural.  Prim
+   calls are not answered here (L3).
+
+   Known differences from the server, none visible in a round's answer
+   for the same transcript: get/first-diff by hash look in the local
+   value store (programs and results alike; the server looks up
+   programs only); compile is untimed (the server's
+   TUNA_COMPILE_MAX_SECONDS is operator policy); --input takes a source
+   term (a raw tree is %<ternary>); dict lists names in byte order (the
+   server in its database collation); error texts that name a server
+   run id have no id here. *)
 
 module B = Tuna_compiler.Bracket
 module C = Tuna_repl.Repl_core
@@ -48,22 +58,24 @@ let status_of = function
 let effective_dictionary st = Tuna_stdlib.Std_dict.dictionary () @ S.dict st
 
 (* compile, store the program, run it, store the result, move [last] *)
-let round st opts ~kind ~inputs src =
+let round st opts ?(fuel = opts.fuel) ?(size_cap = opts.size_cap) ~kind ~inputs src =
   let dictionary = effective_dictionary st in
   let art, _counts, lock = C.compile_with_dict ~dictionary src in
   let phash = S.put_value st art.B.tree in
   let status, result, steps =
     status_of
-      (Tuna_interp.Eval.eval ~fuel:opts.fuel ~size_cap:opts.size_cap
+      (Tuna_interp.Eval.eval ~fuel ~size_cap
          ~mode:opts.mode ?accel:opts.accel ~program:art.B.tree inputs)
   in
   let ternary, hash =
     match result with
     | Some t ->
         let h = S.put_value st t in
-        S.set_last st h;
+        S.set_last st (Some h);
         (Tuna.Canon.encode t, h)
-    | None -> ("", "")
+    | None ->
+        S.set_last st None;
+        ("", "")
   in
   (art, outcome ~status ~program_hash:phash ~ternary ~hash ~steps ~lock kind)
 
@@ -74,8 +86,9 @@ let base_tree st = function
       | None -> Error (Printf.sprintf "unknown program hash %s" h))
   | None -> (
       match S.last st with
-      | None -> Error "no previous round yet — eval something first"
-      | Some h -> (
+      | S.No_round -> Error "no previous round yet — eval something first"
+      | S.No_result -> Error "last round produced no result tree"
+      | S.Result h -> (
           match S.get_value st h with
           | Some t -> Ok (t, Some h)
           | None -> Error (Printf.sprintf "last result %s is missing" h)))
@@ -84,7 +97,10 @@ let exec st opts (cmd : C.command) : (outcome, string) result =
   match cmd with
   | C.Eval src -> Ok (snd (round st opts ~kind:"eval" ~inputs:opts.inputs src))
   | C.Def (name, src) ->
-      let art, o = round st opts ~kind:"def" ~inputs:[] src in
+      (* the server's def round: no inputs, fixed 1e6 fuel and size *)
+      let art, o =
+        round st opts ~fuel:1_000_000 ~size_cap:1_000_000 ~kind:"def" ~inputs:[] src
+      in
       S.bind st ~name ~value_hash:art.B.hash_hex;
       Ok
         { o with ternary = art.B.ternary; hash = art.B.hash_hex;
@@ -175,16 +191,18 @@ let exec st opts (cmd : C.command) : (outcome, string) result =
            ~note:(if rows = [] then "dictionary is empty" else "dictionary entries")
            "dict")
 
-(* parse + execute; compile errors are values, as on the server *)
+(* parse + execute under the directory lock; every failure is a value,
+   as on the server (Repl_cmd.execute catches everything) *)
 let execute st opts line : (outcome, string) result =
   match C.parse_command line with
   | exception C.Parse_error msg -> Error msg
   | cmd -> (
-      try exec st opts cmd with
+      try S.with_lock st (fun () -> exec st opts cmd) with
       | Tuna_compiler.Ir.Error (p, msg) ->
           Error ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
       | B.Compile_failed msg -> Error ("compile failed: " ^ msg)
-      | Failure msg -> Error msg)
+      | Failure msg -> Error msg
+      | e -> Error (Printexc.to_string e))
 
 (* key-value rendering, one field per line (as `tuna compile`) *)
 let render (o : outcome) =

@@ -166,12 +166,18 @@ let eval_source_cmd argv off =
 let repl_cmd argv off =
   let dir = ref None and identity = ref None and inputs = ref [] in
   let rest = ref [] in
+  let value i =
+    if i + 1 < Array.length argv then argv.(i + 1)
+    else (prerr_endline ("repl: " ^ argv.(i) ^ " needs a value"); exit 2)
+  in
   let rec go i =
     if i < Array.length argv then
       match argv.(i) with
-      | "--dir" -> dir := Some argv.(i + 1); go (i + 2)
-      | "--identity" -> identity := Some argv.(i + 1); go (i + 2)
-      | "--input" -> inputs := argv.(i + 1) :: !inputs; go (i + 2)
+      | "--dir" -> dir := Some (value i); go (i + 2)
+      | "--identity" -> identity := Some (value i); go (i + 2)
+      | "--input" -> inputs := value i :: !inputs; go (i + 2)
+      | ("--fuel" | "--cap" | "--semantics") as f ->
+          ignore (value i); rest := argv.(i + 1) :: f :: !rest; go (i + 2)
       | a -> rest := a :: !rest; go (i + 1)
   in
   go off;
@@ -184,10 +190,15 @@ let repl_cmd argv off =
   let has f = Array.exists (( = ) f) flags in
   let fuel = if has "--fuel" then fuel else 1_000_000 in
   let cap = if has "--cap" then cap else 1_000_000 in
-  let root = Option.value !dir ~default:(Tuna_local.Local_store.default_root ()) in
   let st =
-    try Tuna_local.Local_store.open_ ?identity:!identity root
-    with Failure msg -> prerr_endline ("repl: " ^ msg); exit 2
+    try
+      let root =
+        match !dir with
+        | Some d -> d
+        | None -> Tuna_local.Local_store.default_root ()
+      in
+      Tuna_local.Local_store.open_ ?identity:!identity root
+    with Failure msg | Sys_error msg -> prerr_endline ("repl: " ^ msg); exit 2
   in
   let inputs = List.rev_map (fun t -> (fst (compile_std t)).tree) !inputs in
   let opts = { Tuna_local.Local_repl.fuel; size_cap = cap; mode; accel; inputs } in

@@ -121,11 +121,13 @@ tuna repl [--dir D] [--identity N] [--input TERM]... [--fuel N] [--cap N] [--sem
 
 The REPL grammar of `/api/repl` (`eval`/`def`/`undef`/`get`/`patch`/
 `first-diff`/`dict`; a bare term evaluates) over a local directory
-(default `$TUNA_LOCAL_DIR`, else `~/.local/share/tuna`): one command per
+(default `$TUNA_LOCAL_DIR`, else `$XDG_DATA_HOME/tuna`, else
+`~/.local/share/tuna`): one command per
 stdin line, one `key value` block per round. Definitions are an
-append-only, hash-chained op log (`ops.jsonl`, the server's tree_ops row
-shape) over content-addressed values, so a later sync can push them as
-a federation ops window (borg/local.borg L2, L6).
+append-only, hash-chained op log (`ops.jsonl`, rows in the federation
+window shape of `GET /api/fed/ops`) over content-addressed values, so a
+later sync can push them unchanged (borg/local.borg L2, L6). One round
+runs at a time per directory (a lock file).
 
 ### JSON API (bearer auth on everything; 401/400/403/404/409 by case)
 
