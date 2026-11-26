@@ -74,13 +74,23 @@ let read_file p =
   Fun.protect ~finally:(fun () -> close_in ic) (fun () ->
       really_input_string ic (in_channel_length ic))
 
-(* write-then-rename, so a crash never leaves a half-written file *)
+(* write, fsync, rename: a crash never leaves a half-written or empty
+   file under the final name *)
 let write_file p s =
   let tmp = Printf.sprintf "%s.%d.tmp" p (Unix.getpid ()) in
-  let oc = open_out_bin tmp in
-  output_string oc s;
-  close_out oc;
+  let fd = Unix.openfile tmp [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o600 in
+  Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+      let b = Bytes.of_string s in
+      if Unix.write fd b 0 (Bytes.length b) <> Bytes.length b then
+        failwith (p ^ ": short write");
+      Unix.fsync fd);
   Sys.rename tmp p
+
+let lock_file root f =
+  let fd = Unix.openfile (Filename.concat root "lock") [ Unix.O_RDWR; Unix.O_CREAT ] 0o600 in
+  Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
+      Unix.lockf fd Unix.F_LOCK 0;
+      f ())
 
 let default_root () =
   match Sys.getenv_opt "TUNA_LOCAL_DIR" with
@@ -99,6 +109,7 @@ let default_root () =
    never mixes two identities' dict paths. *)
 let open_ ?identity root =
   mkdir_p (root / "values");
+  lock_file root @@ fun () ->
   let idf = root / "identity" in
   let stored =
     if Sys.file_exists idf then Some (String.trim (read_file idf)) else None
@@ -245,11 +256,7 @@ let append t ~path ~op ~value_hash ?prev_value_hash () : op =
   o
 
 (* run [f] holding the directory's lock (one round at a time) *)
-let with_lock t f =
-  let fd = Unix.openfile (t.root / "lock") [ Unix.O_RDWR; Unix.O_CREAT ] 0o600 in
-  Fun.protect ~finally:(fun () -> Unix.close fd) (fun () ->
-      Unix.lockf fd Unix.F_LOCK 0;
-      f ())
+let with_lock t f = lock_file t.root f
 
 (* -- the dictionary: a fold of dict/<identity>/ puts --------------------- *)
 
