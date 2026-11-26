@@ -6,8 +6,11 @@
    Rounds mirror Tuna_server.Repl_cmd.execute: eval and def compile,
    run the program on the round's inputs (a def round runs with none)
    and become the session's last round (with or without a result
-   tree); undef, get, patch, first-diff and dict are structural.  Prim
-   calls are not answered here (L3).
+   tree); undef, get, patch, first-diff and dict are structural.  An
+   eval or def round that runs answers prims through Local_run under
+   the session's grants, so a prim answers as it does in `tuna run`.
+   The round seals no record: L2's op log keeps one row per dictionary
+   effect.
 
    Known differences from the server, none visible in a round's answer
    for the same transcript: get/first-diff by hash look in the local
@@ -20,6 +23,7 @@
 
 module B = Tuna_compiler.Bracket
 module C = Tuna_repl.Repl_core
+module D = Tuna_deriv.Deriv
 module P = Tuna_repl.Patch
 module S = Local_store
 
@@ -42,42 +46,46 @@ let outcome ?status ?program_hash ?(note = "") ?(dict_rows = []) ?(ternary = "")
 type run_opts = {
   fuel : int;
   size_cap : int;
-  mode : Tuna_interp.Eval.mode;
-  accel : Tuna_interp.Accel.registry option;
+  semantics : string;
+  grants : string list;  (* prim names, "*" = any; see Local_run *)
+  allow_hosts : string list;  (* http/get egress *)
   inputs : Tuna.Tree.t list;
 }
-
-let status_of = function
-  | Tuna_interp.Eval.Normal (t, s) -> ("normal", Some t, s)
-  | Tuna_interp.Eval.Loop s -> ("loop", None, s)
-  | Tuna_interp.Eval.Fuel_exhausted s -> ("fuel_exhausted", None, s)
-  | Tuna_interp.Eval.Size_exhausted s -> ("size_exhausted", None, s)
-  | Tuna_interp.Eval.Deadline_exceeded s -> ("deadline_exceeded", None, s)
 
 (* own defs over std: the compiler is last-wins, so own rows go LAST *)
 let effective_dictionary st = Tuna_stdlib.Std_dict.dictionary () @ S.dict st
 
-(* compile, store the program, run it, store the result, move [last] *)
+(* compile, store the program, run it under the session's grants, store
+   the result, move [last] *)
 let round st opts ?(fuel = opts.fuel) ?(size_cap = opts.size_cap) ~kind ~inputs src =
   let dictionary = effective_dictionary st in
   let art, _counts, lock = C.compile_with_dict ~dictionary src in
   let phash = S.put_value st art.B.tree in
-  let status, result, steps =
-    status_of
-      (Tuna_interp.Eval.eval ~fuel ~size_cap
-         ~mode:opts.mode ?accel:opts.accel ~program:art.B.tree inputs)
+  let cfg =
+    { Local_run.grants = opts.grants; allow_hosts = opts.allow_hosts;
+      semantics = opts.semantics; fuel; size_cap }
   in
-  let ternary, hash =
-    match result with
+  let e = Local_run.eval_run st cfg ~program:art.B.tree inputs in
+  let steps = e.Local_run.ev_steps in
+  let status, ternary =
+    match e.Local_run.ev_status with
+    | D.Normal -> ("normal", e.Local_run.ev_result_ternary)
+    | D.Loop -> ("loop", None)
+    | D.Fuel_exhausted -> ("fuel_exhausted", None)
+    | D.Size_exhausted -> ("size_exhausted", None)
+    | D.Error -> ("error", None)
+  in
+  let hash =
+    match e.Local_run.ev_result with
     | Some t ->
         let h = S.put_value st t in
         S.set_last st (Some h);
-        (Tuna.Canon.encode t, h)
+        h
     | None ->
         S.set_last st None;
-        ("", "")
+        ""
   in
-  (art, outcome ~status ~program_hash:phash ~ternary ~hash ~steps ~lock kind)
+  (art, outcome ~status ~program_hash:phash ?ternary ~hash ~steps ~lock kind)
 
 let base_tree st = function
   | Some h -> (

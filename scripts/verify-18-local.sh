@@ -18,7 +18,11 @@
 #        result hash, steps, lock and dict rows, and failed rounds fail
 #        with the SAME message (one normalization: the server names its
 #        run id in "last round (<id>) produced no result tree").
-#   Both checks run as a freshly minted non-admin identity.
+#   18.3 L3 LOCAL RUNS - tuna run with a granted prim, under v0, v1 and
+#        fast1-fast3, seals a record tools/deriv-check verifies with no
+#        server; and records the SERVER seals for fast1-fast3 runs verify
+#        offline too (the checker's registry step).
+#   18.1 and 18.2 run as a freshly minted non-admin identity.
 #
 # Env: as scripts/verify-lib.sh (a live dev server; TUNA_HTTP_PORT,
 # TUNA_SMOKE_TOKEN or the dev boot token).
@@ -194,5 +198,32 @@ for i, (cmd, inputs, fuel) in enumerate(script):
           "same %s %s steps=%s" % (s[1]["kind"], s[1]["hash"][:8], s[1]["steps"])))
 print("  %d/%d rounds identical (kind, status, hash, steps, lock, dict)" % (len(script), len(script)))
 PY
+
+echo "[18.3] L3: local runs seal records deriv-check verifies; server fast* records verify too"
+dune build --root "$PWD" tools/deriv-check/deriv_check.exe 2>&1 | head -5
+DC=_build/default/tools/deriv-check/deriv_check.exe
+echo '(lambda (xs) [(runtime (prim "now")) (list-length xs)])' > "$LDIR/r.sabra"
+for sem in v0 v1 fast1 fast2 fast3; do
+  out=$("$CLI" run "$LDIR/r.sabra" '[1 2 3 4 5]' --dir "$LDIR/runs" --grant now \
+        --semantics $sem --fuel 10000000 --cap 10000000) || fail "18.3: local $sem run"
+  rec=$(sed -n 's/^record //p' <<<"$out")
+  "$DC" "$rec" >/dev/null || fail "18.3: deriv-check refused the local $sem record"
+done
+echo "  local v0 v1 fast1 fast2 fast3: records verify offline"
+# the same law for records the SERVER seals: before L3 the checker knew
+# only v0 and v1, so a fast* run's record could not be checked offline
+PH=$(python3 -c "import json,sys;print(json.dumps(open(sys.argv[1]).read()))" "$LDIR/r.sabra")
+PH=$(post_source "$PH")
+G=$(mint_grant now)
+echo '[1 2 3 4 5]' > "$LDIR/in.sabra"
+IN=$("$CLI" compile "$LDIR/in.sabra" | sed -n 's/^ternary //p')
+for sem in fast1 fast2 fast3; do
+  RID=$(curl -sf -m 300 -X POST -H "$AUTH" --data-binary \
+    "{\"program_hash\":\"$PH\",\"inputs\":[\"$IN\"],\"grants\":[\"$G\"],\"fuel\":10000000,\"size_cap\":10000000,\"semantics\":\"$sem\"}" \
+    $BASE/api/runs | jget "d['run']['id']") || fail "18.3: server $sem run"
+  curl -sf -m 60 -H "$AUTH" $BASE/api/runs/$RID/deriv > "$LDIR/srv-$sem.json" || fail "18.3: fetch $sem record"
+  "$DC" "$LDIR/srv-$sem.json" >/dev/null || fail "18.3: deriv-check refused the server's $sem record"
+done
+echo "  server fast1 fast2 fast3: records verify offline"
 
 echo "ACCEPT 18 OK"
