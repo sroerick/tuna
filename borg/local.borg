@@ -119,7 +119,7 @@
       moves from the server rim into a library the CLI links; `--in
       TYPE` and `--out TYPE` take the same type grammar as POST
       /api/tool/run, written as one JSON value on the command line (for
-      example --out '{"record":{"exit":[1,"string"]}}'), so the CLI
+      example --out '{"record":{"count":[1,"int"]}}'), so the CLI
       adds no second grammar. Without a type the CLI keeps printing
       ternary, since trees are untyped and a guess would be wrong (leaf
       is false, nil and zero at once).
