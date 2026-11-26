@@ -241,7 +241,7 @@ let run_cmd argv off =
    failed round prints "error <msg>" and the session goes on; the exit
    status is 1 if any round failed, so a piped transcript is a check.
    Eval and def rounds answer prims under --grant/--allow-host, as
-   `tuna run` does, and seal a run record per round. *)
+   `tuna run` does, and seal no record, so L2's op log is unchanged. *)
 let repl_cmd argv off =
   let dir = ref None and identity = ref None and inputs = ref [] in
   let grants = ref [] and hosts = ref [] in

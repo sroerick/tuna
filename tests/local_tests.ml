@@ -384,7 +384,22 @@ let test_repl_prims () =
     with Not_found -> false
   in
   Alcotest.(check bool) "the denial text is the answer" true has_text;
-  Alcotest.(check int) "rounds seal no record" 0 (List.length (LS.ops st))
+  Alcotest.(check int) "rounds seal no record" 0 (List.length (LS.ops st));
+  (* a def round stores a closure; the prim fires when a later eval round
+     calls it, and the def adds exactly one dictionary row *)
+  ignore
+    (run_with [ "store/put" ]
+       {|def putk (lambda (x) (runtime (prim "store/put" "kd" x)))|});
+  let called = run_with [ "store/put" ] "eval putk" in
+  Alcotest.(check (option string)) "a defined prim answers when called"
+    (Some "normal") called.LR.status;
+  (match LS.kv_get st (key "kd") with
+   | Some t ->
+       Alcotest.(check string) "the defined prim ran"
+         (Hash.hex_of_tree (compile "42").Bracket.tree) (Hash.hex_of_tree t)
+   | None -> Alcotest.fail "the defined prim wrote nothing");
+  Alcotest.(check int) "one dictionary row, no run row" 1
+    (List.length (LS.ops st))
 
 (* the registry step: fast1-fast3 records verify offline, and the
    accelerator really fired (fewer steps than v0) *)
@@ -437,5 +452,5 @@ let () =
       ( "l3-local-prims",
         [ Alcotest.test_case "record verifies, server replay agrees, tamper fails" `Quick test_run_record;
           Alcotest.test_case "grants are arguments" `Quick test_run_denial;
-          Alcotest.test_case "repl rounds answer prims and seal chained records" `Quick test_repl_prims;
+          Alcotest.test_case "repl rounds answer prims and seal no record" `Quick test_repl_prims;
           Alcotest.test_case "v1 and fast1-fast3 records verify offline" `Quick test_run_semantics ] ) ]

@@ -8,8 +8,9 @@
    and become the session's last round (with or without a result
    tree); undef, get, patch, first-diff and dict are structural.  An
    eval or def round that runs answers prims through Local_run under
-   the session's grants, so it is journaled and sealed exactly like
-   `tuna run`; the round's run id chains to the previous round's.
+   the session's grants, so a prim answers as it does in `tuna run`.
+   The round seals no record: L2's op log keeps one row per dictionary
+   effect.
 
    Known differences from the server, none visible in a round's answer
    for the same transcript: get/first-diff by hash look in the local
