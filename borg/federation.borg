@@ -173,6 +173,77 @@
          other by id/hash without either store encoding the other's
          internals. PP is a client of the tree surface before it is a
          peer of the chain. |))))
+  (subsection dictionary-visibility
+   (status planned)
+   (details
+    (doc (|
+      A deliberate narrowing of the FED2 ops window: the LO2 instance
+      local.borg L5/L6 record, which must land with or before L5 and
+      never after.  A dictionary is private to its identity by
+      default, with a per-identity public option, so moving
+      definitions into tree_ops never widens who can read them.  The
+      window is already prefix-filtered; it also becomes
+      ownership-filtered.  No route, request field or query parameter
+      is added, and visibility is never a caller-supplied input: a
+      caller cannot ask to see a private row.  Until L5 writes dict/
+      rows, no row names a dictionary and the filter is a no-op;
+      shipping it early is therefore safe, and shipping L5 first is
+      not.
+
+      FILTER.  A window row names a dictionary when its path is
+      dict/<identity>/... or ns/<peer>/dict/<identity>/... .  A row
+      that names a dictionary is served only when the caller is that
+      identity, the caller is admin (identities.is_admin), or that
+      identity's dictionary visibility is public.  Every other row is
+      served exactly as FED2 serves it today: the filter removes rows
+      and never adds one.  A vis/ row (below) names no dictionary and
+      is served as an ordinary row.
+
+      SETTING.  Visibility is per identity and private when no setting
+      exists.  It changes only through the REPL command
+      dict-visibility public|private, run by that identity or an
+      admin; the journaled row's actor is the server-derived caller,
+      and the command refuses a caller who is neither the path's
+      identity nor an admin.  The command appends one op to the local
+      chain: op kind dict-visibility, path vis/<identity>/public or
+      vis/<identity>/private, no value hash (it carries no effect, so
+      fed apply lands it as a cas proof row like any other
+      non-effect).  The effective setting is the last such row by seq;
+      a past setting is the fold up to that seq, so a change is
+      auditable and rewindable from the log alone.  It is a LOCAL
+      setting: a vis/ row that arrives through fed apply lands under
+      ns/<peer>/vis/... and changes nothing here, so no peer can
+      publish another identity's dictionary.  The dict REPL command is
+      unchanged: it still lists only the caller's own rows, whatever
+      the visibility is.
+
+      PAGING AND VERIFICATION.  The ownership filter runs after the
+      seq window is read and after verify_window_rows, so
+      last_seq is the last row of the UNFILTERED window: a page still
+      advances past hidden rows, and a caller cannot use paging to
+      stall.  more reflects the unfiltered count, as FED2 defines it;
+      a page can therefore answer more:true with few or no visible
+      rows.  Chain verification is over the unfiltered window, so a
+      tampered hidden row still fails the page (verified:false, 500):
+      hidden rows are omitted, never trusted.  The fed-ops journal row
+      records the caller and the requested prefix as before.
+
+      NAMES, NOT TREES.  Values remain hash-gated reads (byte-values
+      law 2).  A private dictionary hides which names an identity
+      binds to which hashes, and its history; it does not hide a tree
+      whose hash has leaked.  A hidden row's prev_hash can still
+      confirm a guess about that row's fields; accepted, as local.borg
+      L6 states.  The section claims no more than that.
+
+      ACCEPTANCE: with identity A private, a pull by B at any prefix
+      contains no dict/A/... row, still answers verified:true (the
+      rows it does carry verify per row), and its last_seq advances
+      past the omitted rows; an admin pull carries them; after A runs
+      dict-visibility public, B's next pull carries them and still
+      verifies; a pull that selects no dictionary rows carries the
+      rows and last_seq FED2 would answer, with verified:true; a push
+      of vis/A/... by peer P lands at ns/P/vis/A/... and leaves A's
+      visibility unchanged. |))))
   (subsection pre-registered-failures
    (status implemented)
    (details
