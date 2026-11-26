@@ -22,6 +22,9 @@ TOKEN="${TUNA_SMOKE_TOKEN:-}"
 [ -n "$TOKEN" ] || TOKEN=$(sed -n 's/^TUNA_BOOTSTRAP_TOKEN=//p' "$DEV_DIR/server.log" 2>/dev/null | tail -1)
 [ -n "$TOKEN" ] || fail "no bearer token: set TUNA_SMOKE_TOKEN or boot the server (scripts/dev.sh start)"
 AUTH="Authorization: Bearer $TOKEN"
+# probes a verify script launches (scripts/dialect/*.py) use the same
+# token this preamble resolved, instead of guessing a dev dir of their own.
+export TUNA_SMOKE_TOKEN="$TOKEN"
 
 # every curl carries -m: a hung request must FAIL the script, not wedge
 # it (the server compiles synchronously; a pathological program can

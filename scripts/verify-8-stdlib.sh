@@ -164,23 +164,33 @@ curl -sf -m 300 -H "$AUTH" "$BASE/api/runs/$RUN_ID/deriv" | $DC - >/dev/null \
   && echo "[8.5] deriv-check exit 0 (sealed receipt verified offline)" \
   || fail "deriv-check failed on the balance run (steps=$STEPS)"
 
-echo "[8.6] core untouched (acceptance 6)"
-# stdlib v1 itself added no core change; the dialect chapter later
-# added reader sugar (compiler/lib/sexp.ml) + the int codec
-# (common/lib/int_enc.ml) DELIBERATELY, under its own 12.3 law.  What
-# must stay true forever: the interpreter is byte-identical, and the
-# compiler delta is exactly sexp.ml (no IR/bracket changes).
-BASELINE="${TUNA_STDLIB_BASELINE:-0185b1a}"
-if ! git diff --quiet "$BASELINE"..HEAD -- interpreter 2>/dev/null; then
-  git diff --stat "$BASELINE"..HEAD -- interpreter || true
-  fail "interpreter touched since $BASELINE"
-fi
-COMPILER_DELTA=$(git diff --name-only "$BASELINE"..HEAD -- compiler 2>/dev/null | tr '\n' ' ')
+echo "[8.6] no stdlib def needs a core change (acceptance 6)"
+# OWNER DECISION 2026-11-25 (roerick): acceptance 6 is read as the book
+# states it - the core was untouched IN the stdlib's landing commit, and
+# no stdlib def may NEED a core change.  It is not "the interpreter is
+# byte-identical forever": interpreter changes (the eval-modes
+# accelerators, the size-check fix) land under their own chapters and
+# tests.  What this gate proves instead: every stdlib entry of the
+# differential corpus evaluates on plain v0 to its checked-in result
+# under all three engines - tools/gen refeval, the Common Lisp twin
+# (shares no code with interpreter/), and the tuna CLI.  A stdlib def
+# that only worked because of a core change would fail the twin.
+# The compiler rule is unchanged: since f429d515 (def usage) the
+# compiler delta must be sexp.ml only (no IR/bracket changes).
+COMPILER_BASELINE="${TUNA_STDLIB_COMPILER_BASELINE:-f429d515}"
+git cat-file -e "$COMPILER_BASELINE^{commit}" 2>/dev/null \
+  || fail "compiler baseline $COMPILER_BASELINE is not a commit in this repository"
+NSTD=$(ls "$TUNA_ROOT"/scripts/diff-corpus/stdlib_*.corpus 2>/dev/null | wc -l)
+[ "$NSTD" -ge 60 ] || fail "only $NSTD stdlib corpus entries (expected >= 60)"
+DIFF_OUT=$(bash "$TUNA_ROOT/scripts/verify-differential.sh" 2>&1) \
+  || { echo "$DIFF_OUT" | tail -20 >&2; fail "differential harness red (a stdlib entry or another entry disagrees)"; }
+echo "[8.6] $NSTD stdlib corpus entries agree on v0 across refeval, CL twin and tuna CLI ($(echo "$DIFF_OUT" | tail -1))"
+COMPILER_DELTA=$(git diff --relative --name-only "$COMPILER_BASELINE"..HEAD -- compiler | tr '\n' ' ')
 case "$COMPILER_DELTA" in
   ""|"compiler/lib/sexp.ml ") : ;;
   *) echo "  compiler delta: $COMPILER_DELTA" >&2
-     fail "compiler delta must be sexp.ml only since $BASELINE" ;;
+     fail "compiler delta must be sexp.ml only since $COMPILER_BASELINE" ;;
 esac
-echo "[8.6] interpreter byte-identical; compiler delta = ${COMPILER_DELTA:-none}"
+echo "[8.6] compiler delta = ${COMPILER_DELTA:-none}"
 
 echo "verify-8-stdlib: green"

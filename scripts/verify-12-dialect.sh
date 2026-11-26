@@ -61,8 +61,10 @@ def tern(cmd):
     return json.load(urllib.request.urlopen(req))["round"]["ternary"]
 pairs = [
   ('{:state %10 :title "x"}', '[[key-state %10] [key-title "x"]]'),
+  # since dialect v0.3 a keyed literal is SORTED by key name, so the
+  # hand twin lists :when before :who (written order is irrelevant).
   ('{:state %10 :title "x" :who "me" :when 7}',
-   '[[key-state %10] [key-title "x"] [key-who "me"] [key-when 7]]'),
+   '[[key-state %10] [key-title "x"] [key-when 7] [key-who "me"]]'),
 ]
 for form, twin in pairs:
     a, b = tern(form), tern(twin)

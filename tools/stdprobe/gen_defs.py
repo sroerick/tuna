@@ -473,6 +473,124 @@ d("todo-open-count", lam("items",
         L("tree-eq", L("todo-state", L("todo-entry", "e")), "todo-open")))),
     "0", "items")))
 
+# ---- L6 combinators (borg/tool-language.borg T1, stdlib v1.2) ----
+#
+# Written from the textbook definitions, not copied from agora's
+# dictionary: acceptance is that each compiles to the hash agora
+# published (u.agora.claim.2026-10-30.computed.combinators.*).  K is
+# std true; the y-family is rec-fix (the compiler eta-normalises every
+# arity to the same tree), so neither gets a row.
+d("comb-i", lam("x", "x"))
+d("comb-s", lam("f", lam("g", lam("x", L(L("f", "x"), L("g", "x"))))))
+d("comb-b", lam("f", lam("g", lam("x", L("f", L("g", "x"))))))
+d("comb-c", lam("f", lam("x", lam("y", L(L("f", "y"), "x")))))
+d("comb-w", lam("f", lam("x", L(L("f", "x"), "x"))))
+
+# ---- L7 staged templates (borg/eval-modes.borg E1, stdlib v1.3) ----
+#
+# Compile is normal-form reduction, so (tmpl-compile "...") written in a
+# source parses the template at COMPILE time and leaves a renderer that
+# only appends.  The parse is the static work; the request pays for
+# appends, field lookups and escaping of the data.  Recursion sits in
+# tree-case arm bodies only (compile reduction is eager in argument
+# positions; see ref-fn), and two-way choices go through SEL so only
+# the chosen arm's recursion ever fires: SELV carries the operand
+# the recursion needs, and each arm recurses through its LAST
+# parameter (an arm that ignores its parameter compiles to K body, and
+# K body reduces eagerly - both arms would recurse), and the FIRST
+# argument of every recursive call is that parameter (self applied to
+# a closed first argument is a closed partial application, and compile
+# reduction unrolls it forever).
+#
+#   template  a string; {N} with one decimal digit N is a hole for the
+#             record field tagged #N, html-escaped; any other { is text
+#   segments  hole = stem tag, text = fork(leaf, string); adjacent text
+#             is coalesced at parse time
+def SELV(cond, x):  # true -> stem x, false -> fork x x (dispatch selector)
+    return L("if", L("%0", x), L("pair", x, x), cond)
+
+def CH(lit):     # the first char of a one-char string literal (a string
+    return L("first", lit)  # is a list; list-ref would answer an option)
+
+d("list-tail", lam("xs", dispatch("%0", lam("c", "%0"), lam("h", lam("t", "t")), "xs")))
+d("list-index-fn", lam("self", lam("xs", lam("x", lam("i",
+  dispatch("none",
+           lam("c", "none"),
+           lam("h", lam("t",
+             dispatch("%0",
+                      lam("u", L("some", "i")),
+                      lam("a", lam("t2", L("self", "t2", "x", L("%0", "i")))),
+                      SELV(L("tree-eq", "h", "x"), "t")))),
+           "xs"))))))
+d("list-index", lam("x", lam("xs", L(L("rec-fix", "list-index-fn"), "xs", "x", "%0"))))
+
+# html: & < > " ' (the reader has no string escapes, so " and ' come
+# from their code points: a char is the magnitude bit list of its int)
+d("html-esc-char", lam("c",
+  L("if", '"&amp;"',
+    L("if", '"&lt;"',
+      L("if", '"&gt;"',
+        L("if", '"&quot;"',
+          L("if", '"&#39;"', L("pair", "c", "%0"),
+            L("tree-eq", "c", L("second", "39"))),
+          L("tree-eq", "c", L("second", "34"))),
+        L("tree-eq", "c", CH('">"'))),
+      L("tree-eq", "c", CH('"<"'))),
+    L("tree-eq", "c", CH('"&"')))))
+d("html-escape", lam("s",
+  L("list-fold", lam("c", lam("acc", L("list-append", L("html-esc-char", "c"), "acc"))),
+    "%0", "s")))
+
+TEXT = lambda str_: L("pair", "%0", str_)
+d("tmpl-parse-fn", lam("self", lam("cs",
+  dispatch("%0",
+           lam("c", "%0"),
+           lam("c", lam("rest",
+             L(lam("pos",
+               dispatch("%0",
+                 # hole: {N}
+                 lam("r", L("pair",
+                   L("%0", dispatch("%0", lam("n", "n"), lam("a", lam("b", "%0")), "pos")),
+                   L("self", L("list-tail", L("list-tail", "r"))))),
+                 # text: one char, coalesced into the next text segment
+                 lam("a", lam("r",
+                   L(lam("segs",
+                     dispatch(L("pair", TEXT(L("pair", "c", "%0")), "%0"),
+                              lam("z", "%0"),
+                              lam("s0", lam("more",
+                                dispatch("%0",
+                                         lam("t", L("pair", TEXT(L("pair", "c", "%0")), "segs")),
+                                         lam("z", lam("str", L("pair", TEXT(L("pair", "c", "str")), "more"))),
+                                         "s0"))),
+                              "segs")),
+                     L("self", "r")))),
+                 SELV(L("bool-and", L("tree-eq", "c", CH('"{"')),
+                       L("bool-and", L("is-stem", "pos"),
+                         L("tree-eq", L("first", L("list-tail", "rest")), CH('"}"')))), "rest"))),
+               L("list-index", L("first", "rest"), '"0123456789"')))),
+           "cs"))))
+d("tmpl-parse", L("rec-fix", "tmpl-parse-fn"))
+
+d("tmpl-build-fn", lam("self", lam("segs",
+  dispatch(lam("dd", "%0"),
+           lam("c", "%0"),
+           lam("s", lam("more",
+             L(lam("r",
+               dispatch("%0",
+                        lam("tag", lam("dd", L("list-append",
+                          L("html-escape", L("rec-val", "tag", "dd")), L("r", "dd")))),
+                        lam("z", lam("str", lam("dd", L("list-append", "str", L("r", "dd"))))),
+                        "s")),
+               L("self", "more")))),
+           "segs"))))
+d("tmpl-build", L("rec-fix", "tmpl-build-fn"))
+
+# the vocabulary: compile a template string to a renderer record -> string,
+# and render a list of records through one renderer
+d("tmpl-compile", lam("t", L("tmpl-build", L("tmpl-parse", "t"))))
+d("tmpl-each", lam("f", lam("xs",
+  L("list-fold", lam("x", lam("acc", L("list-append", L("f", "x"), "acc"))), "%0", "xs"))))
+
 json.dump(defs, open("/tmp/stdlib_defs.json", "w"))
 print(len(defs), "defs ok")
 

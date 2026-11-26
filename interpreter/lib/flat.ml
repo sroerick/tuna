@@ -63,6 +63,19 @@ type frame =
   | KFinish of t * t * int
       (* close a gated firing (f, c, tick0) exactly once its whole
          dispatch subtree has produced an answer *)
+  | KAccelPartial of Accel.entry * t list
+      (* fast1 (borg/eval-modes.borg E2): the value about to be
+         delivered is a registered function applied to these args;
+         remember it so its next application can run natively *)
+  | KEach of t * t list * t list * t list * Accel.finish
+      (* fast2 plan: fn, xs still to apply it to, results so far
+         (reversed), all xs, what to do with the results *)
+  | KFoldBack of t list
+      (* fast2 list-fold: partials still to apply, innermost first;
+         the delivered value is the accumulator *)
+  | KThen of (t -> Accel.answer)
+      (* fast3 continuation plan (borg/eval-modes.borg E3): the
+         delivered value is the scheduled application's; continue *)
 
 type mode = Prim_eval.mode = Canonical | Sharing
 
@@ -96,6 +109,8 @@ type machine = {
 ; size_cap : int
 ; mutable sharing : sharing option
 ; trace : Prim_eval.trace option
+; accel : Accel.state option
+      (* fast1 accelerators; None under v0/v1 (no change to either law) *)
 }
 
 (* -- physical-node digest cache (same content law as the memo keys) --- *)
@@ -120,8 +135,10 @@ let rec digest_of s (t : t) =
 
 (* -- start ------------------------------------------------------------- *)
 
-let start ?(mode = Canonical) ?trace ?(garden = []) ~fuel ~size_cap ~program
-    ~args () =
+(* the machine constructor; [start] (end of file) is the public entry
+   that prepares accelerator state first *)
+let start_core ?(mode = Canonical) ?trace ?(garden = []) ?accel ~fuel ~size_cap
+    ~program ~args () =
   let sharing =
     match mode with
     | Canonical -> None
@@ -160,6 +177,7 @@ let start ?(mode = Canonical) ?trace ?(garden = []) ~fuel ~size_cap ~program
     ; size_cap
     ; sharing
     ; trace
+    ; accel
     }
   in
   if size program > size_cap || List.exists (fun a -> size a > size_cap) args
@@ -185,6 +203,11 @@ let result m = m.done_
    firings rendered as (fun_hex, arg_hex, result_ternary) for
    persistence.  The core computes; the driver persists.  Both are
    no-ops / empty under Canonical mode. *)
+(* fast1 bookkeeping: accelerated calls answered natively, and calls a
+   native declined (rewritten as v0 instead) *)
+let accel_calls m = match m.accel with Some st -> st.Accel.calls | None -> 0
+let accel_declines m = match m.accel with Some st -> st.Accel.declines | None -> 0
+
 let garden_hits m =
   match m.sharing with Some s -> s.garden_hits | None -> 0
 
@@ -326,6 +349,46 @@ let share_finish m a c ~tick0 r =
                "prim answered inside; re-executes"
          | None -> ())
 
+(* Sizes of large subtrees, cached per physical node.  [size] is a pure
+   function of the tree, so the cache changes no answer, step count or
+   cap decision - only the cost of the cap check, which was O(|value|)
+   on every Stem/Fork build (FINDINGS F16 aside: 100-130us/step on
+   Jay's 145k-node checker).
+
+   Direct-mapped: one slot per (structural hash land mask), each an
+   ephemeron holding one node weakly with its size.  A lookup is one
+   physical-equality test; a miss (empty slot, other node, or collected
+   key) recomputes exactly from the children, which are usually cached.
+   A chained table was tried first and lost: Jay's checker builds
+   thousands of physically distinct copies of EQUAL trees, which always
+   share a hash, so buckets reached 6k entries.  Here they only evict
+   each other.  Subtrees under [size_cache_floor] nodes are walked, not
+   cached. *)
+let size_slots = 1 lsl 18
+let size_cache_floor = 64
+
+let size_cache : (t, int) Ephemeron.K1.t option array = Array.make size_slots None
+
+let rec cached_size t =
+  match t with
+  | Leaf -> 1
+  | Stem a -> lookup_or t (fun () -> 1 + cached_size a)
+  | Fork (a, b) -> lookup_or t (fun () -> 1 + cached_size a + cached_size b)
+
+and lookup_or t compute =
+  let slot = Hashtbl.hash t land (size_slots - 1) in
+  match
+    match Array.unsafe_get size_cache slot with
+    | Some e -> Ephemeron.K1.query e t
+    | None -> None
+  with
+  | Some n -> n
+  | None ->
+      let n = compute () in
+      if n >= size_cache_floor then
+        Array.unsafe_set size_cache slot (Some (Ephemeron.K1.make t n));
+      n
+
 (* -- deliver a completed value to the frame stack --------------------- *)
 
 (* [deliver] is where the machine's continuation is popped.  It may halt
@@ -347,20 +410,135 @@ let rec deliver m r =
        | KForkAfterFirst v -> set_eval m r v
        | KFinish (ff, cc, tick0) ->
            share_finish m ff cc ~tick0 r;
-           deliver m r)
+           deliver m r
+       | KAccelPartial (e, args) ->
+           (match m.accel with
+            | Some st -> Accel.remember st r (e, args)
+            | None -> ());
+           deliver m r
+       | KEach (fn, todo, acc, xs, fin) -> (
+           let acc = r :: acc in
+           match todo with
+           | x :: todo ->
+               m.k <- KEach (fn, todo, acc, xs, fin) :: rest;
+               set_eval m fn x
+           | [] -> finish_plan m xs (List.rev acc) fin)
+       | KFoldBack gs -> (
+           match gs with
+           | [] -> deliver m r
+           | g :: gs ->
+               m.k <- KFoldBack gs :: rest;
+               set_eval m g r)
+       | KThen k ->
+           (* each continuation is charged one step *)
+           if m.fuel < 1 then begin
+             m.f <- None;
+             m.done_ <- Some (Prim_eval.Fuel_exhausted m.steps)
+           end
+           else begin
+             m.fuel <- m.fuel - 1;
+             m.steps <- m.steps + 1;
+             run_answer m (k r)
+           end)
+
+(* a native's answer, or a continuation's *)
+and run_answer m = function
+  | Accel.Value v -> deliver_checked m v
+  | Accel.Plan p -> start_plan m p
+  | Accel.Seq (a, k) ->
+      m.k <- KThen k :: m.k;
+      run_answer m a
+  | Accel.Then (f, args, k) -> (
+      match args with
+      | [] -> invalid_arg "Flat: a continuation plan applies to at least one argument"
+      | a :: more ->
+          m.k <- KThen k :: m.k;
+          List.iter (fun x -> m.k <- KGo x :: m.k) (List.rev more);
+          set_eval m f a)
+
+(* a plan's results are in: build the value, or fold the partials back *)
+and finish_plan m xs results = function
+  | Accel.Build b -> deliver_checked m (b xs results)
+  | Accel.Fold_back z ->
+      m.k <- KFoldBack (List.rev results) :: m.k;
+      deliver m z
+
+(* start a plan: the first application, or (no xs) its finish *)
+and start_plan m (p : Accel.plan) =
+  match p.Accel.xs with
+  | [] -> finish_plan m [] [] p.Accel.finish
+  | x :: todo ->
+      m.k <- KEach (p.Accel.fn, todo, [], p.Accel.xs, p.Accel.finish) :: m.k;
+      set_eval m p.Accel.fn x
 
 and set_eval m f x =
   m.f <- Some f;
   m.x <- x
 
-(* size-guarded deliver: if the new value blows the cap, halt instead *)
-let deliver_checked m r =
-  if size r > m.size_cap then begin
+(* size-guarded deliver: if the new value blows the cap, halt instead.
+   Every value a native or a plan builds goes through here, never bare
+   [deliver] - the cap is part of the answer (eval-modes EM2/EM5; review
+   finding 2026-11-25: a list-map plan and a fast3 tp continuation both
+   answered Normal where v0 hit the cap). *)
+and deliver_checked m r =
+  if cached_size r > m.size_cap then begin
     m.value <- r;
     m.f <- None;
     m.done_ <- Some (Prim_eval.Size_exhausted m.steps)
   end
   else deliver m r
+
+
+(* -- accelerators (fast1) ---------------------------------------------- *)
+
+(* Before a triage firing of [f] on [m.x]: if [f] is a registered tree
+   or a remembered partial of one, either answer natively (args
+   complete, native accepts: [cost] steps, one value), or note the
+   partial (args incomplete: a frame below the firing remembers its
+   value), or fall through (declined / not registered) to the v0
+   rewrite.  Returns true when the application is fully handled. *)
+let accel_step m f =
+  match m.accel with
+  | None -> false
+  | Some st -> (
+      match Accel.lookup st f with
+      | None -> false
+      | Some (e, args) ->
+          let args = args @ [ m.x ] in
+          if List.length args < e.Accel.arity then
+            match match e.Accel.partial with Some pf -> pf args | None -> None with
+            | Some v when m.fuel >= e.Accel.cost ->
+                (* fast3: a proved closed form of the partial value *)
+                m.fuel <- m.fuel - e.Accel.cost;
+                m.steps <- m.steps + e.Accel.cost;
+                st.Accel.calls <- st.Accel.calls + 1;
+                Accel.remember st v (e, args);
+                deliver_checked m v;
+                true
+            | _ ->
+                m.k <- KAccelPartial (e, args) :: m.k;
+                false
+          else (
+            match e.Accel.impl args with
+            | None ->
+                st.Accel.declines <- st.Accel.declines + 1;
+                false
+            | Some r ->
+                if m.fuel < e.Accel.cost then begin
+                  m.f <- None;
+                  m.done_ <- Some (Prim_eval.Fuel_exhausted m.steps)
+                end
+                else begin
+                  m.fuel <- m.fuel - e.Accel.cost;
+                  m.steps <- m.steps + e.Accel.cost;
+                  st.Accel.calls <- st.Accel.calls + 1;
+                  emit m Prim_eval.Kfire "accel" None None e.Accel.name;
+                  match r with
+                  | Accel.Value v -> deliver_checked m v
+                  | Accel.Plan p -> start_plan m p
+                  | Accel.Then _ | Accel.Seq _ -> run_answer m r
+                end;
+                true))
 
 (* -- one elementary step ---------------------------------------------- *)
 
@@ -383,6 +561,10 @@ let step m =
             Some m
         | None -> (
             match f with
+            | (Leaf | Stem _)
+              when (match m.accel with Some st -> st.Accel.wrappers | None -> false)
+                   && accel_step m f ->
+                Some m
             | Leaf ->
                 (* wrapper: application, not a step *)
                 deliver_checked m (Stem m.x);
@@ -390,6 +572,7 @@ let step m =
             | Stem a1 ->
                 deliver_checked m (Fork (a1, m.x));
                 Some m
+            | Fork _ when accel_step m f -> Some m
             | Fork _ -> (
                 match share_gate m f m.x with
                 | `Fuel ->
@@ -469,3 +652,31 @@ let run ~(host : site:int -> name:string -> args:t -> [ `Done of t | `Error of s
   in
   go ();
   Option.value m.done_ ~default:(Prim_eval.Normal (m.value, m.steps))
+
+(* -- the public constructor ------------------------------------------- *)
+
+(* The REFERENCE reducer the accelerator walk confirms compile-time
+   partials with: v0, no accelerators, no prim host (a prim aborts the
+   confirmation), bounded. *)
+exception No_prims
+
+let reference_reduce f args =
+  let m = start_core ~fuel:1_000_000 ~size_cap:10_000_000 ~program:f ~args () in
+  match run ~host:(fun ~site:_ ~name:_ ~args:_ -> raise No_prims) m with
+  | Prim_eval.Normal (t, _) -> Some t
+  | _ -> None
+  | exception No_prims -> None
+
+(* fast1/fast2 are the v0 counting law plus a pinned accelerator
+   registry; they never combine with the distinct-work law *)
+let start ?(mode = Canonical) ?trace ?(garden = []) ?(accel : Accel.registry option)
+    ~fuel ~size_cap ~program ~args () =
+  match (accel, mode) with
+  | None, _ -> start_core ~mode ?trace ~garden ~fuel ~size_cap ~program ~args ()
+  | Some _, Sharing -> invalid_arg "Flat.start: accelerators run under v0 counting only"
+  | Some r, Canonical ->
+      let reduce = reference_reduce in
+      let st = Accel.start ~reduce r in
+      let program = Accel.prepare ~reduce st program in
+      let args = List.map (Accel.prepare ~reduce st) args in
+      start_core ~mode ?trace ~garden ~accel:st ~fuel ~size_cap ~program ~args ()

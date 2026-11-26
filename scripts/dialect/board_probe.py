@@ -28,7 +28,7 @@ import urllib.request
 
 BASE = "http://127.0.0.1:" + os.environ.get("TUNA_HTTP_PORT", "18090")
 TOKEN = os.environ.get("TUNA_SMOKE_TOKEN") or open(
-    "/tmp/tuna-dev/bootstrap.token").read().strip()
+    os.path.join(os.environ.get("TUNA_DEV_DIR", "/tmp/tuna-dev"), "bootstrap.token")).read().strip()
 if TOKEN.startswith("TUNA_BOOTSTRAP_TOKEN="):
     TOKEN = TOKEN.split("=", 1)[1]
 AUTH = {"Authorization": "Bearer " + TOKEN, "Content-Type": "application/json"}
@@ -169,10 +169,14 @@ def main():
 
     compile_programs()
 
-    g_put = grant("tree/put")
-    g_list = grant("tree/list")
-    g_get = grant("tree/get")
-    g_cas = grant("tree/cas")
+    # tree grants are scoped to the probe's namespace: an unscoped grant
+    # authorizes pathless calls only (store.check_grant: None prefix +
+    # a path = Prefix_denied, the tenancy law), so an unscoped tree/*
+    # grant answers every board op with a journaled denial.
+    g_put = grant("tree/put", ns + "/")
+    g_list = grant("tree/list", ns + "/")
+    g_get = grant("tree/get", ns + "/")
+    g_cas = grant("tree/cas", ns + "/")
     g_addg = grant("math/add")
 
     # 1. ADD: three real items (one hostile title); journal [tree/put].
@@ -271,6 +275,9 @@ def main():
     for i in range(2):
         post("/api/tree/put", {"path": f"{sib}/x{i}",
                                "value_ternary": tern("17")})
+    # the walk namespace is a sibling of ns, so it gets its own scoped
+    # list grant (the main g_list covers ns/ only).
+    g_wlist = grant("tree/list", walk + "/")
     cursor = ""
     idx = 0
     windows = 0
@@ -278,7 +285,7 @@ def main():
         win = walk_items[idx:idx + 24]
         run, js = run_checked(f"walk-{windows}", PROGS["board-view"],
                               [s(walk + "/"), s(cursor)],
-                              [g_list, g_addg])
+                              [g_wlist, g_addg])
         opens = sum(1 for (_, r, _) in win if "todo-open" in r)
         if run["result_ternary"] != view_twin(win, opens, len(win) - opens):
             raise SystemExit(f"board_probe: walk-{windows} twin mismatch "
@@ -288,7 +295,7 @@ def main():
         windows += 1
     run, js = run_checked("walk-empty", PROGS["board-view"],
                           [s(walk + "/"), s(cursor)],
-                          [g_list, g_addg])
+                          [g_wlist, g_addg])
     if run["result_ternary"] != view_twin([], opens=0, done=0):
         raise SystemExit("board_probe: walk-empty twin mismatch (cursor at end)")
     windows += 1
@@ -296,7 +303,7 @@ def main():
     zph = repl("def zero-window (lambda (p) (prim \"tree/list\" p))"
                "")["program_hash"]
     r = post("/api/runs", dict({"program_hash": zph, "inputs": [s(walk + "/")],
-                                 "grants": [g_list]}, **FUEL))
+                                 "grants": [g_wlist]}, **FUEL))
     full = get(f"/api/runs/{r['run']['id']}")
     row = full["journal"][0]
     if "payload cap" not in (row.get("error") or ""):
@@ -311,7 +318,12 @@ def main():
     #    the submission-level scoped-grant acceptance (FINDINGS non-F,
     #    fixed 2026-10-04) is what lets a scoped grant reach the
     #    boundary at all.
-    sub = post("/api/identities", {"name": "board-forge-" + ns})
+    # identity names cap at 32 characters; the namespace's hex time
+    # suffix keeps the forge identity unique per run, and the name must
+    # not start with an existing identity's (garden prefixes may not
+    # overlap: board-forge-* would alias the board service's u.board.).
+    sub = post("/api/identities",
+               {"name": "forge-" + ns.rsplit("-", 1)[-1]})
     member = {"Authorization": "Bearer " + sub["token"],
               "Content-Type": "application/json"}
 
@@ -324,12 +336,17 @@ def main():
             raise SystemExit(f"board_probe: member POST {path} -> {e.code}: "
                              f"{e.read().decode()[:300]}")
 
-    mg = mpost("/api/grants", {"prim": "tree/del", "args_attenuation": "null"})
-    child = mpost(f"/api/grants/{mg['id']}/attenuate",
-                  {"path_prefix": ns + "/", "args_attenuation": "null"})
-    scoped = (child.get("grant") or {}).get("id")
+    # The member holds tree/del scoped to ns/.  Since the 10-26 mint
+    # change a non-admin may only NARROW scope it already covers, and a
+    # fresh identity covers nothing, so the operator (admin) mints the
+    # scoped grant on the member's behalf - one call, no attenuate.  The
+    # forged target below is outside ns/, so the boundary must deny it.
+    mg = post("/api/grants", {"identity": sub["id"], "prim": "tree/del",
+                              "path_prefix": ns + "/",
+                              "args_attenuation": "null"})
+    scoped = mg.get("id")
     if not scoped:
-        raise SystemExit(f"board_probe: member attenuate: {json.dumps(child)[:300]}")
+        raise SystemExit(f"board_probe: scoped mint for member: {json.dumps(mg)[:300]}")
     sentinel = f"{ns}-sentinel/s"
     post("/api/tree/put", {"path": sentinel, "value_ternary": tern("19")})
     r = mpost("/api/runs", {"program_hash": PROGS["board-del"],

@@ -114,6 +114,30 @@ let cases =
      as data while the tuna lane substitutes a host error answer).*)
   ; ( "stdlib_todo-add",
       ("(pair todo-add w)", "%10") )
+  (* tool-language.borg T1: one law per combinator, each with a
+     hand-known answer.  S K K = I (K is std true); B not not = id on
+     bools; C pair x y = pair y x; W pair x = pair x x. *)
+  ; ("stdlib_comb-i", ("(comb-i w)", "%1110"))
+  ; ("stdlib_comb-s", ("(comb-s true true w)", "%200"))
+  ; ("stdlib_comb-b", ("(comb-b not not w)", "%10"))
+  ; ("stdlib_comb-c", ("(comb-c pair w %10)", "%0"))
+  ; ("stdlib_comb-w", ("(comb-w pair w)", "%10"))
+  (* tool-language T3: a #n tag keying a record read, and a three-way
+     cond over the argument's shape (a fork falls through to else). *)
+  ; ( "dialect_tag-literal",
+      ("(rec-val #2 [[#1 w] [#2 %110]])", "%10") )
+  ; ( "dialect_cond",
+      ("(cond ((is-leaf w) #1) ((is-stem w) #2) (else #3))", "%200") )
+  (* eval-modes E1 (stdlib v1.3): the staged template vocabulary at run
+     time - a position lookup, html escaping of "a<&", and a compiled
+     template "<{1}|{2}|{3}>" over the record [[#1 "x>"] [#3 "q"]]
+     (field 2 missing renders empty). *)
+  ; ("stdlib_list-index", ("(list-index w [%0 %10 %110])", "%110"))
+  ; ( "stdlib_html-escape",
+      ("(html-escape w)", "%2210202020202102100220202102102102100220210210202021000") )
+  ; ( "stdlib_tmpl-compile",
+      ( "((tmpl-compile \"<{1}|{2}|{3}>\") w)",
+        "%2210222020202102102102100220210210210210210000221110222102020202102102100000" ) )
   ]
 
 let () =

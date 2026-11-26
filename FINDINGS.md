@@ -643,3 +643,281 @@ out-of-band squatter — the port-squat was only found because /health
 404ed with a foreign error page.
 
 ---
+
+## F15 — STAGING DOES NOT PAY ON ITS OWN (eval-modes EM1)
+
+> borg/eval-modes.borg pre-registration (EM1): on the target page,
+> request-path v0 steps of the staged template exceed 1% of the live
+> (unstaged) render.
+
+**Status: OBSERVED 2026-11-25** (eval-modes E1 make). The page is a
+`<ul>` of todo items through the staged template
+`<li>{2} <small>by {3}</small></li>` (stdlib v1.3 `tmpl-compile`,
+`tmpl-each`). Live = the template supplied at request time; staged =
+`(page-fn "<template>")` specialised at compile time; same output
+bytes in every case.
+
+| todos | live steps | staged request steps | ratio | parse moved to compile |
+|---|---|---|---|---|
+| 2 | 1,367,842 | 538,319 | 39% | 829,525 |
+| 20 | 6,456,586 | 5,627,063 | 87% | 829,525 |
+
+What staging DID: the whole parse (829,525 steps) left the request
+path, exactly as the chapter's 2026-11-25 int-mul experiment
+predicted (13.47M -> 7,029 there). What it could not do: the residual
+is data-proportional work - about 270k steps per item, roughly 10k per
+escaped data character (five in-calculus `tree-eq` compares per char
+in `html-esc-char`, plus `list-append` per segment). No binding-time
+rearrangement removes work that depends on the request's data.
+
+A second observation, not a failure definition: a renderer written
+naively (parse interleaved with the data walk) and then specialised at
+compile time is 1.7x-3.6x SLOWER than the live staged library - the
+compiler lifts closed subterms but does not stage an interleaved
+recursion. Staging stays a property of how the vocabulary is written.
+
+CONSEQUENCE (recorded, as the chapter planned): E2 accelerators are the
+answer to the residual, not more staging. The first set the chapter
+names (tree-eq, list-append, int-*) covers exactly the per-char cost
+measured here; html-escape is added as a candidate. EM1 stands as
+observed; the 1% line is not retuned.
+
+---
+
+## F16 — ACCELERATORS DO NOT PAY FOR THE GATE VERDICT (eval-modes EM3, half)
+
+> borg/eval-modes.borg pre-registration (EM3): the gate verdict and the
+> naive renderer under fast mode are not at least 10x faster in wall
+> clock than v0.
+
+**Status: OBSERVED for the verdict half, 2026-11-25** (eval-modes E2
+make; registry fast1, nine accelerators). Same answers in every row;
+wall clock on this laptop, single run each.
+
+| workload | v0 | fast1 | wall |
+|---|---|---|---|
+| verdict.sabra (helpers inline) | 67,192 steps, 0.566s | 67,192 steps, 0 native | 1.0x |
+| verdict-std.sabra (stdlib names) | 55,195 steps, 0.099s | 18,798 steps, 65 native | 2.5x |
+| todo page, staged, 20 items | 5,627,063 steps, 11.1s | 133,139 steps, 261 native | 46.7x |
+| todo page, live, 20 items | 6,456,586 steps, 12.7s | 161,314 steps, 668 native | 31.4x |
+| int-mul experiment (naive renderer) | 13,465,953 steps, 24.6s | 12,431 steps, 17 native | 460x |
+
+FAST2 UPDATE (same day, registry fast2: + rec-get/val/has, list-fold/
+map/filter, compile-time partials; best of 3, machine under load so
+ratios are the comparable figure):
+
+| workload | v0 steps | fast2 steps | wall vs v0 |
+|---|---|---|---|
+| verdict.sabra (inline) | 67,192 | 67,192 (0 native) | 0.9-1.0x |
+| verdict-std.sabra | 55,195 | 1,848 (11 native) | 6.7-8.0x |
+| todo page, staged, 20 | 5,627,063 | 711 (203 native) | 480-670x |
+| int-mul experiment | 13,465,953 | 5,655 (34 native) | 580x |
+
+Still OBSERVED for the verdict half. verdict-std now takes 30x fewer
+steps than v0 but wall clock is held by two fixed costs: the fast2
+start walk (~13ms on 13.4k program+input nodes once the registry is
+cached; 37ms on first use) and the per-step O(size) check in
+deliver_checked (the ASIDE below), ~11us/step on a 3.5k-node
+observation. The inline verdict cannot be accelerated (no registered
+hash inside) and pays the start walk for nothing.
+
+SIZE-CHECK FIX (2026-11-25, after the owner rescoped stdlib acceptance
+6): deliver_checked now reads subtree sizes from a direct-mapped,
+weakly keyed cache (interpreter/lib/flat.ml, cached_size) instead of
+walking the whole new value on every Stem/Fork build. Size is a pure
+function of the tree, so answers, step counts and the cap decision are
+unchanged (runtest, accel-full, differential 103/103, Jay's 30 proved
+vectors all identical). A chained physical-identity table was tried
+first and lost: Jay's checker makes thousands of distinct copies of
+EQUAL trees, which share a hash, so buckets reached ~6k. Effect on
+Jay's checker: 100-130us/step -> ~1us/step (infer typing itself
+668s -> 3.4s; an expression typing 160s -> 1.6s); whole runtest
+~9 min -> 36s.
+
+The renderer half clears 10x by one to two orders of magnitude; the
+verdict half does not. Two causes, both structural:
+1. verdict.sabra carries its helpers INLINE (let-bound), so no subtree
+   carries a registered hash and nothing is accelerated - the
+   tool-language T2 finding (dictionary literals and let-bound helpers
+   are different trees) now has a price. verdict-std.sabra, which
+   pins stdlib names, is accelerated.
+2. What remains in verdict-std is record lookup and list walking
+   (rec-get, list-fold, list-filter), which fast1 does not cover: the
+   higher-order and record families are the chapter's second set.
+
+ASIDE (not a failure definition): v0 costs ~8us per step on
+verdict.sabra but ~1.8us on verdict-std.sabra. Flat.deliver_checked
+computes Tree.size - O(n) - on every delivered value, so per-step cost
+grows with value size. Pre-existing; recorded, not changed here.
+
+---
+
+## F17 — V1 INT CODE FORGES ONE OF JAY'S LABELS (typing TY-F4)
+
+> borg/typing.borg pre-registration (TY-F4): a v1 stdlib def, corpus
+> program or compiler output is not concrete in Jay's sense (contains
+> a label-shaped subtree S2[K, K1 n] where no tag was meant).
+
+**Status: OBSERVED, 2026-11-25** (typing TY1, the first run of Jay's
+own `is_concrete` over tuna's trees).
+
+Jay's `is_concrete` (vendored from his development, checked against his
+spec's vectors) answers KI for five frozen stdlib v1 rows: `mag-cmp-fn`,
+`mag-cmp`, `int-add`, `int-sub`, `int-cmp` (and their five corpus
+entries); every other v1 def and every other corpus program is concrete.
+The offending subtree, found by a shape scan of `mag-cmp-fn` (three
+copies): `Fork(Stem(Stem Leaf), Fork(Leaf, Stem Leaf))` - in v1 terms a
+data constant pairing the compare result `%110` with `K %10`; in Jay's
+terms exactly `label[K]`, the name of an abstract type.
+
+Why it matters: Jay's type application treats a label as an abstract
+type and refuses what the ontology does not declare, so any program
+calling v1 int-add / int-sub / int-cmp cannot be typed. It is the
+representation question of the typing chapter in miniature: untagged
+v1 data can collide with the encoding his types use.
+
+Not fixed in v1: rows are immutable (stdlib.borg), and a changed
+`mag-cmp-fn` would move five hashes plus the fast1/fast2 accelerators
+keyed on them. The fix belongs to stdlib v2 (typing TY5), whose defs
+must all pass `is_concrete`. tests/jay_tests.ml pins the non-concrete
+set to exactly these names, so a new forged label - or one of these
+disappearing - fails the test.
+
+---
+
+## F18 — THE JAY-NATIVE BINARY INT IS SOUND BUT ~45x BIGGER (typing TY-F1, first encoding)
+
+> borg/typing.borg pre-registration (TY-F1): the tagged representation
+> costs more than 2x v1 on the int workloads.
+
+**Status: OBSERVED for the first encoding, 2026-11-25** (typing TY2
+spike). Arithmetic on it is not written; the size and typing cost
+alone decide this encoding.
+
+Encoding: `Int = wrap[int_nm, sign * magnitude]`, payload type
+`Bool * List Bool` - v1's shape (sign, LSB-first bits) rebuilt from
+Jay's tagged Bool and tagged List cells, declared with his `D_wrap`.
+`reference/jay-typing-rules/export/TyInt.v` defines it inside his
+development and proves `O_int_sound` / `O_int_typing_sound` by his
+`wrap_decl_sound` (Print Assumptions: closed under the global context).
+Nine proved Examples (five, -6, zero, a 21-bit value : Int; a bad
+payload refused; sign and magnitude projections typed Bool and
+List Bool; sign evaluation) all agree on tuna's v0 engine.
+
+Cost, measured in tuna:
+
+| value | tagged Int nodes | v1 nodes | typing steps |
+|---|---|---|---|
+| 0 | 176 | ~3 | 58,693 |
+| 5 | 476 | ~9 | 192,993 |
+| 1,048,579 (21 bits) | 2,342 | ~55 | 1,022,773 (0.8s) |
+
+~107 nodes and ~45k typing steps per bit: every bit is a tagged Bool
+plus a tagged list cell, and every list cell carries the code of its
+element type. Soundness comes free from his framework; the price is
+the representation.
+
+Next encodings to measure (owner decision which): a dedicated binary
+type declared like his Nat with two successors (one tag per bit, its
+own soundness proof modelled on `nat_interp_sound`), or one tag around
+a v1 carrier with a declared table of trusted operations (smallest,
+but its soundness rests on proofs about v1 arithmetic).
+
+SECOND ENCODING (owner chose the dedicated binary type, same day):
+`export/TyBin.v` declares `Bin` like his Nat with two successors -
+`bzero`, `beven[m]` = 2m, `bodd[m]` = 2m+1, consumed as `B * (E * O)` -
+one tag per bit under the 3-node name `Fk Lf Lf`, and `Int` as his
+wrapped type over `Bool * Bin`. OUR PROOF: `bin_interp_sound` (the Bin
+declaration is sound by values, for every ontology) after his
+`nat_interp_sound`, via `bin_guard_spec`, `bin_eliminator_inv` and a
+generalised `carrier_sel_inv`; then `O_bin_sound` / `O_bin_typing_sound`
+(Print Assumptions: closed under the global context). Ten proved
+Examples agree on tuna.
+
+| value | wrapped Int (1st) | Bin-based Int (2nd) | v1 |
+|---|---|---|---|
+| 5 | 476 nodes / 193k typing steps | 261 / 105k | ~9 |
+| 1,048,579 (21 bits) | 2,342 / 1.02M | 1,185 / 507k | ~55 |
+
+About half the first encoding; still ~20x v1 and ~23k typing steps per
+bit, so TY-F1 stays observed. The remaining overhead is fixed per bit
+and comes from his pair/selector encoding (`fst` 11 nodes, `snd` 16,
+the nested selector `fst 'C snd` 31). Arithmetic on Bin is not yet
+written; typing at ~1us/step costs ~0.5s for a 21-bit input, too slow
+for a request path until his checker is accelerated.
+
+---
+
+## F19 — JAY'S CHECKER UNDER fast3: ~150x FEWER STEPS, NOT ON THE TIGHT LAW (eval-modes E3)
+
+Date: 2026-11-25. Chapter: borg/eval-modes.borg E3; typing.borg TY2/TY3.
+
+EXACT natives first (E2's law: answer exactly what the tree answers,
+or decline): his helpers `equal`, `is_concrete`, `get_tagged`,
+`get_label`, `row_prog`, and `infer` on concrete trees (his
+`concrete_is_self_typed`) all agree with his spec lemmas (222/222
+vectors) but cut the 21-bit Bin from 482k typing steps to 326k (~1.5x).
+WHY: his checker is bracket-compiled, so it works at partial
+application (`equal @ p` builds `equal1 p`; `tp @ F` dispatches on F)
+and evaluates results it discards - his own `rows_f_hit` needs the
+fallback `fam @ n` to terminate even on a hit, so every ontology lookup
+(~3.2k steps) walks every row. A native entered at full arity sees
+none of that work.
+
+OWNER DECISION (option B): fast3 natives follow his clause-by-clause
+characterisations (typing.v `TA` / `INF`, rows.v `row_head`) and may
+skip discarded work - same answer whenever the reference terminates,
+decline on a prim-carrying ontology; v0, fast1, fast2 unchanged.
+Mechanisms: families (template-keyed), continuation plans, wrapper
+partials, and one EXACT closed form (`equal @ p` = `equal1 p`, his
+`equal_eval`), which removed the last big cost (the Bin guard's three
+`equal` partials: 11.8k -> 86 steps).
+
+| vector | v0 steps / wall | fast3 steps / wall |
+|---|---|---|
+| 21-bit Bin | 482,048 / 0.38s | 3,229 (0.67%) / 0.077s (20%) |
+| 21-bit Int | 506,616 / 0.38s | 5,714 (1.1%) / 0.084s (22%) |
+| infer typing itself | 5,167,788 / 3.5s | 31,414 (0.61%) / 0.033s (0.9%) |
+| typing list append | 3,162,749 / 3.1s | 158,019 (5.0%) / 0.47s (15%) |
+
+EM5 (mismatch) NOT TRIGGERED: all 278 vendored vectors give his stated
+result under fast3; generated cases on four of his ontologies (440
+infer / tp cases, v0 finished on all) agree; 200 random `equal1 p`
+equal v0's `equal @ p`; a prim-carrying ontology is declined; the
+differential corpus answers identically under fast3. EM6 (does not
+pay) OBSERVED FOR WALL CLOCK ONLY: steps are under 1% for Bin/Int, but
+wall stays 15-22% on mid-size inputs because fast2's once-per-run
+recognition walk over the 125k-node checker program (~0.06s) now
+dominates; the natives' own run is ~0.012s. Fix candidates: cache the
+prepared program per hash across runs (a typed tool reuses one checker
+program), or a cheaper walk. Not done here.
+
+## F20 — INDEPENDENT REVIEW OF E2/E3: TWO CAP ESCAPES AND A SKIPPED PRIM (2026-11-25)
+
+Independent review (Fable, fresh context) of tuna/language-tooling before
+it landed. Three findings about the accelerators, all reproduced:
+
+1. SIZE CAP ESCAPE (fast2, fast3) - a value a native answered through a
+   plan (`Build`) or a continuation (`Value` in `run_answer`) was handed
+   to bare `deliver`, skipping the size check. list-map `\x. pair x x`
+   over a 20-element list at cap 1600: v0 Size_exhausted, fast2 Normal
+   with a 2,561-node result. fast3 `tp[O] @ triage[Lf, Sm G, Lf] @ Sm X`
+   at cap 100,000: v0 Size_exhausted, fast3 Normal with 131,072 nodes.
+   That is EM2 / EM5 as written. FIXED IN PLACE (owner decision: neither
+   semantics had landed): both paths use `deliver_checked`
+   (interpreter/lib/flat.ml). Tests: accel_tests "a plan's built value is
+   size-capped like v0's (EM2)" and fast3_tests "a value a native builds
+   is size-capped like v0's (EM5)" - both FAIL with the bare `deliver`
+   restored, both pass with the fix.
+2. A PRIM BUILT AT RUN TIME IN DISCARDED WORK IS SKIPPED (fast3) - the
+   decline test is syntactic. A row whose `rest` builds `Fork(gate,
+   callsite)` and applies it: on a hit, v0 evaluates `rest @ n` (rows are
+   eager) and fires the prim; the native does not. Same answer, one
+   journal row fewer. Law E3 (d) said "no effect is ever skipped"; the
+   text was wrong, not the native (owner decision: correct the text, keep
+   the syntactic check). Pinned by fast3_tests "law (d) as written".
+   Does not touch TY3: O_bin is fixed and builds no prim calls.
+3. TESTS COULD MISS A SILENT FALLBACK - the fast3 differential compared
+   only Normal answers and never asserted that natives fired, which is
+   how 1 and 2 got through. It now compares size-capped runs and asserts
+   native calls; EM6 in steps is a test (ibig_Int: fast3 <= v0 / 10).

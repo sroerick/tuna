@@ -48,7 +48,7 @@ module P = Patch
    a compiled artifact.  LIVES HERE (not Api) so Run-boundary consumers
    don't pull the Api module in — Api delegates to this one. *)
 let ir_json_of_artifact ?(resolved : (string * int) list = [])
-    (a : B.artifact) : J.t =
+    ?(lock : (string * string) list = []) (a : B.artifact) : J.t =
   let span_of_id id =
     match Tuna_compiler.Ir.find_id a.B.ir id with
     | None -> None
@@ -71,6 +71,15 @@ let ir_json_of_artifact ?(resolved : (string * int) list = [])
                   (fun (name, count) ->
                     `Assoc [ ("name", `String name); ("count", `Int count) ])
                   resolved)) )
+    ; ( "lock"
+      , (match lock with
+         | [] -> `Null
+         | _ ->
+             `List
+               (List.map
+                  (fun (name, hash) ->
+                    `Assoc [ ("name", `String name); ("hash", `String hash) ])
+                  lock)) )
     ; ( "tags"
       , `List
           (List.map
@@ -156,6 +165,9 @@ type outcome = {
 ; o_program_hash : string option
 ; o_note : string
 ; o_dict_rows : (string * string) list  (* dict listing: name -> ternary *)
+; o_lock : (string * string) list
+    (* tool-language T2: every dictionary name the source resolved, with
+       the sha256 of the tree it resolved to, sorted by name *)
 }
 
 let outcome ?status ?run_id ?program_hash ?note ?dict_rows ?ternary ?hash
@@ -169,7 +181,8 @@ let outcome ?status ?run_id ?program_hash ?note ?dict_rows ?ternary ?hash
   ; o_run_id = run_id
   ; o_program_hash = program_hash
   ; o_note = opt_str note
-  ; o_dict_rows = Option.value dict_rows ~default:[] }
+  ; o_dict_rows = Option.value dict_rows ~default:[]
+  ; o_lock = [] }
 
 type round_result = (outcome, int * string) result
 
@@ -184,6 +197,21 @@ let err_ msg : round_result = return (Error (400, msg))
    (resolved_defs, name -> occurrence count) so /api/defs/usage can
    answer 'which defs does the town speak, and who speaks them'
    without a second write path. *)
+(* tool-language T2: the lock - each resolved dictionary name with the
+   hash of the tree it read as, under the compiler's own last-wins
+   lookup, so an author can pin exactly what a compile used. *)
+let lock_of ~(dictionary : (string * Tuna.Tree.t) list)
+    (counts : (string * int) list) : (string * string) list =
+  let tbl = Hashtbl.create 64 in
+  List.iter (fun (n, t) -> Hashtbl.replace tbl n t) dictionary;
+  List.filter_map
+    (fun (name, _) ->
+      Option.map
+        (fun t -> (name, Tuna.Hash.hex_of_tree t))
+        (Hashtbl.find_opt tbl name))
+    counts
+  |> List.sort compare
+
 let compile_with_dict ?(fuel = B.default_compile_fuel)
     ?(size_cap = B.default_compile_size_cap) ?(deadline = Float.infinity)
     ~dictionary src =
@@ -204,13 +232,14 @@ let compile_with_dict ?(fuel = B.default_compile_fuel)
     |> List.sort (fun (a, ca) (b, cb) ->
            if ca <> cb then cb - ca else compare a b)
   in
-  (artifact, counts)
+  (artifact, counts, lock_of ~dictionary counts)
 
 (* Compile the artifact, upsert it, run it through the run boundary,
    and chain the run row to the identity's previous round. *)
 let journaled_round pool ~caller ~artifact ~source ~input_trees ~grant_ids
-    ~fuel ~size_cap ?(resolved : (string * int) list = []) () =
-  let ir = J.to_string (ir_json_of_artifact ~resolved artifact) in
+    ~fuel ~size_cap ?(resolved : (string * int) list = [])
+    ?(lock : (string * string) list = []) () =
+  let ir = J.to_string (ir_json_of_artifact ~resolved ~lock artifact) in
   S.upsert_program pool ~hash:artifact.B.hash_hex ~ternary:artifact.B.ternary
     ~ir:(Some ir) ~created_by:(Some caller) ~source
   >>= fun _ ->
@@ -244,13 +273,13 @@ let do_eval pool ~caller ~grant_ids ~dictionary ~input_trees ~fuel ~size_cap
     | exception Tuna_compiler.Ir.Error (p, msg) ->
         err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
     | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
-    | (artifact, resolved) -> (
+    | (artifact, resolved, lock) -> (
         journaled_round pool ~caller ~artifact ~source:(Some src) ~input_trees
-          ~grant_ids ~fuel ~size_cap ~resolved ()
+          ~grant_ids ~fuel ~size_cap ~resolved ~lock ()
         >>= (function
               | Error (code, msg) -> return (Error (code, msg))
               | Ok (row, _js, phash) ->
-                  return (Ok (run_outcome "eval" row phash))))
+                  return (Ok { (run_outcome "eval" row phash) with o_lock = lock })))
 
 let do_def pool ~caller ~dictionary
     ?(compile_fuel = B.default_compile_fuel)
@@ -263,11 +292,11 @@ let do_def pool ~caller ~dictionary
   | exception Tuna_compiler.Ir.Error (p, msg) ->
       err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
   | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
-  | (artifact, resolved) -> (
+  | (artifact, resolved, lock) -> (
       S.dict_set pool ~identity_id:caller ~name ~ternary:artifact.B.ternary
       >>= fun () ->
       journaled_round pool ~caller ~artifact ~source:(Some src) ~input_trees:[]
-        ~grant_ids:[] ~fuel:1_000_000 ~size_cap:1_000_000 ~resolved ()
+        ~grant_ids:[] ~fuel:1_000_000 ~size_cap:1_000_000 ~resolved ~lock ()
       >>= (function
             | Error (code, msg) -> return (Error (code, msg))
             | Ok (row, _js, phash) ->
@@ -276,7 +305,8 @@ let do_def pool ~caller ~dictionary
                      ({ (run_outcome "def" row phash) with
                         o_ternary = artifact.B.ternary
                       ; o_hash = artifact.B.hash_hex
-                      ; o_note = Printf.sprintf "defined %s" name }))))
+                      ; o_note = Printf.sprintf "defined %s" name
+                      ; o_lock = lock }))))
 
 (* -- structural commands ---------------------------------------------- *)
 
@@ -465,6 +495,39 @@ let parse_inputs (inputs : string list) :
   in
   go [] (List.filter (fun s -> String.trim s <> "") inputs)
 
+(* The caller's effective dictionary, as the compiler wants it: the
+   borg/stdlib.borg resolution order (parse time) is lambda param >
+   identity repl_dict > sabralib repl_dict > reader builtins.  The
+   assembly is std rows UNDER the caller rows; the compiler folds the
+   assoc list last-of-name-wins, so identity entries shadow std, undef
+   restores it.  sabralib itself gets no underlay (its rows ARE the std
+   rows).  Shared by the REPL and POST /api/programs (tool-language T2),
+   so a source compiles against one dictionary whichever door it uses. *)
+let effective_dictionary pool ~caller :
+    ((string * Tuna.Tree.t) list, string) result Tuna_store.Direct.t =
+  S.dict_list pool ~identity_id:caller
+  >>= fun rows ->
+  Stdlib_seed.dict_rows_under pool ~caller
+  >>= fun std_rows ->
+  (* NB the ternary-fold below CONSES, so the assoc handed to the
+     compiler is the REVERSE of this list; sexp.ml is last-wins, hence
+     caller rows must come FIRST here. *)
+  let rows = rows @ std_rows in
+  return
+    (List.fold_left
+       (fun acc d ->
+         match acc with
+         | Error e -> Error e
+         | Ok acc -> (
+             match Tuna.Canon.of_string d.S.d_ternary with
+             | Ok t -> Ok ((d.S.d_name, t) :: acc)
+             | Error (off, msg) ->
+                 Error
+                   (Printf.sprintf
+                      "dictionary entry %s unparseable at offset %d: %s"
+                      d.S.d_name off msg)))
+       (Ok []) rows)
+
 (* Read the identity's dictionary, parse the command, execute it.
    [inputs] / [grant_ids] / [fuel] / [size_cap] apply to eval rounds;
    [compile_fuel] / [compile_size_cap] / [compile_deadline] bound the
@@ -478,35 +541,9 @@ let execute pool ~caller ~command ~inputs ~grant_ids ~fuel ~size_cap
     round_result =
   catch
     (fun () ->
-      S.dict_list pool ~identity_id:caller
-      >>= fun rows ->
-      (* borg/stdlib.borg resolution order (parse time): lambda param >
-         identity repl_dict > sabralib repl_dict > reader builtins.
-         The assembly is std rows UNDER the caller rows; the compiler
-         folds the assoc list last-of-name-wins, so identity entries
-         shadow std, undef restores it.  sabralib itself gets no
-         underlay (its rows ARE the std rows). *)
-      Stdlib_seed.dict_rows_under pool ~caller
-      >>= fun std_rows ->
-      (* NB the ternary-fold below CONSES, so the assoc handed to the
-         compiler is the REVERSE of this list; sexp.ml is last-wins,
-         hence caller rows must come FIRST here. *)
-      let rows = rows @ std_rows in
-      (match
-         List.fold_left
-           (fun acc d ->
-             match acc with
-             | Error e -> Error e
-             | Ok acc -> (
-                 match Tuna.Canon.of_string d.S.d_ternary with
-                 | Ok t -> Ok ((d.S.d_name, t) :: acc)
-                 | Error (off, msg) ->
-                     Error
-                       (Printf.sprintf
-                          "dictionary entry %s unparseable at offset %d: %s"
-                          d.S.d_name off msg)))
-           (Ok []) rows
-       with
+      effective_dictionary pool ~caller
+      >>= fun assembled ->
+      (match assembled with
        | Error msg -> err_ msg
        | Ok dictionary ->
       match parse_command command with

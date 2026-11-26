@@ -77,4 +77,20 @@ let all = [
   ("todo-add", "(lambda (path) (lambda (title) (lambda (who) (lambda (when) (prim \"tree/put\" path (todo-item todo-open title who when))))))");
   ("todo-flip", "(lambda (r) (rec-upd key-state (if %0 %10 (tree-eq (todo-state r) todo-open)) r))");
   ("todo-open-count", "(lambda (items) (list-fold (lambda (e) (lambda (acc) (if (prim \"math/add\" acc 1) acc (tree-eq (todo-state (todo-entry e)) todo-open)))) 0 items))");
+  ("comb-i", "(lambda (x) x)");
+  ("comb-s", "(lambda (f) (lambda (g) (lambda (x) ((f x) (g x)))))");
+  ("comb-b", "(lambda (f) (lambda (g) (lambda (x) (f (g x)))))");
+  ("comb-c", "(lambda (f) (lambda (x) (lambda (y) ((f y) x))))");
+  ("comb-w", "(lambda (f) (lambda (x) ((f x) x)))");
+  ("list-tail", "(lambda (xs) ((tree-case %0 (lambda (c) %0) (lambda (h) (lambda (t) t))) xs))");
+  ("list-index-fn", "(lambda (self) (lambda (xs) (lambda (x) (lambda (i) ((tree-case none (lambda (c) none) (lambda (h) (lambda (t) ((tree-case %0 (lambda (u) (some i)) (lambda (a) (lambda (t2) (self t2 x (%0 i))))) (if (%0 t) (pair t t) (tree-eq h x)))))) xs)))))");
+  ("list-index", "(lambda (x) (lambda (xs) ((rec-fix list-index-fn) xs x %0)))");
+  ("html-esc-char", "(lambda (c) (if \"&amp;\" (if \"&lt;\" (if \"&gt;\" (if \"&quot;\" (if \"&#39;\" (pair c %0) (tree-eq c (second 39))) (tree-eq c (second 34))) (tree-eq c (first \">\"))) (tree-eq c (first \"<\"))) (tree-eq c (first \"&\"))))");
+  ("html-escape", "(lambda (s) (list-fold (lambda (c) (lambda (acc) (list-append (html-esc-char c) acc))) %0 s))");
+  ("tmpl-parse-fn", "(lambda (self) (lambda (cs) ((tree-case %0 (lambda (c) %0) (lambda (c) (lambda (rest) ((lambda (pos) ((tree-case %0 (lambda (r) (pair (%0 ((tree-case %0 (lambda (n) n) (lambda (a) (lambda (b) %0))) pos)) (self (list-tail (list-tail r))))) (lambda (a) (lambda (r) ((lambda (segs) ((tree-case (pair (pair %0 (pair c %0)) %0) (lambda (z) %0) (lambda (s0) (lambda (more) ((tree-case %0 (lambda (t) (pair (pair %0 (pair c %0)) segs)) (lambda (z) (lambda (str) (pair (pair %0 (pair c str)) more)))) s0)))) segs)) (self r))))) (if (%0 rest) (pair rest rest) (bool-and (tree-eq c (first \"{\")) (bool-and (is-stem pos) (tree-eq (first (list-tail rest)) (first \"}\"))))))) (list-index (first rest) \"0123456789\"))))) cs)))");
+  ("tmpl-parse", "(rec-fix tmpl-parse-fn)");
+  ("tmpl-build-fn", "(lambda (self) (lambda (segs) ((tree-case (lambda (dd) %0) (lambda (c) %0) (lambda (s) (lambda (more) ((lambda (r) ((tree-case %0 (lambda (tag) (lambda (dd) (list-append (html-escape (rec-val tag dd)) (r dd)))) (lambda (z) (lambda (str) (lambda (dd) (list-append str (r dd)))))) s)) (self more))))) segs)))");
+  ("tmpl-build", "(rec-fix tmpl-build-fn)");
+  ("tmpl-compile", "(lambda (t) (tmpl-build (tmpl-parse t)))");
+  ("tmpl-each", "(lambda (f) (lambda (xs) (list-fold (lambda (x) (lambda (acc) (list-append (f x) acc))) %0 xs)))");
 ]

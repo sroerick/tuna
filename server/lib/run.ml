@@ -231,13 +231,23 @@ let compile_deadline_now () =
 (* Run semantics (borg/sharing.borg): the row names the accounting
    law.  'v0' = canonical (a step per triage firing); 'v1' = the
    distinct-work law (memoized firings, prim-containing firings never
-   memoized, in-flight re-entry = Loop).  Unknown values are a request
-   error at the boundary; execute itself trusts the validated row. *)
-let semantics_ok = function "v0" | "v1" -> true | _ -> false
+   memoized, in-flight re-entry = Loop); 'fast1' / 'fast2' / 'fast3' =
+   the v0 counting law plus a pinned accelerator registry
+   (borg/eval-modes.borg E2; fast3 adds Jay's checker under E3's
+   narrowed law): an accelerated call is one step, so its counts are
+   fast-mode facts.
+   Unknown values are a request error at the boundary; execute itself
+   trusts the validated row. *)
+let semantics_ok = function
+  | "v0" | "v1" -> true
+  | s -> Tuna_interp.Accel.registry_of_semantics s <> None
+
+let accel_of_semantics = Tuna_interp.Accel.registry_of_semantics
 
 let mode_of_semantics = function
-  | "v0" -> Eng.Canonical
   | "v1" -> Eng.Sharing
+  | s when Tuna_interp.Accel.registry_of_semantics s <> None -> Eng.Canonical
+  | "v0" -> Eng.Canonical
   | s -> invalid_arg (Printf.sprintf "unknown semantics %S" s)
 
 let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
@@ -401,10 +411,12 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
      else return [])
     >>= fun garden ->
     (if use_demand then
-       Eng.eval_result ~host ~mode:(mode_of_semantics semantics) ~fuel ~size_cap
+       Eng.eval_result ~host ~mode:(mode_of_semantics semantics)
+         ?accel:(accel_of_semantics semantics) ~fuel ~size_cap
          ~deadline ~program ~garden ?trace inputs
      else
-       Eng.eval ~host ~mode:(mode_of_semantics semantics) ~fuel ~size_cap ~deadline
+       Eng.eval ~host ~mode:(mode_of_semantics semantics)
+         ?accel:(accel_of_semantics semantics) ~fuel ~size_cap ~deadline
          ~program ?trace inputs
        >>= fun result -> return (result, 0, []))
   >>= fun (result, demand_hits, clean) ->
