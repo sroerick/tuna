@@ -1,0 +1,6 @@
+; local chapter L2 (borg/local.borg): the REPL grammar, compile-with-lock
+; and structural patch, shared by the server REPL and the local REPL.
+(library
+ (name tuna_repl)
+ (modules repl_core patch)
+ (libraries tuna tuna_compiler))

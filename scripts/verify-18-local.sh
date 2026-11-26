@@ -10,6 +10,15 @@
 #        (verify-8 checks that); a mismatch is LO1 drift.  A source
 #        both sides refuse (a moved pin, a non-std name) must be
 #        refused with the same compile message.
+#   18.2 L2 LOCAL REPL - one transcript (def, eval with and without
+#        inputs, a fuel-starved round, get on the last result and by
+#        hash, patch, first-diff, a shadowing def of a std name, undef,
+#        errors, dict) run through tuna repl over a fresh directory and
+#        through /api/repl: every round has the same kind, status,
+#        result hash, steps, lock and dict rows, and failed rounds fail
+#        with the SAME message (one normalization: the server names its
+#        run id in "last round (<id>) produced no result tree").
+#   Both checks run as a freshly minted non-admin identity.
 #
 # Env: as scripts/verify-lib.sh (a live dev server; TUNA_HTTP_PORT,
 # TUNA_SMOKE_TOKEN or the dev boot token).
@@ -20,6 +29,13 @@ cd "$(dirname "$0")/.."
 dune build --root "$PWD" cli/bin/main.exe 2>&1 | head -20
 CLI=_build/default/cli/bin/main.exe
 [ -x "$CLI" ] || fail "cli did not build"
+
+# a FRESH non-admin identity for both checks: its effective dictionary
+# is std alone, and the transcript touches nobody else's defs
+FRESH="v18-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+TOKEN=$(curl -sf -m 60 -X POST -H "$AUTH" --data-binary "{\"name\":\"$FRESH\"}" \
+  $BASE/api/identities | jget "d['token']") || fail "mint identity $FRESH"
+echo "  fresh identity $FRESH"
 
 echo "[18.1] L1: CLI compile == POST /api/programs (frozen std vs seeded std)"
 python3 - "$BASE" "$TOKEN" "$CLI" scripts/*/*.sabra <<'PY' || fail "see the line above"
@@ -85,6 +101,98 @@ for label, src in sources:
         raise SystemExit("18.1: %s lock differs: cli %s server %s" % (label, clock, slock))
     n += 1
 print("  %d/%d sources: identical program hash and lock" % (n, len(sources)))
+PY
+
+echo "[18.2] L2: a REPL transcript answers alike in tuna repl and /api/repl"
+LDIR=$(mktemp -d); trap 'rm -rf "$LDIR"' EXIT
+python3 - "$BASE" "$TOKEN" "$CLI" "$LDIR" <<'PY' || fail "see the line above"
+import json, os, re, subprocess, sys, urllib.request, urllib.error
+base, tok, cli, ldir = sys.argv[1:5]
+sfx = os.urandom(3).hex()
+inc = "v18inc" + sfx
+three = None  # ternary of [1 2 3], filled from round 1
+
+def server(cmd, inputs, fuel):
+    body = {"command": cmd, "inputs": inputs}
+    if fuel: body["fuel"] = fuel
+    req = urllib.request.Request(base + "/api/repl",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": "Bearer " + tok,
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            o = json.load(r)["round"]
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        try: msg = json.loads(body).get("error", body)
+        except ValueError: msg = body
+        return ("error", re.sub(r"^last round \([^)]*\) ", "last round ", msg))
+    return ("ok", {"kind": o["kind"], "status": o["status"] or None,
+                   "hash": o["hash"], "steps": o["steps"] if o["status"] else None,
+                   "lock": sorted((l["name"], l["hash"]) for l in o["lock"]),
+                   "dict": sorted((d["name"], d["ternary"]) for d in o["dictionary"])})
+
+def local(cmd, inputs, fuel):
+    argv = [cli, "repl", "--dir", ldir]
+    for t in inputs: argv += ["--input", "%" + t]
+    if fuel: argv += ["--fuel", str(fuel)]
+    r = subprocess.run(argv, input=cmd + "\n", capture_output=True, text=True)
+    f = {"lock": [], "dict": []}
+    for line in r.stdout.splitlines():
+        if not line: continue
+        k, _, v = line.partition(" ")
+        if k == "error": return ("error", v)
+        if k == "lock": f["lock"].append(tuple(v.split(" ", 1)))
+        elif k == "def": f["dict"].append(tuple(v.split(" ", 1)))
+        else: f[k] = v
+    return ("ok", {"kind": f.get("kind"), "status": f.get("status"),
+                   "hash": f.get("hash", ""),
+                   "steps": int(f["steps"]) if "steps" in f else None,
+                   "lock": sorted(f["lock"]), "dict": sorted(f["dict"])})
+
+# rounds: (command, inputs, fuel); "THREE" = the tree of round 0,
+# "H<n>" in a command = the result hash of round n
+script = [
+  ("[1 2 3]", [], None),
+  ("def %s (lambda (x) (int-add x 1))" % inc, [], None),
+  ("(%s 41)" % inc, [], None),
+  ("(lambda (xs) (list-length xs))", "THREE", None),
+  ("get 0", [], None),
+  ("get 9", [], None),
+  ("(lambda (xs) (list-length xs))", "THREE", 5),
+  ("get 0", [], None),
+  ("get 2 H0", [], None),
+  ("patch 1 %0 H0", [], None),
+  ("first-diff H0 H2", [], None),
+  ("def not (lambda (b) b)", [], None),
+  ("(not true)", [], None),
+  ("undef not", [], None),
+  ("(not true)", [], None),
+  ("eval nosuchname", [], None),
+  ("bogus command", [], None),
+  ("dict", [], None),
+  ("undef " + inc, [], None),
+  ("dict", [], None),
+]
+hashes = {}
+for i, (cmd, inputs, fuel) in enumerate(script):
+    if inputs == "THREE": inputs = [three]
+    cmd = re.sub(r"H(\d+)", lambda m: hashes[int(m.group(1))], cmd)
+    s, l = server(cmd, inputs, fuel), local(cmd, inputs, fuel)
+    if s[0] != l[0]:
+        raise SystemExit("18.2 round %d %r: server %s vs local %s" % (i, cmd, s, l))
+    if s[0] == "error":
+        if l[1] != s[1]:
+            raise SystemExit("18.2 round %d %r: errors differ: %r vs %r" % (i, cmd, s[1], l[1]))
+    elif s[1] != l[1]:
+        raise SystemExit("18.2 round %d %r:\n server %s\n local  %s" % (i, cmd, s[1], l[1]))
+    if s[0] == "ok": hashes[i] = s[1]["hash"]
+    if i == 0:
+        # the round's result tree, for the inputs of round 3
+        with open(os.path.join(ldir, "values", l[1]["hash"])) as f: three = f.read().strip()
+    print("  %-44s %s" % (cmd[:44], "same error" if s[0] == "error" else
+          "same %s %s steps=%s" % (s[1]["kind"], s[1]["hash"][:8], s[1]["steps"])))
+print("  %d/%d rounds identical (kind, status, hash, steps, lock, dict)" % (len(script), len(script)))
 PY
 
 echo "ACCEPT 18 OK"
