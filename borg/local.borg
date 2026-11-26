@@ -109,18 +109,28 @@
       ungranted one, with no record sealed. |))))
   (subsection l4-typed-output
    (status planned)
+   (execution
+    (scope l4)
+    (kind code))
    (details
     (doc (|
       Results decode through a declared type instead of printing as
       ternary. The tool-language T4 codec (server/lib/json_codec.ml)
       moves from the server rim into a library the CLI links; `--in
       TYPE` and `--out TYPE` take the same type grammar as POST
-      /api/tool/run. Without a type the CLI keeps printing ternary,
-      since trees are untyped and a guess would be wrong (leaf is
-      false, nil and zero at once).
+      /api/tool/run, written as one JSON value on the command line (for
+      example --out '{"record":{"count":[1,"int"]}}'), so the CLI
+      adds no second grammar. Without a type the CLI keeps printing
+      ternary, since trees are untyped and a guess would be wrong (leaf
+      is false, nil and zero at once).
 
       ACCEPTANCE: the gate verdict run through the CLI with a JSON
-      observation answers the same JSON as /api/tool/run. |))))
+      observation answers the same JSON as /api/tool/run.
+      |))
+   )
+   (verify
+    (test "L4: the gate verdict through the CLI with a JSON observation answers the same JSON as /api/tool/run"))
+  )
   (subsection l5-defs-as-ops
    (status planned)
    (details
