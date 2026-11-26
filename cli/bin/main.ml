@@ -68,8 +68,8 @@ let codec_type flag s =
 
 let codec_value flag ty s =
   (* the flag is the JSON path root, so an error names it as the server
-     names inputs[0].value: --in.exit *)
-  match C.encode ~path:flag ty (J.from_string s) with
+     names inputs[0].value: --in: $.exit *)
+  match C.encode ~path:(flag ^ ": $") ty (J.from_string s) with
   | Ok t -> t
   | Error m -> prerr_endline m; exit 2
 
