@@ -46,8 +46,9 @@
       away from the store so server and CLI call one implementation.
 
       The local store keeps one append-only op log in the tree_ops row
-      shape from the start (seq, path, op, value_hash, actor, op_hash,
-      chained as Store computes op_hash, genesis 64 zeros), so L6 can
+      shape from the start (every field Store.tree_op_concat hashes -
+      seq, path, op, value_hash, prev_version, version, actor, ts - plus
+      op_hash, chained as Store computes it, genesis 64 zeros), so L6 can
       push it as a federation ops window with no conversion. A def is a
       put at dict/<identity>/<name>; an undef is a put of the undef
       marker (L5). Each dict row also carries a LOCAL-ONLY prev_hash
@@ -124,7 +125,8 @@
       other value.
 
       WRITE AUTHORITY. dict/ is reserved for the REPL host: grant
-      minting refuses a tree grant whose path prefix covers dict/, so a
+      minting refuses a tree grant whose path prefix covers dict/
+      (including the empty prefix and partial prefixes such as d), so a
       prim run can never rewrite a dictionary; only def/undef rounds
       (and, under ns/<peer>/, fed apply) write there.
 
@@ -156,8 +158,12 @@
 
       ENROLMENT. Peers are bearer identities the operator lists in
       TUNA_FED_PEERS; there is no self-enrolment. Each laptop is set up
-      once by the operator and holds its peer token in a file, never in
-      the dictionary or a journal.
+      once by the operator and holds two tokens in one local file
+      (mode 600), never in the dictionary or a journal: its peer token
+      (push) and its owner's bearer (pull of a private dictionary, see
+      below). The owner's bearer is a full credential; the owner should
+      be a non-admin identity, and a read-only token is preferred if
+      one exists.
 
       PULL: std and any value by hash (rehashed on receipt), and the
       ops window of the user's server dictionary (prefix
@@ -191,7 +197,12 @@
       (byte-values law 2): anyone holding a hash can fetch its tree. A
       private dictionary hides which names an identity binds to which
       hashes, and its history; it does not hide a tree whose hash has
-      leaked. The chapter says so rather than implying more.
+      leaked. One more residue: a served row's prev_hash is the op_hash
+      of the row before it in the global log, which may be a hidden
+      dict row; someone who can guess that row's every field (seq,
+      actor, path, ts, value) can confirm the guess. Accepted: it
+      confirms a guess, it does not reveal one. The chapter says so
+      rather than implying more.
 
       Because the laptop peer is its own identity (fed-peer-<name>),
       it pulls its owner's private dictionary with the owner's bearer,
@@ -205,8 +216,10 @@
       host writes a put op at runs/<run-id> citing the record's hash
       when it seals the record, so the path arrives through the same
       window. A record above the store's value size cap (a 413 on
-      apply) is not pushed; it stays local, the push reports it by run
-      id, and the rest of the window is sent without its put. The
+      apply) is not pushed. A 413 refuses the whole apply before
+      anything lands, so the tool resends the window without that put
+      row (rows verify one by one, so dropping one is safe); the record
+      stays local and the push reports it by run id. The
       server stores records as values and does not claim to have
       executed or verified them. Anyone who reads one
       checks it with deriv-check (or server replay for fast* until L3's
