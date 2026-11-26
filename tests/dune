@@ -444,7 +444,8 @@
 (executable
  (name local_tests)
  (modules local_tests)
- (libraries tuna tuna_compiler tuna_stdlib tuna_server alcotest))
+ (libraries tuna tuna_interp tuna_compiler tuna_stdlib tuna_server tuna_store
+   tuna_local str alcotest))
 
 (rule
  (alias runtest)

@@ -9,6 +9,11 @@
      tuna eval-source <source-file> [arg-terms...] [--fuel N] [--cap N]
                                  compile a source program and each arg
                                  term, then apply (borg/local.borg L1)
+     tuna repl [--dir D] [--identity N] [--input TERM]... [--fuel N]
+               [--cap N] [--semantics S]
+                                 the REPL grammar over a local directory
+                                 (borg/local.borg L2): one command per
+                                 stdin line, rounds as on /api/repl
 
    Source compiles resolve names against the frozen stdlib
    (Tuna_stdlib.Std_dict, borg/local.borg L1): lambda param > std >
@@ -155,6 +160,56 @@ let eval_source_cmd argv off =
   print_result
     (Tuna_interp.Eval.eval ~fuel ~size_cap:cap ~mode ?accel ~program:art.tree args)
 
+(* tuna repl: one round per stdin line against the local store.  A
+   failed round prints "error <msg>" and the session goes on; the exit
+   status is 1 if any round failed, so a piped transcript is a check. *)
+let repl_cmd argv off =
+  let dir = ref None and identity = ref None and inputs = ref [] in
+  let rest = ref [] in
+  let rec go i =
+    if i < Array.length argv then
+      match argv.(i) with
+      | "--dir" -> dir := Some argv.(i + 1); go (i + 2)
+      | "--identity" -> identity := Some argv.(i + 1); go (i + 2)
+      | "--input" -> inputs := argv.(i + 1) :: !inputs; go (i + 2)
+      | a -> rest := a :: !rest; go (i + 1)
+  in
+  go off;
+  let flags = Array.of_list ("tuna" :: List.rev !rest) in
+  let fuel, cap, mode, accel, positional = parse_run_flags flags 1 in
+  if positional <> [] then (
+    prerr_endline ("repl: unexpected argument " ^ List.hd positional);
+    exit 2);
+  (* the server REPL's run defaults when no flag is given *)
+  let has f = Array.exists (( = ) f) flags in
+  let fuel = if has "--fuel" then fuel else 1_000_000 in
+  let cap = if has "--cap" then cap else 1_000_000 in
+  let root = Option.value !dir ~default:(Tuna_local.Local_store.default_root ()) in
+  let st =
+    try Tuna_local.Local_store.open_ ?identity:!identity root
+    with Failure msg -> prerr_endline ("repl: " ^ msg); exit 2
+  in
+  let inputs = List.rev_map (fun t -> (fst (compile_std t)).tree) !inputs in
+  let opts = { Tuna_local.Local_repl.fuel; size_cap = cap; mode; accel; inputs } in
+  let tty = Unix.isatty Unix.stdin in
+  let failed = ref false in
+  let rec loop () =
+    if tty then (print_string "tuna> "; flush stdout);
+    match input_line stdin with
+    | exception End_of_file -> if tty then print_newline ()
+    | line ->
+        let l = String.trim line in
+        if l <> "" && l.[0] <> ';' then (
+          (match Tuna_local.Local_repl.execute st opts l with
+           | Ok o -> print_string (Tuna_local.Local_repl.render o)
+           | Error msg -> failed := true; print_endline ("error " ^ msg));
+          print_newline ();
+          flush stdout);
+        loop ()
+  in
+  loop ();
+  exit (if !failed then 1 else 0)
+
 let () =
   match Sys.argv.(1) with
   | "eval" ->
@@ -163,7 +218,8 @@ let () =
   | "compile" -> compile_cmd Sys.argv.(2)
   | "eval-compiled" -> eval_compiled_cmd Sys.argv 2
   | "eval-source" when Array.length Sys.argv > 2 -> eval_source_cmd Sys.argv 2
+  | "repl" -> repl_cmd Sys.argv 2
   | _ ->
       prerr_endline
-        "usage: tuna eval <corpus-file> | tuna compile <source-file> | tuna eval-compiled <ternary> [args...] | tuna eval-source <source-file> [arg-terms...]";
+        "usage: tuna eval <corpus-file> | tuna compile <source-file> | tuna eval-compiled <ternary> [args...] | tuna eval-source <source-file> [arg-terms...] | tuna repl [--dir D]";
       exit 2

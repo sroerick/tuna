@@ -10,6 +10,12 @@
 #        (verify-8 checks that); a mismatch is LO1 drift.  A source
 #        both sides refuse (a moved pin, a non-std name) must be
 #        refused with the same compile message.
+#   18.2 L2 LOCAL REPL - one transcript (def, eval with and without
+#        inputs, get, a shadowing def of a std name, undef, errors,
+#        dict) run through tuna repl over a fresh directory and through
+#        /api/repl: every round has the same kind, status, result hash,
+#        steps, lock and dict rows, and failed rounds fail with the same
+#        message.  The transcript undefines what it defined.
 #
 # Env: as scripts/verify-lib.sh (a live dev server; TUNA_HTTP_PORT,
 # TUNA_SMOKE_TOKEN or the dev boot token).
@@ -85,6 +91,84 @@ for label, src in sources:
         raise SystemExit("18.1: %s lock differs: cli %s server %s" % (label, clock, slock))
     n += 1
 print("  %d/%d sources: identical program hash and lock" % (n, len(sources)))
+PY
+
+echo "[18.2] L2: a REPL transcript answers alike in tuna repl and /api/repl"
+LDIR=$(mktemp -d); trap 'rm -rf "$LDIR"' EXIT
+python3 - "$BASE" "$TOKEN" "$CLI" "$LDIR" <<'PY' || fail "see the line above"
+import json, os, subprocess, sys, urllib.request, urllib.error
+base, tok, cli, ldir = sys.argv[1:5]
+sfx = os.urandom(3).hex()
+inc = "v18inc" + sfx
+three = None  # ternary of [1 2 3], filled from round 1
+
+def server(cmd, inputs):
+    req = urllib.request.Request(base + "/api/repl",
+        data=json.dumps({"command": cmd, "inputs": inputs}).encode(),
+        headers={"Authorization": "Bearer " + tok,
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            o = json.load(r)["round"]
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        try: return ("error", json.loads(body).get("error", body))
+        except ValueError: return ("error", body)
+    return ("ok", {"kind": o["kind"], "status": o["status"] or None,
+                   "hash": o["hash"], "steps": o["steps"] if o["status"] else None,
+                   "lock": sorted((l["name"], l["hash"]) for l in o["lock"]),
+                   "dict": sorted((d["name"], d["ternary"]) for d in o["dictionary"])})
+
+def local(cmd, inputs):
+    argv = [cli, "repl", "--dir", ldir]
+    for t in inputs: argv += ["--input", "%" + t]
+    r = subprocess.run(argv, input=cmd + "\n", capture_output=True, text=True)
+    f = {"lock": [], "dict": []}
+    for line in r.stdout.splitlines():
+        if not line: continue
+        k, _, v = line.partition(" ")
+        if k == "error": return ("error", v)
+        if k == "lock": f["lock"].append(tuple(v.split(" ", 1)))
+        elif k == "def": f["dict"].append(tuple(v.split(" ", 1)))
+        else: f[k] = v
+    return ("ok", {"kind": f.get("kind"), "status": f.get("status"),
+                   "hash": f.get("hash", ""),
+                   "steps": int(f["steps"]) if "steps" in f else None,
+                   "lock": sorted(f["lock"]), "dict": sorted(f["dict"])})
+
+script = [
+  ("[1 2 3]", []),
+  ("def %s (lambda (x) (int-add x 1))" % inc, []),
+  ("(%s 41)" % inc, []),
+  ("(lambda (xs) (list-length xs))", "THREE"),
+  ("get 0", []),
+  ("get 9", []),
+  ("def not (lambda (b) b)", []),
+  ("(not true)", []),
+  ("undef not", []),
+  ("(not true)", []),
+  ("eval nosuchname", []),
+  ("bogus command", []),
+  ("dict", []),
+  ("undef " + inc, []),
+  ("dict", []),
+]
+for i, (cmd, inputs) in enumerate(script):
+    if inputs == "THREE": inputs = [three]
+    s, l = server(cmd, inputs), local(cmd, inputs)
+    if s[0] != l[0]:
+        raise SystemExit("18.2 round %d %r: server %s vs local %s" % (i, cmd, s, l))
+    if s[0] == "error":
+        if l[1] not in s[1] and s[1] not in l[1]:
+            raise SystemExit("18.2 round %d %r: errors differ: %r vs %r" % (i, cmd, s[1], l[1]))
+    elif s[1] != l[1]:
+        raise SystemExit("18.2 round %d %r:\n server %s\n local  %s" % (i, cmd, s[1], l[1]))
+    if i == 0:
+        # the round's result tree, for the inputs of round 3
+        with open(os.path.join(ldir, "values", l[1]["hash"])) as f: three = f.read().strip()
+    print("  %-44s %s" % (cmd[:44], "same error" if s[0] == "error" else
+          "same %s %s steps=%s" % (s[1]["kind"], s[1]["hash"][:8], s[1]["steps"])))
+print("  %d/%d rounds identical (kind, status, hash, steps, lock, dict)" % (len(script), len(script)))
 PY
 
 echo "ACCEPT 18 OK"

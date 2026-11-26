@@ -4,7 +4,9 @@
    builds (Tuna_server.Stdlib_embed.defs compiled in order, each def
    against the defs before it - the sabralib identity's own dictionary),
    and must resolve names as the server does for an identity with no
-   defs: lambda param > std > reader builtins.  No PG, no HTTP. *)
+   defs: lambda param > std > reader builtins.  L2: the local store's
+   op chain is the server's formula, and local REPL rounds resolve and
+   shadow as the server's.  No PG, no HTTP. *)
 
 open Tuna
 module Bracket = Tuna_compiler.Bracket
@@ -95,9 +97,99 @@ let test_resolution () =
   | _ -> Alcotest.fail "unbound name must not compile"
   | exception Tuna_compiler.Ir.Error _ -> ()
 
+(* -- L2: the local store and REPL -------------------------------------- *)
+
+module LS = Tuna_local.Local_store
+module LR = Tuna_local.Local_repl
+
+let fresh_dir () =
+  let d = Filename.temp_file "tuna-local" "" in
+  Sys.remove d;
+  d
+
+let opts =
+  { LR.fuel = 1_000_000; size_cap = 1_000_000;
+    mode = Tuna_interp.Eval.Canonical; accel = None; inputs = [] }
+
+let run st line =
+  match LR.execute st opts line with
+  | Ok o -> o
+  | Error e -> Alcotest.failf "%s: %s" line e
+
+(* the local chain formula is the store's, field for field *)
+let test_op_concat () =
+  List.iter
+    (fun (seq, path, op, vh, pv, v, actor, ts) ->
+      Alcotest.(check string) ("op_concat " ^ path)
+        (Tuna_store.Store.op_concat ~seq ~path ~op ~value_hash:vh
+           ~prev_version:pv ~version:v ~actor ~ts_unix:ts)
+        (LS.op_concat ~seq ~path ~op ~value_hash:vh ~prev_version:pv
+           ~version:v ~actor ~ts_unix:ts))
+    [ (1L, "dict/local/inc", "put", Some LS.undef_marker, None, Some 1L, "local", 0L);
+      (42L, "runs/x", "cas", None, Some 3L, None, "a|b", 1795671740L);
+      (7L, "", "put", Some "ab", Some 1L, Some 2L, "", -1L) ]
+
+let test_store_chain () =
+  let st = LS.open_ (fresh_dir ()) in
+  Alcotest.(check string) "default identity" "local" st.LS.identity;
+  ignore (run st "def inc (lambda (x) (int-add x 1))");
+  ignore (run st "def not (lambda (b) b)");
+  ignore (run st "undef not");
+  Alcotest.(check (result unit string)) "chain verifies" (Ok ()) (LS.verify st);
+  let o = LS.ops st in
+  Alcotest.(check int) "three effect ops" 3 (List.length o);
+  let last = List.nth o 2 in
+  Alcotest.(check (option string)) "undef is the marker put"
+    (Some LS.undef_marker) last.LS.value_hash;
+  Alcotest.(check bool) "undef carries the prev binding" true
+    (last.LS.prev_hash <> None);
+  Alcotest.(check (option int64)) "per-path version" (Some 2L) last.LS.version;
+  Alcotest.(check (list string)) "dict is the fold" [ "inc" ]
+    (List.map fst (LS.dict_hashes st));
+  (* reopen: same identity, same state; a second identity is refused *)
+  let st2 = LS.open_ st.LS.root in
+  Alcotest.(check (list string)) "persists" [ "inc" ] (List.map fst (LS.dict_hashes st2));
+  (match LS.open_ ~identity:"other" st.LS.root with
+   | _ -> Alcotest.fail "a directory holds one identity"
+   | exception Failure _ -> ());
+  (* tamper: rewrite one value hash in the log *)
+  let p = Filename.concat st.LS.root "ops.jsonl" in
+  let s = In_channel.with_open_bin p In_channel.input_all in
+  let s' = Str.global_replace (Str.regexp_string LS.undef_marker) (String.make 64 'f') s in
+  Out_channel.with_open_bin p (fun oc -> Out_channel.output_string oc s');
+  match LS.verify st with
+  | Ok () -> Alcotest.fail "tampered log must not verify"
+  | Error _ -> ()
+
+let test_repl_rounds () =
+  let st = LS.open_ (fresh_dir ()) in
+  let std_not = (run st "(not true)").LR.hash in
+  Alcotest.(check string) "std not: (not true) = false" (Hash.hex_of_tree Tree.Leaf) std_not;
+  ignore (run st "def not (lambda (b) b)");
+  Alcotest.(check string) "own def shadows std"
+    (Hash.hex_of_tree (Tree.Stem Tree.Leaf)) (run st "(not true)").LR.hash;
+  ignore (run st "undef not");
+  Alcotest.(check string) "undef restores std" std_not (run st "(not true)").LR.hash;
+  let o = run st "(list-length [1 2 3])" in
+  Alcotest.(check (option string)) "status" (Some "normal") o.LR.status;
+  Alcotest.(check string) "list-length 3" "1110" o.LR.ternary;
+  Alcotest.(check string) "get addresses the last result" "110"
+    (run st "get 0").LR.ternary;
+  (match LR.execute st opts "eval nosuchname" with
+   | Error e -> Alcotest.(check bool) "compile error text" true
+                  (String.length e > 14 && String.sub e 0 14 = "compile error:")
+   | Ok _ -> Alcotest.fail "unbound must fail");
+  match LR.execute st opts "bogus command" with
+  | Error _ -> ()
+  | Ok _ -> Alcotest.fail "unknown command must fail"
+
 let () =
   Alcotest.run "local"
     [ ( "l1-stdlib-offline",
         [ Alcotest.test_case "frozen rows = manifest" `Quick test_manifest;
           Alcotest.test_case "frozen = server seeding round" `Quick test_equals_seeded;
-          Alcotest.test_case "resolution order and pins" `Quick test_resolution ] ) ]
+          Alcotest.test_case "resolution order and pins" `Quick test_resolution ] );
+      ( "l2-local-repl",
+        [ Alcotest.test_case "op chain formula = Store.op_concat" `Quick test_op_concat;
+          Alcotest.test_case "store: chain, fold, identity, tamper" `Quick test_store_chain;
+          Alcotest.test_case "rounds: std, shadow, undef, get, errors" `Quick test_repl_rounds ] ) ]

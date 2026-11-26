@@ -115,6 +115,18 @@ Source compiles resolve names against the frozen stdlib
 identity with no defs, and print a `lock <name> <sha256>` line per
 std name used. No server or database is needed.
 
+```
+tuna repl [--dir D] [--identity N] [--input TERM]... [--fuel N] [--cap N] [--semantics S]
+```
+
+The REPL grammar of `/api/repl` (`eval`/`def`/`undef`/`get`/`patch`/
+`first-diff`/`dict`; a bare term evaluates) over a local directory
+(default `$TUNA_LOCAL_DIR`, else `~/.local/share/tuna`): one command per
+stdin line, one `key value` block per round. Definitions are an
+append-only, hash-chained op log (`ops.jsonl`, the server's tree_ops row
+shape) over content-addressed values, so a later sync can push them as
+a federation ops window (borg/local.borg L2, L6).
+
 ### JSON API (bearer auth on everything; 401/400/403/404/409 by case)
 
 ```

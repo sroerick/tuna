@@ -1,0 +1,6 @@
+; local chapter (borg/local.borg): the local directory store and the
+; local REPL rounds (L2).  No database, no server.
+(library
+ (name tuna_local)
+ (modules local_store local_repl)
+ (libraries tuna tuna_interp tuna_compiler tuna_repl tuna_stdlib yojson unix))

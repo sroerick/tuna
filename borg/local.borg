@@ -38,7 +38,8 @@
       instance seeded from the manifest; a moved pin is the same
       compile error offline and online. |))))
   (subsection l2-local-repl
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 L2 IMPLEMENTED (branch tuna-local-l2; merged after review). CODE: repl/lib (library tuna_repl, pure): Repl_core holds the command grammar, parse_command, lock_of and compile_with_dict moved out of server/lib/repl_cmd.ml, which now includes it (Tuna_server.Repl_cmd names unchanged); Patch moved from server/lib, which re-exports it. local/lib (library tuna_local): Local_store (identity file, values/<sha256>, ops.jsonl in the tree_ops row shape chained by a copy of Store.op_concat that a test pins equal, last) and Local_repl (rounds as Repl_cmd.execute: eval/def compile against own defs over the frozen std, run on the round's inputs and move last; undef puts the zero-length-bytes marker; get/patch/first-diff/dict structural). cli: tuna repl [--dir D] [--identity N] [--input TERM]... [--fuel N] [--cap N] [--semantics S], one command per stdin line, default dir $TUNA_LOCAL_DIR or $XDG_DATA_HOME/tuna, the server REPL's 1e6 fuel/size defaults, exit 1 if any round failed. A directory holds one identity (fixed at creation). Prim calls are not answered locally yet (L3). EVIDENCE: dune build --root . @all exit 0; dune runtest --root . exit 0 with PG up on an isolated instance (1003 OK, 0 FAIL; store, repl, fed, deriv suites ran); tests/local_tests.ml l2 suite 3/3 (op chain formula = Store.op_concat on three rows incl. NULL fields; chain verifies, per-path versions, the dict fold, undef marker with prev_hash, one identity per directory, a tampered row fails verify; rounds: std, own shadow, undef restores std, get on the last result, compile and grammar errors); scripts/verify-18-local.sh ACCEPT 18 OK - 18.2: a 15-round transcript (def, eval with and without inputs incl. a 517-step round, get, a bad path, a def shadowing std not, undef, an unbound name, an unknown command, dict) gives the same kind, status, result hash, steps, lock and dict rows through tuna repl and /api/repl, errors with the same message. The server REPL refactor re-verified live: verify-8, -12, -15, -1, -3, -16 exit 0.|) *)
    (details
     (doc (|
       `tuna repl` runs the REPL command grammar (eval, def, undef, get,
@@ -275,7 +276,7 @@
  )
  (verify
   (test "L1: (not true) and (list-length [1 2 3]) compile through the CLI; every corpus source compiles to the hash POST /api/programs answers for an identity with no defs on a manifest-seeded instance (tests/local_tests.ml offline; scripts/verify-18-local.sh live)")
-  (test "L2: a def/eval/undef transcript gives identical result hashes and step counts in tuna repl and /api/repl for a fresh identity")
+  (test "L2: a def/eval/undef transcript gives identical result hashes and step counts in tuna repl and /api/repl for a fresh identity (scripts/verify-18-local.sh 18.2; tests/local_tests.ml l2 offline)")
   (test "L3: a local v0/v1 run with prims emits a deriv record deriv-check verifies (exit 0); a flipped journal answer exits 1; server replay reproduces result hash and steps; after the registry step the same holds for fast1-fast3")
   (test "L4: the gate verdict through the CLI with a JSON observation answers the same JSON as /api/tool/run")
   (test "L5: after migration every identity's effective dictionary is unchanged, a past dictionary is a fold of the op log, and a def appends one tree_ops row at its dict path")
