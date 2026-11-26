@@ -10,6 +10,8 @@
 #        is not one (a v1 int; a Bin; junk) is a 400 citing its check
 #        run, which exists, answered a refusal, and replay-verifies.
 #   17.3 JAY BOOL - true is typed and answered back.
+#   17.5 NESTED - a jay type inside a list, option or record field is
+#        checked at its own path (review finding 2026-11-25: it was not).
 #   17.4 UNTYPED IS UNCHANGED - the same program with a plain "int"
 #        input answers as before, with no type checks.
 #
@@ -93,6 +95,24 @@ for what, tern in claims:
         die("17.2 the refusing check run must replay-verify: %r" % row.get("verify_status"))
     print("  %-38s -> 400, check run %s (%s, result %s), replay verified"
           % (what, tc["check_run"][:8], j.get("check_status"), (j.get("check_result") or "")[:12]))
+
+print("[17.5] a jay type nested in a list, option or record is checked too")
+junk = {"ternary": "21010"}
+nested = [
+    ("a list element", {"list": JINT}, [5, junk], "inputs[0][1]"),
+    ("an option", {"option": JINT}, junk, "inputs[0]"),
+    ("a record field", {"record": {"amount": [0, JINT]}}, {"amount": junk}, "inputs[0].amount"),
+]
+for what, ty, val, path in nested:
+    code, j = tool([{"type": ty, "value": val}], "tree")
+    tc = j.get("type_check") or {}
+    if code != 400 or tc.get("input") != path or not tc.get("check_run"):
+        die("17.5 junk in %s must be a 400 citing %s: %s %r" % (what, path, code, j))
+    print("  junk in %-15s -> 400 at %s, check run %s" % (what, path, tc["check_run"][:8]))
+code, j = tool([{"type": {"list": JINT}, "value": [5, -6, 1048579]}], {"list": JINT})
+if code != 201 or j.get("result") != [5, -6, 1048579] or len(j.get("type_checks") or []) != 3:
+    die("17.5 a list of three jay ints must run with three checks: %s %r" % (code, j))
+print("  [5, -6, 1048579] as a list of jay ints -> 201, three check runs")
 
 print("[17.3] jay bool")
 code, j = tool([{"type": JBOOL, "value": True}], JBOOL)

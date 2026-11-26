@@ -892,3 +892,32 @@ dominates; the natives' own run is ~0.012s. Fix candidates: cache the
 prepared program per hash across runs (a typed tool reuses one checker
 program), or a cheaper walk. Not done here.
 
+## F20 — INDEPENDENT REVIEW OF E2/E3: TWO CAP ESCAPES AND A SKIPPED PRIM (2026-11-25)
+
+Independent review (Fable, fresh context) of tuna/language-tooling before
+it landed. Three findings about the accelerators, all reproduced:
+
+1. SIZE CAP ESCAPE (fast2, fast3) - a value a native answered through a
+   plan (`Build`) or a continuation (`Value` in `run_answer`) was handed
+   to bare `deliver`, skipping the size check. list-map `\x. pair x x`
+   over a 20-element list at cap 1600: v0 Size_exhausted, fast2 Normal
+   with a 2,561-node result. fast3 `tp[O] @ triage[Lf, Sm G, Lf] @ Sm X`
+   at cap 100,000: v0 Size_exhausted, fast3 Normal with 131,072 nodes.
+   That is EM2 / EM5 as written. FIXED IN PLACE (owner decision: neither
+   semantics had landed): both paths use `deliver_checked`
+   (interpreter/lib/flat.ml). Tests: accel_tests "a plan's built value is
+   size-capped like v0's (EM2)" and fast3_tests "a value a native builds
+   is size-capped like v0's (EM5)" - both FAIL with the bare `deliver`
+   restored, both pass with the fix.
+2. A PRIM BUILT AT RUN TIME IN DISCARDED WORK IS SKIPPED (fast3) - the
+   decline test is syntactic. A row whose `rest` builds `Fork(gate,
+   callsite)` and applies it: on a hit, v0 evaluates `rest @ n` (rows are
+   eager) and fires the prim; the native does not. Same answer, one
+   journal row fewer. Law E3 (d) said "no effect is ever skipped"; the
+   text was wrong, not the native (owner decision: correct the text, keep
+   the syntactic check). Pinned by fast3_tests "law (d) as written".
+   Does not touch TY3: O_bin is fixed and builds no prim calls.
+3. TESTS COULD MISS A SILENT FALLBACK - the fast3 differential compared
+   only Normal answers and never asserted that natives fired, which is
+   how 1 and 2 got through. It now compares size-capped runs and asserts
+   native calls; EM6 in steps is a test (ibig_Int: fast3 <= v0 / 10).

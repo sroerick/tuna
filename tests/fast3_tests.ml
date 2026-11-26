@@ -58,9 +58,24 @@ let family name = List.find (fun f -> f.A.fname = name) (Lazy.force fast3).A.fam
 let skel name = Option.get (A.family_skel (family name))
 let host ~site:_ ~name ~args:_ = `Error ("prim " ^ name)
 
-let run ?accel ~fuel p args =
-  let m = F.start ?accel ~fuel ~size_cap:500_000_000 ~program:p ~args () in
-  F.run ~host m
+let native_calls = ref 0
+
+let run ?accel ?(size_cap = 500_000_000) ?(host = host) ~fuel p args =
+  let m = F.start ?accel ~fuel ~size_cap ~program:p ~args () in
+  let r = F.run ~host m in
+  native_calls := !native_calls + F.accel_calls m;
+  r
+
+let status = function
+  | Tuna_interp.Prim_eval.Normal _ -> "normal"
+  | Tuna_interp.Prim_eval.Fuel_exhausted _ -> "fuel"
+  | Tuna_interp.Prim_eval.Size_exhausted _ -> "size"
+  | _ -> "other"
+
+let steps_of = function
+  | Tuna_interp.Prim_eval.Normal (_, s) | Tuna_interp.Prim_eval.Fuel_exhausted s
+  | Tuna_interp.Prim_eval.Size_exhausted s -> s
+  | _ -> -1
 
 (* the ontologies his vectors type against: every infer[O] program *)
 let ontologies =
@@ -119,6 +134,11 @@ let agree what p args =
           (match want with Stem _ -> incr typed | _ -> incr refused);
           true
       | _ -> Alcotest.fail (what ^ ": v0 finished, fast3 did not"))
+  | Tuna_interp.Prim_eval.Size_exhausted _ ->
+      (* the cap is part of the answer (EM2/EM5) *)
+      let got = run ~accel:(Lazy.force fast3) ~fuel p args in
+      if status got <> "size" then Alcotest.fail (what ^ ": v0 hit the size cap, fast3 answered " ^ status got);
+      true
   | _ -> false
 
 let differential name gen n =
@@ -126,6 +146,7 @@ let differential name gen n =
       let os = Lazy.force ontologies in
       Alcotest.(check bool) "at least two ontologies" true (List.length os >= 2);
       let compared = ref 0 in
+      native_calls := 0;
       typed := 0;
       refused := 0;
       List.iteri
@@ -140,7 +161,10 @@ let differential name gen n =
       Alcotest.(check bool)
         (Printf.sprintf "%s: %d of %d compared (v0 finished)" name !compared (n * List.length os))
         true
-        (!compared >= n * List.length os * 3 / 4))
+        (!compared >= n * List.length os * 3 / 4);
+      (* a broken recognition would fall back to v0 and still agree: the
+         natives must actually have answered (review finding 2026-11-25) *)
+      Alcotest.(check bool) (name ^ ": checker natives fired") true (!native_calls > 0))
 
 let infer_of o = A.instantiate (skel "infer") [| o |]
 let tp_of o = A.instantiate (skel "tp") [| o |]
@@ -208,4 +232,61 @@ let cases =
          | _ -> Alcotest.fail "row not recognised");
         Alcotest.(check bool) "the run answers as v0" true (agree "prim ontology" (infer_of o') [ v ])) ]
 
-let () = Alcotest.run "fast3: Jay's checker natives against v0" [ ("e3", cases) ]
+(* review findings 2026-11-25: the size cap, EM6 in steps, and the
+   corrected law (d) on prims a parameter builds at run time *)
+let rec big n = if n <= 1 then Leaf else Fork (big (n / 2), big (n - (n / 2) - 1))
+
+let review_cases =
+  [ Alcotest.test_case "a value a native builds is size-capped like v0's (EM5)" `Quick (fun () ->
+        (* tp[O] @ triage[f0, Sm G, y] @ Sm X answers tp G X: a pair of
+           ~60k-node trees, over a 100k cap *)
+        let no_rows = Fork (Leaf, Fork (Leaf, Leaf)) in
+        let tp = tp_of no_rows in
+        let f = Fork (Fork (Leaf, Stem (big 60_001)), Leaf) and x = Stem (big 60_001) in
+        let cap = 100_000 in
+        let v0 = run ~size_cap:cap ~fuel tp [ f; x ] in
+        native_calls := 0;
+        let f3 = run ~accel:(Lazy.force fast3) ~size_cap:cap ~fuel tp [ f; x ] in
+        Alcotest.(check string) "v0 hits the cap" "size" (status v0);
+        Alcotest.(check string) "fast3 hits the cap" "size" (status f3);
+        Alcotest.(check bool) "the tp native answered" true (!native_calls > 0));
+    Alcotest.test_case "typing a 21-bit Int: natives fire, at most a tenth of v0 steps (EM6)" `Quick (fun () ->
+        let _, _, p, args, want =
+          List.find (fun (_, lab, _, _, _) -> lab = "ibig_Int") (Lazy.force vectors)
+        in
+        let v0 = run ~fuel p args in
+        native_calls := 0;
+        let f3 = run ~accel:(Lazy.force fast3) ~fuel p args in
+        (match (v0, f3) with
+         | Tuna_interp.Prim_eval.Normal (a, _), Tuna_interp.Prim_eval.Normal (b, _) ->
+             Alcotest.(check bool) "both answer his stated type" true (a = want && b = want)
+         | _ -> Alcotest.fail "both must finish");
+        Alcotest.(check bool) "natives fired" true (!native_calls > 0);
+        Alcotest.(check bool)
+          (Printf.sprintf "fast3 %d steps <= v0 %d / 10" (steps_of f3) (steps_of v0))
+          true
+          (steps_of f3 * 10 <= steps_of v0));
+    Alcotest.test_case "law (d) as written: a prim a parameter builds in discarded work is skipped" `Quick
+      (fun () ->
+        (* row[m, D, rest] @ m is a hit: v0 still evaluates rest @ m (rows
+           are eager), and this rest builds and fires a prim call there;
+           the native skips it.  Same answer, one prim call fewer - the
+           corrected law (eval-modes E3 (d)) says exactly this. *)
+        let calls = ref 0 in
+        let counting ~site:_ ~name:_ ~args:_ = incr calls; `Done Leaf in
+        let cs = match Tuna.Cprim.call_tree ~name:"oracle" ~site:0 with Fork (_, c) -> c | _ -> assert false in
+        let rest = s2 (s2 (k1 (Stem Tuna.Cprim.gate)) (k1 cs)) A.ji in
+        let m = Fork (Leaf, Leaf) in
+        let row = A.instantiate (skel "row") [| m; Stem Leaf; rest |] in
+        let v0 = run ~host:counting ~fuel row [ m ] in
+        let v0_calls = !calls in
+        calls := 0;
+        let f3 = run ~host:counting ~accel:(Lazy.force fast3) ~fuel row [ m ] in
+        (match (v0, f3) with
+         | Tuna_interp.Prim_eval.Normal (a, _), Tuna_interp.Prim_eval.Normal (b, _) ->
+             Alcotest.(check bool) "same answer" true (a = b)
+         | _ -> Alcotest.fail "both must finish");
+        Alcotest.(check (pair int int)) "prim calls v0, fast3" (1, 0) (v0_calls, !calls)) ]
+
+let () =
+  Alcotest.run "fast3: Jay's checker natives against v0" [ ("e3", cases); ("review", review_cases) ]

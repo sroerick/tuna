@@ -349,6 +349,46 @@ let share_finish m a c ~tick0 r =
                "prim answered inside; re-executes"
          | None -> ())
 
+(* Sizes of large subtrees, cached per physical node.  [size] is a pure
+   function of the tree, so the cache changes no answer, step count or
+   cap decision - only the cost of the cap check, which was O(|value|)
+   on every Stem/Fork build (FINDINGS F16 aside: 100-130us/step on
+   Jay's 145k-node checker).
+
+   Direct-mapped: one slot per (structural hash land mask), each an
+   ephemeron holding one node weakly with its size.  A lookup is one
+   physical-equality test; a miss (empty slot, other node, or collected
+   key) recomputes exactly from the children, which are usually cached.
+   A chained table was tried first and lost: Jay's checker builds
+   thousands of physically distinct copies of EQUAL trees, which always
+   share a hash, so buckets reached 6k entries.  Here they only evict
+   each other.  Subtrees under [size_cache_floor] nodes are walked, not
+   cached. *)
+let size_slots = 1 lsl 18
+let size_cache_floor = 64
+
+let size_cache : (t, int) Ephemeron.K1.t option array = Array.make size_slots None
+
+let rec cached_size t =
+  match t with
+  | Leaf -> 1
+  | Stem a -> lookup_or t (fun () -> 1 + cached_size a)
+  | Fork (a, b) -> lookup_or t (fun () -> 1 + cached_size a + cached_size b)
+
+and lookup_or t compute =
+  let slot = Hashtbl.hash t land (size_slots - 1) in
+  match
+    match Array.unsafe_get size_cache slot with
+    | Some e -> Ephemeron.K1.query e t
+    | None -> None
+  with
+  | Some n -> n
+  | None ->
+      let n = compute () in
+      if n >= size_cache_floor then
+        Array.unsafe_set size_cache slot (Some (Ephemeron.K1.make t n));
+      n
+
 (* -- deliver a completed value to the frame stack --------------------- *)
 
 (* [deliver] is where the machine's continuation is popped.  It may halt
@@ -403,7 +443,7 @@ let rec deliver m r =
 
 (* a native's answer, or a continuation's *)
 and run_answer m = function
-  | Accel.Value v -> deliver m v
+  | Accel.Value v -> deliver_checked m v
   | Accel.Plan p -> start_plan m p
   | Accel.Seq (a, k) ->
       m.k <- KThen k :: m.k;
@@ -418,7 +458,7 @@ and run_answer m = function
 
 (* a plan's results are in: build the value, or fold the partials back *)
 and finish_plan m xs results = function
-  | Accel.Build b -> deliver m (b xs results)
+  | Accel.Build b -> deliver_checked m (b xs results)
   | Accel.Fold_back z ->
       m.k <- KFoldBack (List.rev results) :: m.k;
       deliver m z
@@ -435,54 +475,19 @@ and set_eval m f x =
   m.f <- Some f;
   m.x <- x
 
-(* Sizes of large subtrees, cached per physical node.  [size] is a pure
-   function of the tree, so the cache changes no answer, step count or
-   cap decision - only the cost of the cap check, which was O(|value|)
-   on every Stem/Fork build (FINDINGS F16 aside: 100-130us/step on
-   Jay's 145k-node checker).
-
-   Direct-mapped: one slot per (structural hash land mask), each an
-   ephemeron holding one node weakly with its size.  A lookup is one
-   physical-equality test; a miss (empty slot, other node, or collected
-   key) recomputes exactly from the children, which are usually cached.
-   A chained table was tried first and lost: Jay's checker builds
-   thousands of physically distinct copies of EQUAL trees, which always
-   share a hash, so buckets reached 6k entries.  Here they only evict
-   each other.  Subtrees under [size_cache_floor] nodes are walked, not
-   cached. *)
-let size_slots = 1 lsl 18
-let size_cache_floor = 64
-
-let size_cache : (t, int) Ephemeron.K1.t option array = Array.make size_slots None
-
-let rec cached_size t =
-  match t with
-  | Leaf -> 1
-  | Stem a -> lookup_or t (fun () -> 1 + cached_size a)
-  | Fork (a, b) -> lookup_or t (fun () -> 1 + cached_size a + cached_size b)
-
-and lookup_or t compute =
-  let slot = Hashtbl.hash t land (size_slots - 1) in
-  match
-    match Array.unsafe_get size_cache slot with
-    | Some e -> Ephemeron.K1.query e t
-    | None -> None
-  with
-  | Some n -> n
-  | None ->
-      let n = compute () in
-      if n >= size_cache_floor then
-        Array.unsafe_set size_cache slot (Some (Ephemeron.K1.make t n));
-      n
-
-(* size-guarded deliver: if the new value blows the cap, halt instead *)
-let deliver_checked m r =
+(* size-guarded deliver: if the new value blows the cap, halt instead.
+   Every value a native or a plan builds goes through here, never bare
+   [deliver] - the cap is part of the answer (eval-modes EM2/EM5; review
+   finding 2026-11-25: a list-map plan and a fast3 tp continuation both
+   answered Normal where v0 hit the cap). *)
+and deliver_checked m r =
   if cached_size r > m.size_cap then begin
     m.value <- r;
     m.f <- None;
     m.done_ <- Some (Prim_eval.Size_exhausted m.steps)
   end
   else deliver m r
+
 
 (* -- accelerators (fast1) ---------------------------------------------- *)
 

@@ -264,3 +264,46 @@ let rec decode ?(path = "$") (ty : ty) (t : Tuna.Tree.t) : (J.t, string) result 
           match List.find_opt (fun (_, g) -> g = n) names with
           | Some (name, _) -> Ok (`String name)
           | None -> bad (Printf.sprintf "tag %d is not a declared enum name" n)))
+
+(* -- jay positions (typing TY3) --------------------------------------- *)
+
+(* Every value of a {"jay": T} type inside [ty], with its JSON path and
+   subtree, in document order - a jay type nested in a list, option or
+   record field is checked like a top-level one (review finding
+   2026-11-25: only top-level jay inputs were checked).  [t] is the tree
+   [encode] built for [ty], so its shape is known; a shape that does not
+   fit (only possible for a caller-built tree) is an error, never a
+   silent skip. *)
+let rec jay_positions ?(path = "$") (ty : ty) (t : Tuna.Tree.t) :
+    ((string * Jay_values.ty * Tuna.Tree.t) list, string) result =
+  let bad () = Error (Printf.sprintf "%s: tree does not have the declared shape" path) in
+  match (ty, t) with
+  | Jay j, _ -> Ok [ (path, j, t) ]
+  | (Bool | Int | String | Tag | Tree | Enum _), _ -> Ok []
+  | List ty, _ ->
+      let rec go i acc = function
+        | Leaf -> Ok (List.concat (List.rev acc))
+        | Fork (hd, tl) ->
+            let* ps = jay_positions ~path:(Printf.sprintf "%s[%d]" path i) ty hd in
+            go (i + 1) (ps :: acc) tl
+        | Stem _ -> bad ()
+      in
+      go 0 [] t
+  | Option _, Leaf -> Ok []
+  | Option ty, Stem v -> jay_positions ~path ty v
+  | Option _, Fork _ -> bad ()
+  | Record fields, _ ->
+      let rec go acc = function
+        | Leaf -> Ok (List.concat (List.rev acc))
+        | Fork (Fork (k, Fork (v, Leaf)), tl) -> (
+            match nat_of k with
+            | None -> bad ()
+            | Some tag -> (
+                match List.find_opt (fun (_, g, _) -> g = tag) fields with
+                | None -> bad ()
+                | Some (name, _, ty) ->
+                    let* ps = jay_positions ~path:(path ^ "." ^ name) ty v in
+                    go (ps :: acc) tl))
+        | _ -> bad ()
+      in
+      go [] t

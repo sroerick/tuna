@@ -300,6 +300,28 @@ let jay =
         Alcotest.(check bool) "min_int is refused" true (Result.is_error (C.encode int_ty (`Int min_int)));
         Alcotest.(check bool) "a ternary value is taken as the claimed tree" true
           (enc int_ty (`Assoc [ ("ternary", `String "0") ]) = Tuna.Tree.Leaf));
+    Alcotest.test_case "every nested jay value is found, with its path" `Quick (fun () ->
+        let ty j = match C.ty_of_json j with Ok t -> t | Error m -> Alcotest.fail m in
+        let jint = `Assoc [ ("jay", `String "int") ] in
+        let t =
+          ty
+            (`Assoc
+              [ ( "record",
+                  `Assoc
+                    [ ("xs", `List [ `Int 1; `Assoc [ ("list", jint) ] ]);
+                      ("o", `List [ `Int 2; `Assoc [ ("option", jint) ] ]);
+                      ("n", `List [ `Int 3; `String "int" ]) ] ) ])
+        in
+        let v = `Assoc [ ("xs", `List [ `Int 4; `Int 5 ]); ("o", `Int 6); ("n", `Int 7) ] in
+        let tree = enc t v in
+        match C.jay_positions ~path:"inputs[0]" t tree with
+        | Error m -> Alcotest.fail m
+        | Ok ps ->
+            Alcotest.(check (list string)) "paths in document order"
+              [ "inputs[0].xs[0]"; "inputs[0].xs[1]"; "inputs[0].o" ]
+              (List.map (fun (p, _, _) -> p) ps);
+            Alcotest.(check bool) "subtrees are the encoded jay ints" true
+              (List.map (fun (_, _, t) -> JV.int_value t) ps = [ Some 4; Some 5; Some 6 ]));
     Alcotest.test_case "the embedded checker is the bin vectors' infer program" `Quick (fun () ->
         let p = Tuna.Canon.parse (Lazy.force JV.checker_ternary) in
         Alcotest.(check bool) "checker = infer O_bin" true (p = fst ((Lazy.force jay_vectors) "bzero_Bin"));

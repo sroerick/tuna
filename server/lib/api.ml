@@ -591,7 +591,9 @@ let post_run pool auth req =
    run still answers 201 with its row and journal.  A bad type or input
    value is a 400 naming its JSON path, before anything runs.
 
-   TYPED INPUTS (borg/typing.borg TY3): an input of type {"jay": T} is
+   TYPED INPUTS (borg/typing.borg TY3): every value of a {"jay": T} type
+   - a whole input, or one nested in a list, option or record field,
+   named by its path (inputs[0][2], inputs[1].amount) - is
    checked before the run by Jay's infer over O_bin, itself run as an
    ordinary run row (semantics fast3, budget TUNA_TYPECHECK_FUEL,
    default 200M, no grants) - replayable and citable.  Unless it answers
@@ -619,7 +621,7 @@ let ensure_checker pool =
    does not type is the refusal *)
 let rec typecheck pool auth acc = function
   | [] -> return (Ok (List.rev acc))
-  | (i, jty, tree) :: rest -> (
+  | (input_path, jty, tree) :: rest -> (
       ensure_checker pool >>= fun () ->
       Run.execute_run pool ~caller:auth.auth_id ~program_hash:(Lazy.force Jay_values.checker_hash)
         ~input_trees:[ tree ] ~grant_ids:[] ~fuel:(typecheck_fuel ()) ~semantics:"fast3"
@@ -630,7 +632,7 @@ let rec typecheck pool auth acc = function
           let want = Tuna.Canon.encode (Stem (Jay_values.type_tree jty)) in
           let check =
             `Assoc
-              [ ("input", `String (Printf.sprintf "inputs[%d]" i));
+              [ ("input", `String input_path);
                 ("type", `Assoc [ ("jay", `String (Jay_values.name jty)) ]);
                 ("check_run", `String row.Store.r_id);
                 ("checker", `String (Lazy.force Jay_values.checker_hash));
@@ -647,7 +649,7 @@ let rec typecheck pool auth acc = function
                     (`Assoc
                       [ ( "error",
                           `String
-                            (Printf.sprintf "inputs[%d] does not type as jay %s" i (Jay_values.name jty)) );
+                            (Printf.sprintf "%s does not type as jay %s" input_path (Jay_values.name jty)) );
                         ("type_check", check);
                         ( "check_result",
                           match row.Store.r_result_ternary with Some t -> `String t | None -> `Null );
@@ -694,13 +696,18 @@ let post_tool_run pool auth req =
       | Error msg -> j_err msg
       | Ok (program_hash, result_ty, typed_inputs) ->
           let input_trees = List.map snd typed_inputs in
-          let to_check =
-            List.concat
-              (List.mapi
-                 (fun i (ty, tree) ->
-                   match ty with Json_codec.Jay jty -> [ (i, jty, tree) ] | _ -> [])
-                 typed_inputs)
-          in
+          match
+            List.fold_left
+              (fun acc (i, (ty, tree)) ->
+                Result.bind acc (fun acc ->
+                    Result.map
+                      (fun ps -> acc @ ps)
+                      (Json_codec.jay_positions ~path:(Printf.sprintf "inputs[%d]" i) ty tree)))
+              (Ok [])
+              (List.mapi (fun i x -> (i, x)) typed_inputs)
+          with
+          | Error msg -> j_err msg
+          | Ok to_check ->
           typecheck pool auth [] to_check >>= function
           | Error refusal -> refusal
           | Ok checks ->

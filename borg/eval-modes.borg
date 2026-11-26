@@ -140,14 +140,31 @@
           rows after a hit), so it may answer where the reference
           diverges or runs out of fuel inside such discarded work;
           never a different answer. Re-verification under v0 exposes
-          that case as a fuel-out. It DECLINES when the ontology
-          contains a prim call, so no effect is ever skipped.
+          that case as a fuel-out. It DECLINES when a parameter
+          (the ontology, a row's fields) CONTAINS a prim call, so no
+          prim call written into the program is ever skipped. A prim
+          call a parameter BUILDS AT RUN TIME (from parts that are
+          not a prim call until applied) can still sit in discarded
+          work: the reference fires it and journals it, the native
+          skips it, the answer is the same and the journal differs.
+          Re-verifying such a run under v0 fails on the journal. The
+          prim check stays syntactic (deciding it would mean running
+          the parameters, which is the work a native exists to skip);
+          FINDINGS F20 records the case, and tests/fast3_tests.ml
+          pins it. Fixed ontologies such as O_bin build no prim calls.
+      (e) THE SIZE CAP is part of the answer: every value a native or a
+          plan builds is delivered through the same size check as a
+          reduct, so a native never answers Normal where the reference
+          answers Size_exhausted (FINDINGS F20; fixed in place in fast2
+          and fast3 before either landed - owner decision 2026-11-25).
 
       CHECKING: every vendored Jay vector agrees under fast3; his
       helper spec vectors agree; generated values and types (well-,
       ill-typed and junk) agree between fast3 and v0 on ontologies
       O_list and O_bin; an ontology carrying a prim is declined; the
-      corpus answers identically under fast3. |))))
+      corpus answers identically under fast3; the differential also
+      compares size-capped runs and asserts the natives fired; a
+      21-bit Int types in at most a tenth of v0's steps (EM6, steps). |))))
   (subsection deferred
    (status planned)
    (details

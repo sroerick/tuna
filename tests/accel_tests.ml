@@ -291,7 +291,23 @@ let differential2 (e : A.entry) =
 let fast2_new = List.filter (fun e -> not (List.memq e A.fast1.A.entries)) A.fast2.A.entries
 
 let fast2_cases =
-  [ Alcotest.test_case "fast2 registry rows and embedded trees are the frozen stdlib" `Quick (fun () ->
+  [ Alcotest.test_case "a plan's built value is size-capped like v0's (EM2)" `Quick (fun () ->
+        (* review finding 2026-11-25: list-map (\\x. pair x x) over a list
+           whose answer is over the cap answered Normal under fast2 *)
+        let lm = def "list-map" in
+        let rec big n = if n <= 1 then T.Leaf else T.Fork (big (n / 2), big (n - (n / 2) - 1)) in
+        let g = T.Fork (T.Stem T.Leaf, A.ji) in
+        let xs = List.fold_left (fun acc _ -> T.Fork (big 50, acc)) T.Leaf (List.init 20 Fun.id) in
+        let st r = match r with
+          | Tuna_interp.Prim_eval.Normal _ -> "normal"
+          | Tuna_interp.Prim_eval.Size_exhausted _ -> "size"
+          | _ -> "other" in
+        let v0, _, _ = run ~size_cap:1600 ~fast:false lm [ g; xs ] in
+        let f2, calls, _ = run ~size_cap:1600 ~reg:A.fast2 ~fast:true lm [ g; xs ] in
+        Alcotest.(check string) "v0 hits the cap" "size" (st v0);
+        Alcotest.(check string) "fast2 hits the cap" "size" (st f2);
+        Alcotest.(check bool) "the list-map native answered" true (calls > 0));
+ Alcotest.test_case "fast2 registry rows and embedded trees are the frozen stdlib" `Quick (fun () ->
         List.iter
           (fun e ->
             let t = def e.A.name in
