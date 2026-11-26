@@ -823,4 +823,27 @@ own soundness proof modelled on `nat_interp_sound`), or one tag around
 a v1 carrier with a declared table of trusted operations (smallest,
 but its soundness rests on proofs about v1 arithmetic).
 
+SECOND ENCODING (owner chose the dedicated binary type, same day):
+`export/TyBin.v` declares `Bin` like his Nat with two successors -
+`bzero`, `beven[m]` = 2m, `bodd[m]` = 2m+1, consumed as `B * (E * O)` -
+one tag per bit under the 3-node name `Fk Lf Lf`, and `Int` as his
+wrapped type over `Bool * Bin`. OUR PROOF: `bin_interp_sound` (the Bin
+declaration is sound by values, for every ontology) after his
+`nat_interp_sound`, via `bin_guard_spec`, `bin_eliminator_inv` and a
+generalised `carrier_sel_inv`; then `O_bin_sound` / `O_bin_typing_sound`
+(Print Assumptions: closed under the global context). Ten proved
+Examples agree on tuna.
+
+| value | wrapped Int (1st) | Bin-based Int (2nd) | v1 |
+|---|---|---|---|
+| 5 | 476 nodes / 193k typing steps | 261 / 105k | ~9 |
+| 1,048,579 (21 bits) | 2,342 / 1.02M | 1,185 / 507k | ~55 |
+
+About half the first encoding; still ~20x v1 and ~23k typing steps per
+bit, so TY-F1 stays observed. The remaining overhead is fixed per bit
+and comes from his pair/selector encoding (`fst` 11 nodes, `snd` 16,
+the nested selector `fst 'C snd` 31). Arithmetic on Bin is not yet
+written; typing at ~1us/step costs ~0.5s for a 21-bit input, too slow
+for a request path until his checker is accelerated.
+
 ---

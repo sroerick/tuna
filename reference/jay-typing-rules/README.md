@@ -23,6 +23,9 @@ Files:
   (wrapped type over `Bool * List Bool`), with `O_int_sound` proved
   from his `wrap_decl_sound`; `export/ExportInt.v` prints its proved
   Examples. `export/ExportConcrete.v` prints his `is_concrete`.
+  `export/TyBin.v` — ours: binary naturals `Bin` (two successors, one
+  tag per bit) with our soundness proof `bin_interp_sound`, and `Int`
+  wrapped over `Bool * Bin`; `export/ExportBin.v` prints its Examples.
 - `trees` — `<id> <ternary>`, each distinct tree once (id = first 16 hex
   of sha256 of the ternary string; a label, not tuna's tree hash).
 - `vectors` — `<suite> <label> <program> <args,...> <expected>` by id.
@@ -31,6 +34,7 @@ Files:
   (needs Rocq; ~40 min cold). Not part of the build.
 
 Ontologies used: `O_ex` (booleans.v: Bool, Nat), `O_list` (lists.v:
-adds List[A], updates) and our `O_int` (O_list plus Int). His full `paper_ontology` is not exported yet.
+adds List[A], updates) our `O_int` (O_list plus a wrapped Int) and `O_bin` (O_list plus Bin
+and Int). His full `paper_ontology` is not exported yet.
 
 Checked by `tests/jay_tests.ml` (see the tuna metatheory chapter, rung 4).
