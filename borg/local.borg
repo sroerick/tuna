@@ -1,0 +1,149 @@
+(project tuna-local
+ (doc "Tuna book chapter: local - run sabra on a laptop with no server, then sync what it made to the main instance. Today the pure core runs offline but the language does not: the CLI compiles with no dictionary (std names are unbound), has no REPL, answers no prim, and prints results as ternary. Four offline moves (L1 stdlib in the CLI, L2 a local REPL over a file dictionary, L3 a local prim host that writes a deriv-shaped journal, L4 typed output) and two sync moves (L5 definitions become an ops-logged substrate, L6 a local instance is a federation peer). Research question, stated so it can be refuted: is local-first tuna just existing parts placed on a laptop - the pure core, the dictionary, the deriv record and the federation ops chain - so that sync needs no merge algorithm, no new protocol and no change to the calculus?")
+ (status planned)
+ (convention ocaml-dune)
+ (* agent note (|2026-11-25 chapter authored (roerick + Claude). EVIDENCE, read in-tree this date: (1) `tuna compile` on `(not true)` exits 1 "unbound variable true" and on `(list-length [1 2 3])` exits 1 "unbound variable list-length": cli/bin/main.ml calls Bracket.compile_source with no ?dictionary, although Sexp.parse and compile_source already take one. The stdlib trees are on disk (stdlib/v1/trees, manifest) but only server/lib/dune generates stdlib_embed.ml, consumed by server/lib/stdlib_seed.ml into Postgres. (2) The REPL (server/lib/repl_cmd.ml, Repl_cmd.effective_dictionary) reads repl_dict, a mutable (identity, name) -> ternary table (migrations/0004-repl-dict.sql) with no history and no op log, so a definition has nothing to sync from. (3) cli --semantics accepts v0, v1 and fast1 only; fast2/fast3 registries exist in interpreter/lib/accel.ml. (4) The pieces sync would reuse already exist: content-addressed values (GET /api/fed/value/:hash, rehash on receipt), the hash-chained tree_ops log with cas over prev_version (migrations/0005-tree-paths.sql), federation ops windows folded into ns/<peer>/ (borg/federation.borg), and deriv records checkable offline by tools/deriv-check (borg/deriv.borg). OWNER DIRECTION carried from eval-modes (2026-11-25): keep everything runnable offline, with no first-class dependency on a server to record or check a run. PRECEDENT: pp/borge/local-first.borg (a local lens is a branch of the one tree, synced by three-way tree-diff; sync-conflicts still planned there). Tuna differs because its values are immutable hashes: only the name layer can conflict.|) *)
+ (section local
+  (doc "Six moves. L1-L4 are offline-only and each is useful alone; L5-L6 add sync. None may change the calculus, the IR, the step count or the prim set; the local tools reuse the server's row shapes so their output can be synced later without conversion.")
+  (status planned)
+  (subsection l1-stdlib-offline
+   (status planned)
+   (details
+    (doc (|
+      The stdlib dictionary reaches every local front end. The embed
+      generated in server/lib/dune moves (or is duplicated by the same
+      rule) into a small library the CLI, the browser build and the
+      server all link; the server's seeding is unchanged. `tuna compile`
+      and `tuna eval` (a new source-level eval: compile, then run on
+      ternary or literal-source args) resolve names exactly as the
+      server does for an identity with no defs: lambda param > std >
+      reader builtins. Pins (tool-language T2) and the compile lock
+      work unchanged. `--semantics` accepts every registered semantics
+      (v0, v1, fast1, fast2, fast3) by the same table the server uses.
+
+      ACCEPTANCE: (not true) and (list-length [1 2 3]) compile through
+      the CLI to the same hashes POST /api/programs gives for an
+      identity with no defs, for every corpus source; a moved pin is
+      the same compile error offline and online. |))))
+  (subsection l2-local-repl
+   (status planned)
+   (details
+    (doc (|
+      `tuna repl` runs the REPL command grammar (eval, def, undef, get,
+      dict, first-diff; a bare term evaluates) against a local
+      directory, default ~/.local/share/tuna, never a database. The
+      dictionary is a file of name -> hash rows over a content-addressed
+      value directory (one file per tree, named by its sha256). The
+      grammar and resolution order are shared code, not a copy:
+      Repl_cmd's parse and dictionary assembly are factored out of the
+      store so server and CLI call one implementation. The dictionary
+      file is an append-only log of (name, prev_hash, new_hash) rows
+      from the start, so L5 can sync it without reformatting; the
+      current dictionary is the fold of the log.
+
+      ACCEPTANCE: a transcript of def/eval/undef rounds gives the same
+      result hashes and step counts locally and through /api/repl for
+      a fresh identity. |))))
+  (subsection l3-local-prims
+   (status planned)
+   (details
+    (doc (|
+      A local run host drives the pure step core (Flat_drive, as the
+      server does) and answers prims from a local registry: echo, now,
+      uuid, store/get and store/put over the local directory, http/get
+      only behind an explicit allowlist flag. Grants are command-line
+      arguments (--grant now, --grant store/get:<path-prefix>), checked
+      at every prim call like the server's grant rows; a missing grant
+      is a journaled error answer, never an exception. Each run writes
+      a journal file with the server's row fields and hash chain
+      (Store.row_hash encoding, genesis 64 zeros) and can emit a sealed
+      deriv record, so tools/deriv-check verifies a laptop run with no
+      server involved.
+
+      ACCEPTANCE: a local run with prims produces a deriv record that
+      deriv-check verifies (exit 0); flipping one journal answer makes
+      it exit 1; the same program and journal answers replayed on the
+      server reproduce the result hash and step count. |))))
+  (subsection l4-typed-output
+   (status planned)
+   (details
+    (doc (|
+      Results decode through a declared type instead of printing as
+      ternary. The tool-language T4 codec (json_codec.ml) moves from the
+      server rim into a library the CLI links; `--in TYPE` and `--out
+      TYPE` take the same type grammar as POST /api/tool/run. Without a
+      type the CLI keeps printing ternary, since trees are untyped and
+      a guess would be wrong (leaf is false, nil and zero at once).
+
+      ACCEPTANCE: the gate verdict run through the CLI with a JSON
+      observation answers the same JSON as /api/tool/run. |))))
+  (subsection l5-defs-as-ops
+   (status planned)
+   (details
+    (doc (|
+      Definitions stop being a mutable table and become an op log, on
+      the server first. The candidate shape reuses the M10 substrate
+      instead of a new table: a def is a cas on the path
+      dict/<identity>/<name> in tree_ops, carrying prev_version and
+      value_hash, so history, chaining and rewind come for free;
+      repl_dict becomes a derived index of that log, like tree_paths.
+      Whether this is tree_ops or a dedicated chained table is the
+      chapter's first make decision, decided by whether federation's
+      prefix windows already carry it.
+
+      CONFLICT. Values are immutable, so the only conflict is a name:
+      two defs of one name whose prev_hash is the same. It is detected
+      by comparison, never merged: the incoming op is refused as a
+      cas conflict and the local side keeps both hashes and asks its
+      user. This is the case pp's local-first sync-conflicts still has
+      planned; here it is a hash compare.
+
+      ACCEPTANCE: def/undef rounds after migration give the same
+      effective dictionary as before for every existing identity; the
+      dictionary at any past op is a fold of the log. |))))
+  (subsection l6-local-peer
+   (status planned)
+   (details
+    (doc (|
+      A local instance syncs as a federation peer over the existing
+      /api/fed routes, with no new protocol. PULL: std and any value
+      by hash (rehashed on receipt), and the user's dictionary ops
+      window. PUSH: the local dictionary log as an ops window (L5's
+      cas refuses a stale prev_hash), the values it names, and deriv
+      records of local runs, which the server re-verifies before it
+      stores them, so it never trusts the laptop's claim about a run.
+      Local runs keep their local run ids and arrive as verified
+      records, not as rows the server pretends it executed.
+
+      Pushing to the main instance is a write to shared state: the
+      local tool asks before each push unless the owner configures a
+      standing grant for it.
+
+      ACCEPTANCE: offline def + run on a laptop, then sync: the server
+      dictionary shows the def at the same hash, the run's deriv record
+      verifies server-side, and a conflicting def made on the server
+      meanwhile is reported with both hashes, neither overwritten. |))))
+  (subsection failure-definitions
+   (status planned)
+   (details
+    (doc (|
+      LO1 DRIFT. A source compiles to different hashes in the CLI and
+          on the server, or a local run's step count differs from its
+          server replay. THEN: a finding in FINDINGS.md; local and
+          server share one compiler and one core, so drift means a
+          front end diverged, and it is fixed there.
+      LO2 PROTOCOL GROWTH. L6 needs a route or op kind federation
+          does not have. THEN: record why, and extend federation's
+          chapter, not this one.
+      LO3 MERGE CREEP. Sync needs anything beyond hash compare and
+          cas refusal (a three-way merge, last-writer-wins, silent
+          resolution). THEN: the thesis is refuted; stop and redesign
+          with the owner. |))))
+ )
+ (verify
+  (test "L1: (not true) and (list-length [1 2 3]) compile through the CLI to the same hashes POST /api/programs answers for an identity with no defs; every corpus source agrees")
+  (test "L2: a def/eval/undef transcript gives identical result hashes and step counts in tuna repl and /api/repl for a fresh identity")
+  (test "L3: a local run with prims emits a deriv record deriv-check verifies (exit 0); a flipped journal answer exits 1; server replay reproduces result hash and steps")
+  (test "L4: the gate verdict through the CLI with a JSON observation answers the same JSON as /api/tool/run")
+  (test "L5: after migration every identity's effective dictionary is unchanged, and a past dictionary is a fold of the op log")
+  (test "L6: an offline def and run sync to the server at the same hashes, the run's deriv record verifies server-side, and a concurrent server def is reported as a conflict with both hashes")))
