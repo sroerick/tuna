@@ -1,0 +1,16 @@
+; local chapter L1 (borg/local.borg): the frozen stdlib as a name ->
+; tree dictionary for offline front ends (CLI, browser).  The reference
+; is stdlib/v1/trees (= stdlib/v1/manifest); the file is never read at
+; runtime.
+(library
+ (name tuna_stdlib)
+ (modules std_trees std_dict)
+ (libraries tuna))
+
+(rule
+ (target std_trees.ml)
+ (deps ../v1/trees ../../tools/stdprobe/embed_dict.py)
+ (action
+  (with-stdout-to %{target}
+   (run python3 %{workspace_root}/tools/stdprobe/embed_dict.py
+     %{workspace_root}/stdlib/v1/trees))))
