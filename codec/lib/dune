@@ -1,0 +1,9 @@
+; tool-language T4 codec (borg/tool-language.borg): JSON <-> tuna trees
+; through a declared type, plus the TY3 jay value encodings.  A rim
+; codec (host OCaml, Yojson.Basic) with no calculus in it: the server's
+; POST /api/tool/run and the CLI's --in/--out both link this library, so
+; there is one type grammar and no second one (borg/local.borg L4).
+(library
+ (name tuna_codec)
+ (modules json_codec jay_values)
+ (libraries tuna tuna_interp tuna_prims yojson))

@@ -1,3 +1,4 @@
 (executable
  (name main)
- (libraries tuna tuna_interp tuna_compiler tuna_stdlib tuna_local tuna_deriv unix))
+ (libraries tuna tuna_interp tuna_compiler tuna_stdlib tuna_local tuna_deriv
+   tuna_codec yojson unix))
