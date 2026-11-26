@@ -6,7 +6,9 @@
    and must resolve names as the server does for an identity with no
    defs: lambda param > std > reader builtins.  L2: the local store's
    op chain is the server's formula, and local REPL rounds resolve and
-   shadow as the server's.  No PG, no HTTP. *)
+   shadow as the server's.  L3: a local run with prims seals a record
+   deriv-check verifies (every semantics), the server's journal-fed
+   replay reproduces it, and a flipped answer fails.  No PG, no HTTP. *)
 
 open Tuna
 module Bracket = Tuna_compiler.Bracket
@@ -243,6 +245,131 @@ let test_repl_rounds () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "unknown command must fail"
 
+(* -- L3: the local run host ---------------------------------------------- *)
+
+module LRun = Tuna_local.Local_run
+module D = Tuna_deriv.Deriv
+
+let cfg ?(grants = [ "*" ]) ?(semantics = "v0") () =
+  { LRun.grants; allow_hosts = []; semantics; fuel = 10_000_000; size_cap = 10_000_000 }
+
+let prog_src =
+  {|(lambda (x) [(runtime (prim "echo" x)) (runtime (prim "now"))
+     (runtime (prim "store/put" x 42)) (runtime (prim "store/get" x))
+     (runtime (prim "tree/get" x))])|}
+
+let run_src st c src args =
+  let art = compile src in
+  LRun.execute st c ~tags:art.Bracket.tags ~program:art.Bracket.tree
+    (List.map (fun a -> (compile a).Bracket.tree) args)
+
+let check_verified what d =
+  match D.verify d with
+  | D.Verified -> ()
+  | D.Failed m -> Alcotest.failf "%s: deriv-check refused: %s" what m
+
+(* the server's journal-fed replay (Tuna_server.Replay.execute_fed) over
+   the local journal: same status, result hash and steps, every row
+   consumed *)
+let server_replay (d : D.t) =
+  let rows =
+    List.map
+      (fun (j : D.Journal.t) ->
+        { Tuna_store.Store.j_run_id = d.D.d_run_id; j_seq = j.D.Journal.j_seq;
+          j_callsite_path = j.D.Journal.j_callsite_path; j_prim = j.D.Journal.j_prim;
+          j_prim_contract = j.D.Journal.j_prim_contract; j_grant_id = j.D.Journal.j_grant_id;
+          j_args_ternary = j.D.Journal.j_args_ternary; j_args_hash = j.D.Journal.j_args_hash;
+          j_result_ternary = j.D.Journal.j_result_ternary;
+          j_result_hash = j.D.Journal.j_result_hash; j_error = j.D.Journal.j_error;
+          j_wall_ms = j.D.Journal.j_wall_ms; j_host_build = j.D.Journal.j_host_build;
+          j_prev_hash = j.D.Journal.j_prev_hash; j_row_hash = j.D.Journal.j_row_hash })
+      d.D.d_journal
+  in
+  let parse t = match Canon.of_string t with Ok t -> t | Error _ -> Alcotest.fail "ternary" in
+  let module R = Tuna_server.Replay in
+  let accel = Tuna_interp.Accel.registry_of_semantics d.D.d_semantics in
+  let mode = if d.D.d_semantics = "v1" then R.Eng.Sharing else R.Eng.Canonical in
+  let outcome, consumed =
+    R.execute_fed ~mode ?accel ~program:(parse d.D.d_program_ternary)
+      ~inputs:(List.map parse d.D.d_input_ternaries) ~fuel:d.D.d_fuel
+      ~size_cap:d.D.d_size_cap rows
+  in
+  Alcotest.(check int) "server replay consumed every row" (List.length rows) consumed;
+  Alcotest.(check string) "server replay status" (D.status_to_string d.D.d_status)
+    (R.outcome_status outcome);
+  Alcotest.(check (option string)) "server replay result" d.D.d_result_hash (R.outcome_hash outcome);
+  Alcotest.(check int) "server replay steps" d.D.d_step_count (R.outcome_steps outcome)
+
+let test_run_record () =
+  let st = LS.open_ (fresh_dir ()) in
+  let r = run_src st (cfg ()) prog_src [ {|"k"|} ] in
+  let d = r.LRun.record in
+  Alcotest.(check (list string)) "journal prims"
+    [ "echo"; "now"; "store/put"; "store/get"; "tree/get" ]
+    (List.map (fun j -> j.D.Journal.j_prim) d.D.d_journal);
+  let j n = List.nth d.D.d_journal n in
+  Alcotest.(check (option string)) "store/get answers the put"
+    (Some (Hash.hex_of_tree (compile "42").Bracket.tree)) (j 3).D.Journal.j_result_hash;
+  Alcotest.(check (option string)) "substrate prim is not local"
+    (Some "prim tree/get: not available in the local host") (j 4).D.Journal.j_error;
+  Alcotest.(check bool) "callsite paths from provenance" true
+    (List.for_all (fun j -> j.D.Journal.j_callsite_path <> "") d.D.d_journal);
+  check_verified "local v0 run" d;
+  server_replay d;
+  (* sealed: bytes by hash, cited from the op log, the log still a window *)
+  Alcotest.(check (option string)) "record bytes stored by hash"
+    (Some (D.to_string d)) (LS.get_bytes st r.LRun.record_hash);
+  Alcotest.(check (option string)) "runs/<id> cites the record"
+    (Some r.LRun.record_hash) (LS.last_value st ("runs/" ^ d.D.d_run_id));
+  Alcotest.(check (result unit string)) "op chain" (Ok ()) (LS.verify st);
+  (* tamper: flip one journal answer (rehashing nothing) *)
+  let flipped =
+    { d with D.d_journal =
+        List.mapi (fun i (j : D.Journal.t) ->
+            if i = 1 then { j with D.Journal.j_result_ternary = Some "0";
+                                   j_result_hash = Some (Hash.hex_of_string "0") }
+            else j) d.D.d_journal }
+  in
+  match D.verify flipped with
+  | D.Failed _ -> ()
+  | D.Verified -> Alcotest.fail "a flipped journal answer must not verify"
+
+let test_run_denial () =
+  let st = LS.open_ (fresh_dir ()) in
+  let d = (run_src st (cfg ~grants:[ "echo" ] ()) prog_src [ {|"k"|} ]).LRun.record in
+  let errs = List.map (fun j -> j.D.Journal.j_error) d.D.d_journal in
+  Alcotest.(check (list (option string))) "grants are arguments, denial is data"
+    [ None; Some "grant denial: no live grant for prim now";
+      Some "grant denial: no live grant for prim store/put";
+      Some "grant denial: no live grant for prim store/get";
+      Some "grant denial: no live grant for prim tree/get" ] errs;
+  Alcotest.(check (option string)) "a named grant is cited" (Some "local:echo")
+    (List.hd d.D.d_journal).D.Journal.j_grant_id;
+  check_verified "denied run" d;
+  server_replay d
+
+(* the registry step: fast1-fast3 records verify offline, and the
+   accelerator really fired (fewer steps than v0) *)
+let test_run_semantics () =
+  let st = LS.open_ (fresh_dir ()) in
+  let src = "(lambda (xs) (list-length xs))" in
+  let v0 = (run_src st (cfg ()) src [ "[1 2 3 4 5 6 7 8]" ]).LRun.record in
+  check_verified "v0" v0;
+  List.iter
+    (fun sem ->
+      let d = (run_src st (cfg ~semantics:sem ()) src [ "[1 2 3 4 5 6 7 8]" ]).LRun.record in
+      Alcotest.(check string) (sem ^ " semantics recorded") sem d.D.d_semantics;
+      Alcotest.(check (option string)) (sem ^ " same result as v0") v0.D.d_result_hash
+        d.D.d_result_hash;
+      Alcotest.(check bool) (sem ^ " accelerated") true (d.D.d_step_count < v0.D.d_step_count);
+      check_verified sem d;
+      server_replay d)
+    [ "v1"; "fast1"; "fast2"; "fast3" ]
+  |> ignore;
+  match LRun.execute st (cfg ~semantics:"fast9" ()) ~program:Tree.Leaf [] with
+  | _ -> Alcotest.fail "unknown semantics must be refused"
+  | exception Failure _ -> ()
+
 let () =
   Alcotest.run "local"
     [ ( "l1-stdlib-offline",
@@ -254,4 +381,8 @@ let () =
           Alcotest.test_case "store: chain, fold, identity, tamper" `Quick test_store_chain;
           Alcotest.test_case "log rows = federation window rows" `Quick test_window_rows;
           Alcotest.test_case "torn final line, corrupt line" `Quick test_torn_line;
-          Alcotest.test_case "rounds: std, shadow, undef, get, errors" `Quick test_repl_rounds ] ) ]
+          Alcotest.test_case "rounds: std, shadow, undef, get, errors" `Quick test_repl_rounds ] );
+      ( "l3-local-prims",
+        [ Alcotest.test_case "record verifies, server replay agrees, tamper fails" `Quick test_run_record;
+          Alcotest.test_case "grants are arguments" `Quick test_run_denial;
+          Alcotest.test_case "v1 and fast1-fast3 records verify offline" `Quick test_run_semantics ] ) ]

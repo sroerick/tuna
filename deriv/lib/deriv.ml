@@ -165,7 +165,8 @@ let status_of_string = function
 
 type t = {
   d_run_id : string
-  ; d_semantics : string  (* v0 | v1: the accounting law the steps obey *)
+  ; d_semantics : string
+    (* v0 | v1 | fast1-fast3: the accounting law the steps obey *)
   ; d_program_hash : string
   ; d_program_ternary : string
   ; d_input_hashes : string list
@@ -392,12 +393,14 @@ let build
 
 exception Check_failed of string
 
-(* Journal-fed engine over the identity monad: ONE Prim_eval instance,
-   same evaluation order and step accounting as the server boundary.
+(* Journal-fed engine over the identity monad: the pure step core
+   (Flat_drive), the engine the server boundary drives, so evaluation
+   order, step accounting and the accelerator registries (fast1-fast3,
+   borg/eval-modes.borg) are the server's (borg/local.borg L3).
    Prim calls are answered sequentially from the embedded journal -
    recorded args must equal replayed args, recorded results are
    returned verbatim, no grant check, no live host. *)
-module Eng = Tuna_interp.Prim_eval.Make (struct
+module Eng = Tuna_interp.Flat_drive.Make (struct
   type 'a t = 'a
 
   let return x = x
@@ -543,15 +546,19 @@ let check (d : t) : unit =
     incr next;
     answer
   in
+  (* Run.mode_of_semantics: v1 the sharing law; fast1-fast3 the v0 law
+     plus their accelerator registry *)
+  let accel = Tuna_interp.Accel.registry_of_semantics d.d_semantics in
   let mode =
-    match d.d_semantics with
-    | "v0" -> Eng.Canonical
-    | "v1" -> Eng.Sharing
-    | s -> raise (Check_failed (Printf.sprintf "unknown semantics %S" s))
+    match (d.d_semantics, accel) with
+    | "v0", _ -> Eng.Canonical
+    | "v1", _ -> Eng.Sharing
+    | _, Some _ -> Eng.Canonical
+    | s, None -> raise (Check_failed (Printf.sprintf "unknown semantics %S" s))
   in
   let outcome =
     try
-      Eng.eval ~host ~mode ~fuel:d.d_fuel ~size_cap:d.d_size_cap
+      Eng.eval ~host ~mode ?accel ~fuel:d.d_fuel ~size_cap:d.d_size_cap
         ~deadline:Float.infinity ~program inputs
     with
     | Check_failed _ as e -> raise e

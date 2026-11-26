@@ -14,6 +14,11 @@
                             get/patch address with no program hash)
      <root>/lock            held (lockf) for the whole of each round, so
                             two processes never fork the chain
+     <root>/kv/<sha256>     store/put + store/get (L3): the sha256 of the
+                            key's ternary names a file holding the value's
+                            hash (the value lives in values/)
+     <root>/bytes/<sha256>  byte values (L3): sealed run records, by the
+                            sha256 of their bytes
 
    A dict row also carries prev_value_hash (the value hash the name
    held before, the undef marker included), outside the chained fields:
@@ -149,6 +154,28 @@ let get_value t hash =
     | Ok _ -> failwith (Printf.sprintf "value %s does not hash to its name" hash)
     | Error (off, msg) ->
         failwith (Printf.sprintf "value %s unparseable at %d: %s" hash off msg)
+
+(* -- kv (store/get, store/put) and byte values ---------------------------- *)
+
+let kv_get t key =
+  let p = t.root / "kv" / Tuna.Hash.hex_of_string (Tuna.Canon.encode key) in
+  if not (Sys.file_exists p) then None else get_value t (String.trim (read_file p))
+
+let kv_put t ~key ~value =
+  mkdir_p (t.root / "kv");
+  let h = put_value t value in
+  write_file (t.root / "kv" / Tuna.Hash.hex_of_string (Tuna.Canon.encode key)) (h ^ "\n")
+
+let put_bytes t s =
+  mkdir_p (t.root / "bytes");
+  let h = Tuna.Hash.hex_of_string s in
+  let p = t.root / "bytes" / h in
+  if not (Sys.file_exists p) then write_file p s;
+  h
+
+let get_bytes t h =
+  let p = t.root / "bytes" / h in
+  if is_hash h && Sys.file_exists p then Some (read_file p) else None
 
 (* -- the op log --------------------------------------------------------- *)
 

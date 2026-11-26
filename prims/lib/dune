@@ -1,0 +1,6 @@
+; local chapter L3 (borg/local.borg): the prim registry and its pure
+; handlers, shared by the server run boundary and the local run host.
+(library
+ (name tuna_prims)
+ (modules prim_core math_prims)
+ (libraries tuna unix))

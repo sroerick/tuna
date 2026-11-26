@@ -2,7 +2,7 @@
 
 (library
  (name tuna_server)
- (libraries tuna tuna_interp tuna_compiler tuna_repl tuna_store tuna_deriv tuna_strip yojson
+ (libraries tuna tuna_interp tuna_compiler tuna_repl tuna_prims tuna_store tuna_deriv tuna_strip yojson
    httpun httpun-eio gluten-eio bigstringaf eio eio.unix eio_main unix base64
    digestif tls tls-eio x509 ptime mirage-crypto-rng domain-name cstruct))
 

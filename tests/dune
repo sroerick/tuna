@@ -445,7 +445,7 @@
  (name local_tests)
  (modules local_tests)
  (libraries tuna tuna_interp tuna_compiler tuna_stdlib tuna_server tuna_store
-   tuna_local str alcotest))
+   tuna_local tuna_deriv str alcotest))
 
 (rule
  (alias runtest)
@@ -453,10 +453,13 @@
  (action
   (run %{exe:local_tests.exe})))
 
-; the CLI binary itself (local L1): std resolution, lock lines, pins,
-; eval-source with source and %ternary args.
+; the CLI binary itself (local L1, L3): std resolution, lock lines, pins,
+; eval-source with source and %ternary args; tuna run seals a record
+; deriv-check verifies, and a tampered one exits 1.
 (rule
  (alias runtest)
- (deps cli_local.sh %{exe:../cli/bin/main.exe})
+ (deps cli_local.sh %{exe:../cli/bin/main.exe}
+  %{exe:../tools/deriv-check/deriv_check.exe})
  (action
-  (run bash %{dep:cli_local.sh} %{exe:../cli/bin/main.exe})))
+  (run bash %{dep:cli_local.sh} %{exe:../cli/bin/main.exe}
+   %{exe:../tools/deriv-check/deriv_check.exe})))
