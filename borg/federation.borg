@@ -186,17 +186,20 @@
       ownership-filtered.  No route, request field or query parameter
       is added, and visibility is never a caller-supplied input: a
       caller cannot ask to see a private row.  No released writer
-      creates dict/ paths today, so on a normal instance the filter
-      changes nothing until L5; fed apply can always plant
-      ns/<peer>/dict/..., which the filter then hides.  Shipping the
-      filter before L5 is safe, and shipping L5 first is not.
+      puts dict/ rows into the SERVER chain today (L2's laptop journal
+      writes them only to its local file), so on a normal instance the
+      filter changes nothing until L5; L5 is the first server writer,
+      and fed apply can always plant ns/<peer>/dict/..., which the
+      filter then hides.  Shipping the filter before L5 is safe, and
+      shipping L5 first is not.
 
       FILTER.  A window row names a dictionary when its path is
       dict/<identity>/... or ns/<peer>/dict/<identity>/... .  The
       identity is the single path segment between dict/ and the next
       slash; the trailing slash is required, so dict/A and dict/AB/...
-      are not A's rows, and an empty identity matches no caller (fail
-      closed).  A row that names a dictionary is served only when the
+      are not A's rows, and an empty identity matches no identity, so
+      it is hidden from every non-admin caller (fail closed).  A row
+      that names a dictionary is served only when the
       caller is that identity, the caller is admin
       (identities.is_admin), or that identity's dictionary visibility
       is public.  Every other row is served exactly as FED2 serves it
@@ -265,8 +268,13 @@
       ns/P/dict/A/..., B's pull of ns/ or ns/P/ omits them, P's own
       pull of ns/P/ omits them, and A's pull carries them; a pull that
       selects no dictionary rows carries the rows and last_seq FED2
-      would answer, with verified:true; a page whose window is all
-      hidden answers more:true with an empty op list; a put or cas at
+      would answer, with verified:true; a FULL (limit-row) window whose
+      rows are all hidden answers more:true with an empty op list,
+      while a short all-hidden final window answers more:false; a
+      non-admin B running dict-visibility A public is refused and
+      appends no row, and the offline CLI refuses a target other than
+      its own identity; an admin running dict-visibility A public makes
+      B's next pull of dict/A/ carry A's rows; a put or cas at
       vis/A/public by an ordinary tree write leaves A's visibility
       unchanged; a push of vis/A/... by peer P lands at ns/P/vis/A/...
       and changes nothing. |))))
