@@ -1,4 +1,4 @@
-<!-- nomia:generated release=0.2.0 digest=sha256:0163e0f242e3f477e498a0e1ff7aeb12d0cd05596ca1543e6e36b2d3145febf3 inherit-root=true -->
+<!-- nomia:generated release=0.2.0 digest=sha256:61ddcbd2da21c2405716098ca8202e3cad76ce3db9b62845ed141142817366e9 inherit-root=true -->
 <!-- Edit the reviewed nomia project source, not this generated file. -->
 
 # Project instructions (tuna/AGENTS.fragment.md)
@@ -24,8 +24,8 @@ converge to it.
 
 ```
 eval $(opam env --switch=poohstack --set-switch)
-dune build @all          # exit 0 is the gate
-dune runtest             # alcotest suites must pass
+dune build --root . @all # exit 0 is the gate
+dune runtest --root .    # alcotest suites must pass
 scripts/dev.sh start     # boots PG cluster (runtime socket directory from `scripts/dev.sh`, :5434, db tuna) + server (:18090)
 scripts/dev.sh status    # migrations auto-apply
 curl -s http://127.0.0.1:18090/health
@@ -100,8 +100,15 @@ scripts/      dev.sh orchestration, verify_*.sh acceptance scripts
 
 ## Verification culture
 
-- After any change: `dune build @all && dune runtest` must be green
+- After any change: `dune build --root . @all && dune runtest --root .` must be green
   before commit. Commit early, commit small.
+- Before any change to the accelerators (`interpreter/lib/accel.ml`, the
+  fast path in `interpreter/lib/flat.ml`, or the fast1/fast2/fast3 registries):
+  `dune build --root . @tests/accel-full` must also be green. `runtest`
+  runs only a smoke set of the int vectors (their reference side is slow
+  in-calculus arithmetic); the full set is the accelerator gate. fast3
+  (Jay's checker natives, eval-modes E3) is gated by `tests/fast3_tests.ml`
+  and the fast3 half of `tests/jay_tests.ml`, both in `runtest`.
 - `borge lint && borge report` must stay clean; if a stanza's reality
   changes, update the borg book in the same commit (status flips are
   make-pass work; docstring/details edits accompany code).
