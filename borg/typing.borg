@@ -98,7 +98,8 @@
       - RESULTS: result_type {"jay": ...} decodes a tagged Int or tt /
         ff back to JSON; any other tree is a result_error, as today. |))))
   (subsection ty4-consumer
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 TY4 LANDED on the erde side, branch erde/book (ba421fa4; erde had no book, so its book was written first from the code, ca50989d, owner request). The tool is erde tuna.tool_run (erde/borg/authority.borg tuna-tool-run): POST /api/tool/run by program hash through erde's Authority, grant-gated by program hash, tuna's typed-input 400 passed back as a result citing the check run. EVIDENCE: erde dune runtest (3 new cases), erde/test/live_tool_run.sh exit 0 against this branch's server at 63d2d177. LIMIT: the program called is the identity; a typed sabra program with real typed work needs typed programs (TY5). TL3 (no taker) is answered by this caller.|) *)
    (details
     (doc (|
       One real outside user: an erde tool that calls a typed sabra
