@@ -4,6 +4,7 @@
  (convention ocaml-dune)
  (* agent note (|2026-11-25 chapter authored (roerick + Claude). EVIDENCE, read in-tree this date: (1) `tuna compile` on `(not true)` exits 1 "unbound variable true" and on `(list-length [1 2 3])` exits 1 "unbound variable list-length": cli/bin/main.ml calls Bracket.compile_source with no ?dictionary, although Sexp.parse and compile_source already take one. The frozen stdlib is on disk (stdlib/v1/trees, manifest), but only server/lib/dune generates stdlib_embed.ml, which server/lib/stdlib_seed.ml seeds into Postgres as the sabralib identity's rows. (2) The REPL (server/lib/repl_cmd.ml, Repl_cmd.effective_dictionary) reads repl_dict, a mutable (identity, name) -> ternary table (migrations/0004-repl-dict.sql) with no history and no op log, so a definition has nothing to sync from. (3) cli --semantics already reaches every registered semantics through Accel.registry_of_semantics (fast1, fast2, fast3; `eval-compiled 0 0 --semantics fast2` answers normal), but deriv/lib/deriv.ml accepts only v0 and v1, so deriv-check cannot verify a fast* run offline; server replay (server/lib/replay.ml) can. (4) The pieces sync reuses already exist: content-addressed values (GET /api/fed/value/:hash, rehash on receipt), the hash-chained tree_ops log (migrations/0005-tree-paths.sql), federation's ops windows applied into ns/<peer>/ with inline tree and bytes values (borg/federation.borg, server/lib/api.ml fed_apply_core), and deriv records (borg/deriv.borg). Federation's conflict law v0 governs sync: append-only, no merge, a re-apply SHADOWS, divergence surfaces as two namespaces. OWNER DIRECTION carried from eval-modes (2026-11-25): keep everything runnable offline, with no first-class dependency on a server to record or check a run. OWNER DECISION (2026-11-25, after review): a conflicting definition surfaces as two namespaces under federation's existing law; no conflict-refusing apply mode. PRECEDENT: pp/borge/local-first.borg (a local lens is a branch of the one tree, synced by three-way tree-diff; sync-conflicts still planned there). Tuna differs because its values are immutable hashes: only the name layer can diverge.|) *)
  (* agent note (|2026-11-25 REVISED after independent review (Fable, request changes). Findings taken: L5/L6 had assumed apply refuses a stale write - it shadows, so conflict is now a comparison of two namespaces; L6 had pushed deriv records to a server route that does not exist - records now travel as bytes values through apply and are checked by whoever reads them; L5 keyed conflict on prev_version, which is instance-local - it now keys on the previous value hash; L3 now names the deriv-check semantics gap as its own step; L1 names the frozen manifest as the std reference; L6 names operator peer enrolment and where the push prompt lives; evidence (3) corrected (the CLI already accepts fast2/fast3).|) *)
+ (* agent note (|2026-11-25 SECOND REVIEW (Fable, approve with changes) taken: the L2 log is now tree_ops-shaped so it pushes as an ops window, with prev_hash local-only; undef is a put of the zero-length bytes marker, never delete; dict/ is reserved from tree grants; the runs/<run-id> put op and the over-cap record case are written down; the ops-window read exposure is an OPEN owner decision that gates L5.|) *)
  (section local
   (doc "Six moves. L1-L4 are offline-only and each is useful alone; L5-L6 add sync. None may change the calculus, the IR, the step count or the prim set, and sync adds no route; the local tools reuse the server's row shapes so their output can be synced later without conversion.")
   (status planned)
@@ -43,11 +44,17 @@
       not a copy: Repl_cmd's parse and dictionary assembly are factored
       away from the store so server and CLI call one implementation.
 
-      The dictionary is an append-only log of (name, prev_hash,
-      new_hash) rows from the start (undef is new_hash empty), so L5
-      can sync it without reformatting; the current dictionary is the
-      fold of the log. Hashes, not versions, because only hashes mean
-      the same thing on two instances.
+      The local store keeps one append-only op log in the tree_ops row
+      shape from the start (seq, path, op, value_hash, actor, op_hash,
+      chained as Store computes op_hash, genesis 64 zeros), so L6 can
+      push it as a federation ops window with no conversion. A def is a
+      put at dict/<identity>/<name>; an undef is a put of the undef
+      marker (L5). Each dict row also carries a LOCAL-ONLY prev_hash
+      (the value hash the name held before), outside the chained
+      fields: apply does not carry it, so it serves the laptop's own
+      divergence report. The current dictionary is the fold of the
+      log. Hashes, not versions, because only hashes mean the same
+      thing on two instances.
 
       ACCEPTANCE: a transcript of def/eval/undef rounds gives the same
       result hashes and step counts locally and through /api/repl for
@@ -100,11 +107,25 @@
       Definitions stop being a mutable table and become ops in the M10
       tree substrate, on the server first. A def is a put of the
       defined tree's value hash at the path dict/<identity>/<name> in
-      tree_ops (undef a put of the empty marker); repl_dict becomes a
-      derived index of that log, like tree_paths. History, chaining
-      and rewind come with the substrate. tree_ops versions stay local
-      and carry no meaning across instances; the shared fact is the
-      value hash, as federation already says.
+      tree_ops; repl_dict becomes a derived index of that log, like
+      tree_paths. History, chaining and rewind come with the substrate.
+      tree_ops versions stay local and carry no meaning across
+      instances; the shared fact is the value hash, as federation
+      already says.
+
+      UNDEF is a put of the undef marker: the zero-length BYTES value,
+      hash e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.
+      It is not a tree, so no def can collide with it (the leaf is
+      false, nil and zero, and (def x 0) must stay a def). The substrate
+      delete op is never used on dict/: apply replicates only rows that
+      carry a value hash, so a delete would not reach a peer. A window
+      that contains an undef ships the marker value inline like any
+      other value.
+
+      WRITE AUTHORITY. dict/ is reserved for the REPL host: grant
+      minting refuses a tree grant whose path prefix covers dict/, so a
+      prim run can never rewrite a dictionary; only def/undef rounds
+      (and, under ns/<peer>/, fed apply) write there.
 
       DIVERGENCE, NOT CONFLICT. Values are immutable, so only a name
       can diverge: one name bound to different hashes in two places.
@@ -112,7 +133,8 @@
       resolved. It is found by comparison: for each name, the local
       dictionary and its synced copy on the server are compared by
       hash, and a mismatch is reported with both hashes and the
-      prev_hash each side last saw (the L2 log carries it).
+      laptop's local prev_hash (L2; the server keeps none across
+      apply).
 
       ACCEPTANCE: after migration every identity's effective dictionary
       is unchanged; the dictionary at any past op is a fold of the log;
@@ -130,14 +152,32 @@
       the dictionary or a journal.
 
       PULL: std and any value by hash (rehashed on receipt), and the
-      ops window of the user's server dictionary.
+      ops window of the user's server dictionary (prefix
+      dict/<identity>/). The window is seq-paged over the global log
+      (5000 rows per page), so a pull walks pages from the last seq it
+      saw.
+
+      OPEN - OWNER DECISION (read exposure). GET /api/fed/ops filters by
+      prefix but checks no ownership: any authenticated identity can
+      read any prefix. Today a dictionary is private to its identity
+      (Repl_cmd.do_dict reads only the caller's rows). Moving it onto
+      dict/<identity>/ in tree_ops (L5) makes every dictionary readable
+      by every bearer, peers included. L5 does not land until the owner
+      chooses: accept dictionaries as public like other tree values, or
+      add an ownership read filter to the ops window (a federation
+      change, LO2).
 
       PUSH: one apply of the laptop's ops window into ns/<laptop>/,
       carrying its values inline. Dictionary ops land at
       ns/<laptop>/dict/<identity>/<name>. Deriv records of local runs
-      travel as bytes values at ns/<laptop>/runs/<run-id>, inside the
-      store's value size cap; the server stores them as values and does
-      not claim to have executed or verified them. Anyone who reads one
+      travel as bytes values at ns/<laptop>/runs/<run-id>: the local
+      host writes a put op at runs/<run-id> citing the record's hash
+      when it seals the record, so the path arrives through the same
+      window. A record above the store's value size cap (a 413 on
+      apply) is not pushed; it stays local, the push reports it by run
+      id, and the rest of the window is sent without its put. The
+      server stores records as values and does not claim to have
+      executed or verified them. Anyone who reads one
       checks it with deriv-check (or server replay for fast* until L3's
       registry step lands).
 
@@ -152,6 +192,10 @@
       configures a standing approval for that laptop. That prompt is
       guidance at the client, not enforcement; the enforcement is the
       server's per-peer authz (a peer writes only ns/<peer>/...).
+
+      The divergence report's prev_hash is the laptop's own (L2); the
+      server side reports only its current hash, since apply does not
+      carry prev_hash.
 
       ACCEPTANCE: an offline def and run on a laptop, then push: the
       def appears at ns/<laptop>/dict/... with the same hash, the
@@ -171,7 +215,8 @@
           there.
       LO2 PROTOCOL GROWTH. L6 needs a route or op kind federation
           does not have (for example server-side verification of
-          pushed deriv records, or a refusing apply). THEN: record
+          pushed deriv records, a refusing apply, or an ownership read
+          filter on the ops window). THEN: record
           why, and extend federation's chapter, not this one.
       LO3 MERGE CREEP. Sync needs anything beyond hash comparison and
           two namespaces (a three-way merge, last-writer-wins, silent
