@@ -58,7 +58,8 @@
       verify-8 8.5): steps, wall clock under v0 and fast2, tree size;
       and the cost of typing them. TY-F1 decides. |))))
   (subsection ty3-boundary
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-11-25 TY3 LANDED as designed below. CODE: server/lib/jay_values.ml (TyBin / booleans.v encodings, the checker infer[O_bin] embedded from reference/jay-typing-rules/natives "checker.O_bin"), server/lib/json_codec.ml ({"jay": "int" | "bool"}, values as JSON or {"ternary": ...}), server/lib/api.ml post_tool_run (one checker run per jay input, fast3, TUNA_TYPECHECK_FUEL; 400 citing the check run; "type_checks" on success). EVIDENCE: tests/tool_language_tests.ml - the codec's trees EQUAL his exported i5 / im6 / ibig / b5 / bzero / tt / ff, round trips to +-max_int, the embedded checker is the bin vectors' infer program; scripts/verify-17-typing.sh exit 0 live - a 21-bit int checked in 5,714 fast3 steps (check run replay-verified) and answered back; a v1 int, junk, a leaf (each typed as itself, not Int) and a jay int retagged as Bin (refused by the Bin guard, Lf) are 400s citing replay-verified check runs; jay bool typed; an untyped int run unchanged. NOT DONE: typing the program's own application (infer_expression) - needs typed programs (TY5).|) *)
    (details
     (doc (|
       The tool endpoint is the boundary that matters: inputs already
@@ -70,7 +71,32 @@
       own application is typed by infer_expression before it runs.
       The check is a run like any other: replayable, offline,
       receipted. Untyped programs and untyped inputs behave exactly
-      as today. |))))
+      as today.
+
+      DESIGN (2026-11-25, after E3 made the checker affordable):
+      - DECLARATION: a new form in the Json_codec type language,
+        {"jay": "int" | "bool"} - an input or result typed in Jay's
+        system over the ontology O_bin (his Bool and lists, our Bin
+        and Int; O_bin_typing_sound, export/TyBin.v). The declared
+        type tree is his: Int = label[int_nm], Bool = label[bool_nm].
+      - VALUES: a JSON int encodes exactly as TyBin's int_of (sign
+        tt/ff paired with the canonical Bin, least significant bit
+        outermost); a JSON bool as his tt / ff. A value may instead be
+        {"ternary": "<tree>"} - a tree from elsewhere (another run's
+        result, an outside caller) CLAIMED to have the type. Only such
+        claims can fail: the encoder's own output is well typed by
+        construction, and the check is then its receipt.
+      - THE CHECK: the checker program infer[O_bin] is stored by hash
+        like any program; for each jay-typed input the endpoint runs
+        it on the input tree through Run.execute_run, semantics fast3,
+        a fixed check budget (TUNA_TYPECHECK_FUEL, default 200M), no
+        grants. Unless the run answers Sm of the declared type the
+        request is a 400 naming the input path and citing the check
+        run; otherwise the tool run proceeds and its answer lists the
+        check runs. The program's own application is not typed here
+        (infer_expression needs a typed program, TY5).
+      - RESULTS: result_type {"jay": ...} decodes a tagged Int or tt /
+        ff back to JSON; any other tree is a result_error, as today. |))))
   (subsection ty4-consumer
    (status planned)
    (details

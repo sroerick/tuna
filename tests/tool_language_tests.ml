@@ -249,7 +249,63 @@ let codec =
         Alcotest.(check string) "unverified" "unverified"
           (verdict (obs_json "[0, 0, 0, 0]"))) ]
 
+(* typing TY3 (borg/typing.borg): the {"jay": T} codec encodes exactly
+   the trees Jay's Rocq development (TyBin.v, booleans.v) exported, and
+   decodes them back. *)
+module JV = Tuna_server.Jay_values
+
+let jay_vectors =
+  lazy
+    (let dir = "../reference/jay-typing-rules" in
+     let read f =
+       let ic = open_in_bin (Filename.concat dir f) in
+       let rec go acc = match input_line ic with l -> go (l :: acc) | exception End_of_file -> close_in ic; List.rev acc in
+       go []
+     in
+     let trees = Hashtbl.create 64 in
+     List.iter
+       (fun l ->
+         let i = String.index l ' ' in
+         Hashtbl.replace trees (String.sub l 0 i) (Tuna.Canon.parse (String.sub l (i + 1) (String.length l - i - 1))))
+       (read "trees");
+     fun label ->
+       match List.find_map (fun l -> match String.split_on_char ' ' l with
+           | [ _; l'; p; a; _ ] when l' = label -> Some (p, a) | _ -> None) (read "vectors") with
+       | Some (p, a) -> (Hashtbl.find trees p, Hashtbl.find trees (List.hd (String.split_on_char ',' a)))
+       | None -> Alcotest.fail ("no vector " ^ label))
+
+let jay =
+  let arg l = snd ((Lazy.force jay_vectors) l) in
+  let enc ty j = match C.encode ty j with Ok t -> t | Error m -> Alcotest.fail m in
+  let int_ty = match C.ty_of_json (`Assoc [ ("jay", `String "int") ]) with Ok t -> t | Error m -> Alcotest.fail m in
+  let bool_ty = match C.ty_of_json (`Assoc [ ("jay", `String "bool") ]) with Ok t -> t | Error m -> Alcotest.fail m in
+  [ Alcotest.test_case "jay int encodes as TyBin's int_of (i5, im6, ibig)" `Quick (fun () ->
+        List.iter
+          (fun (label, n) -> Alcotest.(check bool) label true (enc int_ty (`Int n) = arg label))
+          [ ("i5_Int", 5); ("im6_Int", -6); ("ibig_Int", 1048579) ];
+        Alcotest.(check bool) "Bin 5 is TyBin's b5" true (JV.bin 5 = arg "b5_Bin");
+        Alcotest.(check bool) "Bin 0 is TyBin's bzero" true (JV.bin 0 = arg "bzero_Bin"));
+    Alcotest.test_case "jay bool encodes as his tt / ff" `Quick (fun () ->
+        Alcotest.(check bool) "tt" true (enc bool_ty (`Bool true) = arg "tt_Bool");
+        Alcotest.(check bool) "ff" true (enc bool_ty (`Bool false) = arg "ff_Bool"));
+    Alcotest.test_case "jay values round-trip; other trees do not decode" `Quick (fun () ->
+        List.iter
+          (fun n ->
+            match C.decode int_ty (enc int_ty (`Int n)) with
+            | Ok (`Int m) -> Alcotest.(check int) "int round trip" n m
+            | _ -> Alcotest.fail (string_of_int n))
+          [ 0; 1; -1; 2; 5; -6; 1048579; max_int; -max_int ];
+        Alcotest.(check bool) "a v1 int is not a jay int" true
+          (Result.is_error (C.decode int_ty (Tuna.Int_enc.positive_of_decimal "5")));
+        Alcotest.(check bool) "min_int is refused" true (Result.is_error (C.encode int_ty (`Int min_int)));
+        Alcotest.(check bool) "a ternary value is taken as the claimed tree" true
+          (enc int_ty (`Assoc [ ("ternary", `String "0") ]) = Tuna.Tree.Leaf));
+    Alcotest.test_case "the embedded checker is the bin vectors' infer program" `Quick (fun () ->
+        let p = Tuna.Canon.parse (Lazy.force JV.checker_ternary) in
+        Alcotest.(check bool) "checker = infer O_bin" true (p = fst ((Lazy.force jay_vectors) "bzero_Bin"));
+        Alcotest.(check string) "checker hash" (Tuna.Hash.hex_of_tree p) (Lazy.force JV.checker_hash)) ]
+
 let () =
   Alcotest.run "tuna tool-language"
     [ ("verdict-std agrees", agreement); ("program identity", identity);
-      ("json codec", codec) ]
+      ("json codec", codec); ("jay typed values (typing TY3)", jay) ]

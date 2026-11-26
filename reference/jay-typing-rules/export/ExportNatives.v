@@ -16,7 +16,8 @@ Definition vec (label : string) (p : Combination) (args : list Combination) (r :
 
 (* The trees fast3 registers (borg/eval-modes.borg E3).  A family is
    its program at the base parameter Lf and with each parameter in
-   turn set to K. *)
+   turn set to K.  Plus the checker the tool endpoint runs (typing.borg
+   TY3): infer over O_bin, whose soundness TyBin.v proves. *)
 Definition nat_line (name : string) (t : Combination) : string := name ++ " " ++ tern t.
 Definition natives : list string := [
   nat_line "equal" equal;
@@ -30,6 +31,7 @@ Definition natives : list string := [
   nat_line "row.0" (row Lf Lf Lf);
   nat_line "row.1" (row 'K Lf Lf);
   nat_line "row.2" (row Lf 'K Lf);
-  nat_line "row.3" (row Lf Lf 'K)
+  nat_line "row.3" (row Lf Lf 'K);
+  nat_line "checker.O_bin" (infer O_bin)
 ].
 Redirect "natives" Eval vm_compute in natives.

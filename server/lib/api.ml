@@ -589,7 +589,70 @@ let post_run pool auth req =
    run did not finish normal), and "result_error" when the tree does not
    have the declared shape - an error about the PROGRAM's answer, so the
    run still answers 201 with its row and journal.  A bad type or input
-   value is a 400 naming its JSON path, before anything runs. *)
+   value is a 400 naming its JSON path, before anything runs.
+
+   TYPED INPUTS (borg/typing.borg TY3): an input of type {"jay": T} is
+   checked before the run by Jay's infer over O_bin, itself run as an
+   ordinary run row (semantics fast3, budget TUNA_TYPECHECK_FUEL,
+   default 200M, no grants) - replayable and citable.  Unless it answers
+   Sm of T's type tree the request is a 400 citing the check run
+   ("check_run"); otherwise the answer lists the checks under
+   "type_checks".  Requests without jay types are unchanged. *)
+let typecheck_fuel () =
+  match Option.bind (Sys.getenv_opt "TUNA_TYPECHECK_FUEL") int_of_string_opt with
+  | Some n when n > 0 -> n
+  | _ -> 200_000_000
+
+let checker_stored = ref false
+
+(* store the checker program once per process (upsert is idempotent) *)
+let ensure_checker pool =
+  if !checker_stored then return ()
+  else
+    Store.upsert_program pool ~hash:(Lazy.force Jay_values.checker_hash)
+      ~ternary:(Lazy.force Jay_values.checker_ternary) ~ir:None ~created_by:None ~source:None
+    >>= fun _ ->
+    checker_stored := true;
+    return ()
+
+(* run the checker on each jay-typed input, in order; the first that
+   does not type is the refusal *)
+let rec typecheck pool auth acc = function
+  | [] -> return (Ok (List.rev acc))
+  | (i, jty, tree) :: rest -> (
+      ensure_checker pool >>= fun () ->
+      Run.execute_run pool ~caller:auth.auth_id ~program_hash:(Lazy.force Jay_values.checker_hash)
+        ~input_trees:[ tree ] ~grant_ids:[] ~fuel:(typecheck_fuel ()) ~semantics:"fast3"
+        ~size_cap:500_000_000 ()
+      >>= function
+      | Error (code, msg) -> return (Error (j_err ~code ("type check: " ^ msg)))
+      | Ok (row, _) ->
+          let want = Tuna.Canon.encode (Stem (Jay_values.type_tree jty)) in
+          let check =
+            `Assoc
+              [ ("input", `String (Printf.sprintf "inputs[%d]" i));
+                ("type", `Assoc [ ("jay", `String (Jay_values.name jty)) ]);
+                ("check_run", `String row.Store.r_id);
+                ("checker", `String (Lazy.force Jay_values.checker_hash));
+                ("check_steps", match row.Store.r_step_count with Some n -> `Int n | None -> `Null) ]
+          in
+          let typed =
+            row.Store.r_status = Store.Run_status.Normal && row.Store.r_result_ternary = Some want
+          in
+          if typed then typecheck pool auth (check :: acc) rest
+          else
+            return
+              (Error
+                 (j_ok ~code:400
+                    (`Assoc
+                      [ ( "error",
+                          `String
+                            (Printf.sprintf "inputs[%d] does not type as jay %s" i (Jay_values.name jty)) );
+                        ("type_check", check);
+                        ( "check_result",
+                          match row.Store.r_result_ternary with Some t -> `String t | None -> `Null );
+                        ("check_status", `String (Store.Run_status.to_string row.Store.r_status)) ]))))
+
 let post_tool_run pool auth req =
   body_json req >>= function
   | Error msg -> j_err msg
@@ -621,7 +684,7 @@ let post_tool_run pool auth req =
                 Json_codec.encode ~path:(path ^ ".value") ty
                   (J.Util.member "value" inp)
               in
-              Ok (tree :: acc))
+              Ok ((ty, tree) :: acc))
             (Ok [])
             (List.mapi (fun i x -> (i, x)) (get_list j "inputs"))
         in
@@ -629,7 +692,18 @@ let post_tool_run pool auth req =
       in
       match parsed with
       | Error msg -> j_err msg
-      | Ok (program_hash, result_ty, input_trees) ->
+      | Ok (program_hash, result_ty, typed_inputs) ->
+          let input_trees = List.map snd typed_inputs in
+          let to_check =
+            List.concat
+              (List.mapi
+                 (fun i (ty, tree) ->
+                   match ty with Json_codec.Jay jty -> [ (i, jty, tree) ] | _ -> [])
+                 typed_inputs)
+          in
+          typecheck pool auth [] to_check >>= function
+          | Error refusal -> refusal
+          | Ok checks ->
           Run.execute_run pool ~caller:auth.auth_id ~program_hash ~input_trees
             ~grant_ids:(strings_of j "grants") ~fuel ~semantics ~size_cap ()
           >>= (function
@@ -648,10 +722,11 @@ let post_tool_run pool auth req =
                     in
                     j_ok ~code:201
                       (`Assoc
-                        [ ("run", run_json row)
-                        ; ("result", result)
-                        ; ("result_error", result_error)
-                        ; ("journal", `List (List.map journal_json js)) ])))
+                        ([ ("run", run_json row)
+                         ; ("result", result)
+                         ; ("result_error", result_error)
+                         ; ("journal", `List (List.map journal_json js)) ]
+                        @ if checks = [] then [] else [ ("type_checks", `List checks) ]))))
 
 (* run-row level verify response; the divergence is addressed structure,
    not prose (replay.divergence-surface) *)

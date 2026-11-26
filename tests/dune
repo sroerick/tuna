@@ -168,7 +168,9 @@
   tool_language_tests.exe
   ../stdlib/v1/core.defs
   ../scripts/gate-receipts/verdict.sabra
-  ../scripts/dialect/verdict-std.sabra)
+  ../scripts/dialect/verdict-std.sabra
+  ../reference/jay-typing-rules/trees
+  ../reference/jay-typing-rules/vectors)
  (action
   (run %{exe:tool_language_tests.exe})))
 

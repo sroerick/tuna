@@ -14,8 +14,13 @@
      {"list": T}  {"option": T}
      {"record": {"<field>": [<tag>, T], ...}}
      {"enum": {"<name>": <tag>, ...}}
+     {"jay": "int" | "bool"}
 
-   "tree" is the escape hatch: a raw ternary string either way.  Every
+   "jay" (borg/typing.borg TY3) is a value typed in Barry Jay's system
+   over the ontology O_bin, encoded as a tagged tree (Jay_values): a
+   JSON int or bool, or {"ternary": "<tree>"} - a tree CLAIMED to have
+   the type, which the tool endpoint checks with his infer before the
+   run.  "tree" is the escape hatch: a raw ternary string either way.  Every
    error names the JSON path it happened at ($.obs.counts[2]); an
    unknown record field or enum name, a float, or a tree that does not
    have the declared shape is an error, never a silent default. *)
@@ -33,6 +38,7 @@ type ty =
   | Option of ty
   | Record of (string * int * ty) list  (* field, tag, type; sorted by tag *)
   | Enum of (string * int) list
+  | Jay of Jay_values.ty
 
 let max_tag = 4096
 let ( let* ) = Result.bind
@@ -89,6 +95,9 @@ let rec ty_of_json ?(path = "type") (j : J.t) : (ty, string) result =
        | Some (a, b, x) ->
            bad (Printf.sprintf "fields %s and %s share tag %d" a b x)
        | None -> Ok (Record fs))
+  | `Assoc [ ("jay", `String "int") ] -> Ok (Jay Jay_values.Int)
+  | `Assoc [ ("jay", `String "bool") ] -> Ok (Jay Jay_values.Bool)
+  | `Assoc [ ("jay", _) ] -> bad "a jay type is \"int\" or \"bool\""
   | `Assoc [ ("enum", `Assoc names) ] ->
       let* ns =
         List.fold_left
@@ -108,7 +117,8 @@ let rec ty_of_json ?(path = "type") (j : J.t) : (ty, string) result =
   | _ ->
       bad
         "expected \"bool\" | \"int\" | \"string\" | \"tag\" | \"tree\" | \
-         {\"list\":T} | {\"option\":T} | {\"record\":{...}} | {\"enum\":{...}}"
+         {\"list\":T} | {\"option\":T} | {\"record\":{...}} | {\"enum\":{...}} | \
+         {\"jay\":\"int\"|\"bool\"}"
 
 (* -- ints (law 5) ---------------------------------------------------- *)
 
@@ -181,6 +191,14 @@ let rec encode ?(path = "$") (ty : ty) (j : J.t) : (Tuna.Tree.t, string) result 
           (List.fold_right
              (fun (tag, v) tl -> Fork (Fork (nat tag, Fork (v, Leaf)), tl))
              entries Leaf)
+  | Jay _, `Assoc [ ("ternary", `String t) ] -> (
+      match Tuna.Canon.of_string t with
+      | Ok t -> Ok t
+      | Error (off, m) -> bad (Printf.sprintf "bad ternary at %d: %s" off m))
+  | Jay Jay_values.Int, `Int n -> (
+      match Jay_values.int_tree n with Some t -> Ok t | None -> bad "int out of range")
+  | Jay Jay_values.Int, `Float _ -> bad "floats have no tuna encoding; send an int"
+  | Jay Jay_values.Bool, `Bool b -> Ok (Jay_values.bool_tree b)
   | Enum names, `String s -> (
       match List.assoc_opt s names with
       | Some tag -> Ok (nat tag)
@@ -233,6 +251,12 @@ let rec decode ?(path = "$") (ty : ty) (t : Tuna.Tree.t) : (J.t, string) result 
         | _ -> bad "not a record (a list of [tag value] two-lists)"
       in
       go [] t
+  | Jay Jay_values.Int, _ -> (
+      match Jay_values.int_value t with
+      | Some n -> Ok (`Int n)
+      | None -> bad "not a Jay Int (tagged sign * Bin) that fits a JSON integer")
+  | Jay Jay_values.Bool, _ -> (
+      match Jay_values.bool_value t with Some b -> Ok (`Bool b) | None -> bad "not a Jay Bool (tt or ff)")
   | Enum names, _ -> (
       match nat_of t with
       | None -> bad "not an enum tag"
