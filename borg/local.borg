@@ -5,6 +5,7 @@
  (* agent note (|2026-11-25 chapter authored (roerick + Claude). EVIDENCE, read in-tree this date: (1) `tuna compile` on `(not true)` exits 1 "unbound variable true" and on `(list-length [1 2 3])` exits 1 "unbound variable list-length": cli/bin/main.ml calls Bracket.compile_source with no ?dictionary, although Sexp.parse and compile_source already take one. The frozen stdlib is on disk (stdlib/v1/trees, manifest), but only server/lib/dune generates stdlib_embed.ml, which server/lib/stdlib_seed.ml seeds into Postgres as the sabralib identity's rows. (2) The REPL (server/lib/repl_cmd.ml, Repl_cmd.effective_dictionary) reads repl_dict, a mutable (identity, name) -> ternary table (migrations/0004-repl-dict.sql) with no history and no op log, so a definition has nothing to sync from. (3) cli --semantics already reaches every registered semantics through Accel.registry_of_semantics (fast1, fast2, fast3; `eval-compiled 0 0 --semantics fast2` answers normal), but deriv/lib/deriv.ml accepts only v0 and v1, so deriv-check cannot verify a fast* run offline; server replay (server/lib/replay.ml) can. (4) The pieces sync reuses already exist: content-addressed values (GET /api/fed/value/:hash, rehash on receipt), the hash-chained tree_ops log (migrations/0005-tree-paths.sql), federation's ops windows applied into ns/<peer>/ with inline tree and bytes values (borg/federation.borg, server/lib/api.ml fed_apply_core), and deriv records (borg/deriv.borg). Federation's conflict law v0 governs sync: append-only, no merge, a re-apply SHADOWS, divergence surfaces as two namespaces. OWNER DIRECTION carried from eval-modes (2026-11-25): keep everything runnable offline, with no first-class dependency on a server to record or check a run. OWNER DECISION (2026-11-25, after review): a conflicting definition surfaces as two namespaces under federation's existing law; no conflict-refusing apply mode. PRECEDENT: pp/borge/local-first.borg (a local lens is a branch of the one tree, synced by three-way tree-diff; sync-conflicts still planned there). Tuna differs because its values are immutable hashes: only the name layer can diverge.|) *)
  (* agent note (|2026-11-25 REVISED after independent review (Fable, request changes). Findings taken: L5/L6 had assumed apply refuses a stale write - it shadows, so conflict is now a comparison of two namespaces; L6 had pushed deriv records to a server route that does not exist - records now travel as bytes values through apply and are checked by whoever reads them; L5 keyed conflict on prev_version, which is instance-local - it now keys on the previous value hash; L3 now names the deriv-check semantics gap as its own step; L1 names the frozen manifest as the std reference; L6 names operator peer enrolment and where the push prompt lives; evidence (3) corrected (the CLI already accepts fast2/fast3).|) *)
  (* agent note (|2026-11-25 SECOND REVIEW (Fable, approve with changes) taken: the L2 log is now tree_ops-shaped so it pushes as an ops window, with prev_hash local-only; undef is a put of the zero-length bytes marker, never delete; dict/ is reserved from tree grants; the runs/<run-id> put op and the over-cap record case are written down; the ops-window read exposure is an OPEN owner decision that gates L5.|) *)
+ (* agent note (|2026-11-25 OWNER DECISION on read exposure: dictionaries are private by default with a per-identity public option ("honestly i don't see why it would not be private but maybe somebody wants that"). Recorded in L6 as an ownership read filter on the ops window, a known LO2 instance that federation's chapter must specify before L5 lands.|) *)
  (section local
   (doc "Six moves. L1-L4 are offline-only and each is useful alone; L5-L6 add sync. None may change the calculus, the IR, the step count or the prim set, and sync adds no route; the local tools reuse the server's row shapes so their output can be synced later without conversion.")
   (status planned)
@@ -136,9 +137,16 @@
       laptop's local prev_hash (L2; the server keeps none across
       apply).
 
+      L5 lands together with the dictionary-visibility read filter (L6),
+      never before it, so no release serves dictionaries publicly by
+      default.
+
       ACCEPTANCE: after migration every identity's effective dictionary
       is unchanged; the dictionary at any past op is a fold of the log;
-      a def round appends exactly one tree_ops row at its dict path. |))))
+      a def round appends exactly one tree_ops row at its dict path;
+      another identity's ops pull omits a private dictionary's rows and
+      still verifies, and includes them once that identity sets its
+      dictionary public. |))))
   (subsection l6-local-peer
    (status planned)
    (details
@@ -157,15 +165,38 @@
       (5000 rows per page), so a pull walks pages from the last seq it
       saw.
 
-      OPEN - OWNER DECISION (read exposure). GET /api/fed/ops filters by
-      prefix but checks no ownership: any authenticated identity can
-      read any prefix. Today a dictionary is private to its identity
-      (Repl_cmd.do_dict reads only the caller's rows). Moving it onto
-      dict/<identity>/ in tree_ops (L5) makes every dictionary readable
-      by every bearer, peers included. L5 does not land until the owner
-      chooses: accept dictionaries as public like other tree values, or
-      add an ownership read filter to the ops window (a federation
-      change, LO2).
+      DICTIONARY VISIBILITY (owner decision 2026-11-25: private by
+      default, public as an option). GET /api/fed/ops filters by prefix
+      but checks no ownership, while a dictionary is private to its
+      identity today (Repl_cmd.do_dict reads only the caller's rows).
+      Moving dictionaries into tree_ops (L5) must not widen that, so
+      the ops window gains a read filter, a deliberate federation
+      change recorded under LO2 and specified in federation's chapter:
+
+        - A row whose path is dict/<identity>/... or
+          ns/<peer>/dict/<identity>/... is served only to that
+          identity, to admin, or to anyone when that identity's
+          dictionary visibility is public. Every other row is served
+          as today.
+        - Filtered rows are left out of the window. Federation already
+          verifies prefix-filtered, non-contiguous windows row by row
+          (each row carries its true prev_hash), so verification is
+          unchanged; the page's last_seq still advances past them.
+        - Visibility is a per-identity setting, private by default,
+          changed only by that identity (or admin) through a REPL
+          command (dict-visibility public|private) that appends a
+          journaled op, so a change is auditable and rewindable.
+
+      PRIVATE MEANS NAMES, NOT TREES. Values stay hash-gated reads
+      (byte-values law 2): anyone holding a hash can fetch its tree. A
+      private dictionary hides which names an identity binds to which
+      hashes, and its history; it does not hide a tree whose hash has
+      leaked. The chapter says so rather than implying more.
+
+      Because the laptop peer is its own identity (fed-peer-<name>),
+      it pulls its owner's private dictionary with the owner's bearer,
+      held in the same local token file; it pushes with its peer
+      bearer, so writes stay confined to ns/<laptop>/.
 
       PUSH: one apply of the laptop's ops window into ns/<laptop>/,
       carrying its values inline. Dictionary ops land at
@@ -215,9 +246,11 @@
           there.
       LO2 PROTOCOL GROWTH. L6 needs a route or op kind federation
           does not have (for example server-side verification of
-          pushed deriv records, a refusing apply, or an ownership read
-          filter on the ops window). THEN: record
-          why, and extend federation's chapter, not this one.
+          pushed deriv records, or a refusing apply). THEN: record
+          why, and extend federation's chapter, not this one. The
+          dictionary-visibility read filter (L6) is a KNOWN, owner-
+          approved instance of LO2: it is specified in federation's
+          chapter before L5 lands.
       LO3 MERGE CREEP. Sync needs anything beyond hash comparison and
           two namespaces (a three-way merge, last-writer-wins, silent
           resolution). THEN: the thesis is refuted; stop and redesign
@@ -229,4 +262,5 @@
   (test "L3: a local v0/v1 run with prims emits a deriv record deriv-check verifies (exit 0); a flipped journal answer exits 1; server replay reproduces result hash and steps; after the registry step the same holds for fast1-fast3")
   (test "L4: the gate verdict through the CLI with a JSON observation answers the same JSON as /api/tool/run")
   (test "L5: after migration every identity's effective dictionary is unchanged, a past dictionary is a fold of the op log, and a def appends one tree_ops row at its dict path")
+  (test "L5/L6: another identity's ops pull omits a private dictionary's rows and still verifies; after dict-visibility public the same pull includes them")
   (test "L6: an offline def and run pushed via fed apply land under ns/<laptop>/ at the same hashes, the deriv record fetched back verifies with deriv-check, and a concurrent server def of the same name is reported with both hashes, neither overwritten")))
