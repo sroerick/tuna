@@ -464,7 +464,10 @@ module LF = Tuna_local.Local_fed
    ignored, never guessed at *)
 let test_l6_tokens () =
   let p = Filename.temp_file "tuna-tokens" "" in
-  Out_channel.with_open_gen [ Open_trunc; Open_binary ] 0o600 p (fun oc ->
+  (* Open_wronly is required: with_open_gen does not add it, and a
+     read-only channel drops the write *)
+  Out_channel.with_open_gen [ Open_wronly; Open_creat; Open_trunc ] 0o600 p
+    (fun oc ->
       Out_channel.output_string oc
         "# laptop\npeer=peer-token-value\nowner=owner-token-value\n");
   let tk = LF.read_tokens p in
@@ -487,7 +490,7 @@ let test_l6_groups () =
 let test_l6_413_retry () =
   let st = LS.open_ (fresh_dir ()) in
   ignore (run st "def inc (lambda (x) (int-add x 1))");
-  let r = run_src st (cfg ()) {|(lambda (x) (runtime (prim "echo" x)))|} [ {|\"k\"|} ] in
+  let r = run_src st (cfg ()) {|(lambda (x) (runtime (prim "echo" x)))|} [ {|"k"|} ] in
   let d = r.LRun.record in
   let rec_hash = r.LRun.record_hash in
   let rows = LS.ops st in

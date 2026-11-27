@@ -47,7 +47,9 @@ let find_sub s sub =
 
 (* -- the token file: peer=<push token>, owner=<owner bearer> ---------- *)
 
-type tokens = { peer : string; owner : string; name : string; approve : bool }
+(* the two tokens the chapter names: the peer bearer (push) and the
+   owner's bearer (pull of a private dictionary).  Nothing else. *)
+type tokens = { peer : string; owner : string }
 
 let read_tokens path =
   let ic = open_in path in
@@ -146,6 +148,24 @@ let row_of_json (j : J.t) : (string * string option) option =
       match J.Util.member "value_hash" j with
       | `String h -> Some (path, Some h)
       | _ -> Some (path, None))
+
+(* the identity a bearer names: GET /api/whoami answers the name the
+   dictionary prefix needs.  A token is not a name, so a pull that used
+   the bearer as the path identity would match no row at all. *)
+let whoami ~base ~token =
+  match
+    http ~meth:"GET" ~url:(trim_slash base ^ "/api/whoami") ~token ()
+  with
+  | Error e -> Error e
+  | Ok (200, body) -> (
+      match J.from_string body with
+      | exception _ -> Error "whoami is not JSON"
+      | j -> (
+          match row_string j "name" with
+          | Some name when name <> "" -> Ok name
+          | _ -> Error "whoami names no identity"))
+  | Ok (code, body) ->
+      Error (Printf.sprintf "whoami answered %d: %s" code (String.trim body))
 
 (* the dictionary a window's rows name, folded to name -> value hash (the
    undef marker removes a name, as the server's dict_fold does) *)
@@ -418,14 +438,21 @@ let pull_window st ~base ~token ~prefix =
    back too, so the caller can report divergence against them *)
 let pull st ~base ~tokens:tk =
   if tk.owner = "" then Error "token file names no owner bearer (=...)"
-  else pull_window st ~base ~token:tk.owner ~prefix:("dict/" ^ tk.owner ^ "/")
+  else
+    match whoami ~base ~token:tk.owner with
+    | Error e -> Error e
+    | Ok owner ->
+        pull_window st ~base ~token:tk.owner ~prefix:("dict/" ^ owner ^ "/")
 
 (* -- the divergence report --------------------------------------------- *)
 
 let divergence_report st ~base ~peer ~tokens:tk =
   let local_prefix = "dict/" ^ S.identity st ^ "/" in
   let ns_prefix = "ns/" ^ peer ^ "/dict/" in
-  let server_prefix = "dict/" ^ tk.owner ^ "/" in
+  match whoami ~base ~token:tk.owner with
+  | Error e -> Error e
+  | Ok owner -> (
+  let server_prefix = "dict/" ^ owner ^ "/" in
   match pull_window st ~base ~token:tk.owner ~prefix:ns_prefix with
   | Error e -> Error e
   | Ok ns_rows -> (
@@ -435,4 +462,4 @@ let divergence_report st ~base ~peer ~tokens:tk =
           let local = fold_dict ~prefix:local_prefix (List.map (fun (o : S.op) -> (o.S.path, o.S.value_hash)) (S.ops st)) in
           let server = fold_dict ~prefix:server_prefix server_rows in
           let pushed = fold_dict ~prefix:ns_prefix ns_rows in
-          Ok (divergences ~local ~server, pushed))
+          Ok (divergences ~local ~server, pushed)))
