@@ -1129,6 +1129,150 @@ let redact_journal_row p ~run_id ~seq ~policy () =
         "UPDATE runs SET verify_status = NULL, verified_at = NULL \
          WHERE id = $1::uuid")
 
+(* -- retention policies (the journal.retention-gc policy knob) -------
+
+   One row per identity says how long that identity's journals live.
+   NO row, or enabled = false, collects nothing: there is no built-in
+   period and no timer in this process, so a sweep is an explicit admin
+   call (a cron entry may make it) and a mistake is a refused or dry
+   call, never a surprise delete. *)
+
+type retention_policy =
+  { rp_identity : string
+  ; rp_name : string
+  ; rp_keep_days : int
+  ; rp_keep_failures : bool
+  ; rp_enabled : bool
+  ; rp_updated_at : string
+  }
+
+let select_retention_policy =
+  "p.identity::text, i.name, p.keep_days, p.keep_failures, p.enabled, \
+   p.updated_at::text FROM retention_policies p \
+   JOIN identities i ON i.id = p.identity"
+
+let retention_policy_of_row r =
+  { rp_identity = text r 0 "retention_policies.identity"
+  ; rp_name = text r 1 "identities.name"
+  ; rp_keep_days = int r 2 "retention_policies.keep_days"
+  ; rp_keep_failures = bool r 3 "retention_policies.keep_failures"
+  ; rp_enabled = bool r 4 "retention_policies.enabled"
+  ; rp_updated_at = text r 5 "retention_policies.updated_at"
+  }
+
+let fetch_retention_policy p ~identity =
+  Db.q ~params:[ p_str identity ] p
+    ("SELECT " ^ select_retention_policy ^ " WHERE p.identity = $1::uuid")
+  >>= fun rows ->
+  (match rows with
+  | [] -> Direct.return None
+  | [ r ] -> Direct.return (Some (retention_policy_of_row r))
+  | _ -> store_error "retention_policies: multiple rows for one identity")
+
+let list_retention_policies p () =
+  Db.q p ("SELECT " ^ select_retention_policy ^ " ORDER BY i.name")
+  >>= fun rows -> Direct.return (List.map retention_policy_of_row rows)
+
+(* admin write: the updated_by/updated_at audit rides the row *)
+let put_retention_policy p ~identity ~keep_days ~keep_failures ~enabled
+    ~updated_by () =
+  Db.q_unit
+    ~params:
+      [ p_str identity; p_int keep_days; p_bool keep_failures
+      ; p_bool enabled; p_str updated_by ]
+    p
+    "INSERT INTO retention_policies (identity, keep_days, keep_failures, \
+     enabled, updated_by) VALUES ($1::uuid, $2::int, $3::bool, $4::bool, \
+     $5::uuid) ON CONFLICT (identity) DO UPDATE SET \
+     keep_days = EXCLUDED.keep_days, \
+     keep_failures = EXCLUDED.keep_failures, enabled = EXCLUDED.enabled, \
+     updated_by = EXCLUDED.updated_by, updated_at = now()"
+  >>= fun () ->
+  fetch_retention_policy p ~identity
+  >>= (function
+       | Some pol -> Direct.return pol
+       | None -> store_error "put_retention_policy: row vanished after upsert")
+
+(* the sweep predicate, in the book's words: caller is that identity,
+   journal_gced_at IS NULL, created_at STRICTLY older than keep_days,
+   status = 'normal', and - while failures are kept - verify_status
+   'verified'.  A failure is status <> 'normal' or verify_status
+   'failed'; an unverified run is kept while failures are kept because
+   it can still become verified.  One identity's policy never touches
+   another identity's runs. *)
+let retention_where =
+  "caller = $1::uuid AND journal_gced_at IS NULL \
+   AND created_at < now() - ($2::int * interval '1 day') \
+   AND status = 'normal' \
+   AND (NOT $3::bool OR verify_status = 'verified')"
+
+let retention_params pol =
+  [ p_str pol.rp_identity; p_int pol.rp_keep_days; p_bool pol.rp_keep_failures ]
+
+let retention_eligible_ids p pol =
+  Db.q
+    ~params:(retention_params pol)
+    p
+    ("SELECT id::text FROM runs WHERE " ^ retention_where
+    ^ " ORDER BY created_at, id")
+  >>= fun rows -> Direct.return (List.map (fun r -> text r 0 "runs.id") rows)
+
+(* the citation a collected run's tombstone carries *)
+let retention_citation pol =
+  Printf.sprintf "retention:%s:keep-%dd%s" pol.rp_name pol.rp_keep_days
+    (if pol.rp_keep_failures then ":keep-failures" else "")
+
+let rec retention_take n = function
+  | [] -> []
+  | _ when n <= 0 -> []
+  | x :: rest -> x :: retention_take (n - 1) rest
+
+type retention_sweep =
+  { rs_identity : string  (* the uuid *)
+  ; rs_name : string
+  ; rs_policy : string
+  ; rs_eligible : int
+  ; rs_collected : int
+  ; rs_run_ids : string list  (* sample, at most 10 *)
+  }
+
+(* dry_run measures; only an explicit false collects, and each
+   collected run goes through gc_journal's single transaction, so its
+   tombstone cites the policy in force, verify_status becomes 'gced'
+   (never 'verified'), and a second sweep collects nothing. *)
+let sweep_retention p ~dry_run () =
+  list_retention_policies p ()
+  >>= fun policies ->
+  let enabled = List.filter (fun pol -> pol.rp_enabled) policies in
+  let collect pol ids =
+    let citation = retention_citation pol in
+    let rec go n = function
+      | [] -> Direct.return n
+      | id :: rest ->
+          gc_journal p ~run_id:id ~policy:citation ()
+          >>= fun _ -> go (n + 1) rest
+    in
+    go 0 ids
+  in
+  let rec one acc = function
+    | [] -> Direct.return (List.rev acc)
+    | pol :: rest ->
+        retention_eligible_ids p pol
+        >>= fun ids ->
+        (if dry_run then Direct.return 0 else collect pol ids)
+        >>= fun collected ->
+        one
+          ({ rs_identity = pol.rp_identity
+           ; rs_name = pol.rp_name
+           ; rs_policy = retention_citation pol
+           ; rs_eligible = List.length ids
+           ; rs_collected = collected
+           ; rs_run_ids = retention_take 10 ids }
+          :: acc)
+          rest
+  in
+  one [] enabled
+
 (* -- identities ------------------------------------------------------ *)
 
 type identity = {

@@ -711,6 +711,105 @@ let test_redaction_breaks_chain () =
                         (Some "failed") run.S.r_verify_status;
                       return ()))
 
+(* the retention policy knob (journal/retention-gc): NO row collects
+   nothing and there is no timer; a dry run measures (counts + sample,
+   nothing deleted); only an explicit false collects, through the
+   existing single-transaction tombstone path citing the policy; a
+   second sweep collects nothing; a fresh run is never eligible. *)
+let test_retention_policy () =
+  Db.init (Db.config_from_env ()) >>= fun p ->
+  S.upsert_program p ~hash:leaf_hash ~ternary:"0" ~ir:None
+    ~created_by:None ~source:None
+  >>= fun _ ->
+  S.bootstrap_identity p ~is_admin:false ~name:"m10-retention"
+    ~token:"m10-retention-token" ()
+  >>= fun me ->
+  S.insert_run p ~program_hash:leaf_hash ~caller:(Some me.S.i_id) ~fuel:10
+    ~size_cap:10 ()
+  >>= fun old_run ->
+  S.insert_run p ~program_hash:leaf_hash ~caller:(Some me.S.i_id) ~fuel:10
+    ~size_cap:10 ()
+  >>= fun fresh_run ->
+  Db.q_unit
+    ~params:[ p_str old_run ]
+    p
+    "UPDATE runs SET status = 'normal', verify_status = 'verified', \
+     created_at = now() - interval '3 days' WHERE id = $1::uuid"
+  >>= fun () ->
+  Db.q_unit
+    ~params:[ p_str fresh_run ]
+    p
+    "UPDATE runs SET status = 'normal', verify_status = 'verified' \
+     WHERE id = $1::uuid"
+  >>= fun () ->
+  (* 1. no policy row: a real sweep walks no identity and collects nothing *)
+  S.sweep_retention p ~dry_run:false ()
+  >>= fun none ->
+  Alcotest.(check int) "no policy, no swept identity" 0 (List.length none);
+  (* 2. an enabled policy: the dry run is the default reading - it counts
+        the old verified run, samples its id, and deletes nothing *)
+  S.put_retention_policy p ~identity:me.S.i_id ~keep_days:1
+    ~keep_failures:true ~enabled:true ~updated_by:me.S.i_id ()
+  >>= fun pol ->
+  Alcotest.(check string) "citation names the policy" "retention:m10-retention:keep-1d:keep-failures"
+    (Printf.sprintf "retention:%s:keep-%dd%s" pol.S.rp_name pol.S.rp_keep_days
+       (if pol.S.rp_keep_failures then ":keep-failures" else ""));
+  S.sweep_retention p ~dry_run:true ()
+  >>= fun dry ->
+  (match dry with
+   | [ r ] ->
+       Alcotest.(check int) "dry run eligible" 1 r.S.rs_eligible;
+       Alcotest.(check int) "dry run collects nothing" 0 r.S.rs_collected;
+       Alcotest.(check (list string)) "dry run samples the id" [ old_run ]
+         r.S.rs_run_ids
+   | _ -> Alcotest.fail "expected one swept identity (dry run)");
+  S.fetch_run p old_run
+  >>= (function
+        | None -> Alcotest.fail "old run vanished"
+        | Some r ->
+            Alcotest.(check (option string)) "dry run leaves verify_status"
+              (Some "verified") r.S.r_verify_status;
+            return ())
+  >>= fun () ->
+  (* 3. an explicit false collects: tombstone cites the policy, the run is
+        gced, and the fresh run (inside keep_days) is untouched *)
+  S.sweep_retention p ~dry_run:false ()
+  >>= fun real ->
+  (match real with
+   | [ r ] ->
+       Alcotest.(check int) "real sweep eligible" 1 r.S.rs_eligible;
+       Alcotest.(check int) "real sweep collected" 1 r.S.rs_collected
+   | _ -> Alcotest.fail "expected one swept identity (real run)");
+  S.fetch_run p old_run
+  >>= (function
+        | None -> Alcotest.fail "collected run vanished"
+        | Some r ->
+            Alcotest.(check (option string)) "collected run is gced"
+              (Some "gced") r.S.r_verify_status;
+            return ())
+  >>= fun () ->
+  S.fetch_gc_tombstone p old_run
+  >>= fun tomb ->
+  Alcotest.(check (option string)) "tombstone cites the policy"
+    (Some "retention:m10-retention:keep-1d:keep-failures") (Option.join tomb);
+  S.fetch_run p fresh_run
+  >>= (function
+        | None -> Alcotest.fail "fresh run vanished"
+        | Some r ->
+            Alcotest.(check (option string)) "fresh run untouched"
+              (Some "verified") r.S.r_verify_status;
+            return ())
+  >>= fun () ->
+  (* 4. a second sweep collects nothing: the tombstone closed the window *)
+  S.sweep_retention p ~dry_run:false ()
+  >>= fun again ->
+  (match again with
+   | [ r ] ->
+       Alcotest.(check int) "second sweep eligible" 0 r.S.rs_eligible;
+       Alcotest.(check int) "second sweep collected" 0 r.S.rs_collected
+   | _ -> Alcotest.fail "expected one swept identity (second run)");
+  return ()
+
 (* run-id resolution: full uuids pass through, hex prefixes resolve to
    the single matching run, anything else is None (callers answer 404,
    never a raw store error) *)
@@ -777,4 +876,6 @@ let () =
                  test_gc_tombstone
              ; lwt "redaction = visible chain break (answer unknown)"
                  test_redaction_breaks_chain
+             ; lwt "policy knob: off by default, dry run first, cited tombstones"
+                 test_retention_policy
              ] ) ]
