@@ -99,7 +99,7 @@ import json, sys
 d = json.load(sys.stdin)
 rows = [x for x in d.get("swept") or [] if x.get("identity") == sys.argv[1]]
 print(json.dumps(rows[0] if rows else {}))' "$2"; }
-row_has() { printf '%s' "$1" | python3 -c '
+row_has() { python3 -c '
 import json, sys
 d = json.loads(sys.stdin.read())
 assert d, "no swept row"
