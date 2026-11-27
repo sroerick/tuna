@@ -256,6 +256,61 @@
    (verify
     (test "G2: check-evidence.sh --receipts resolves each command's `receipt` claim with claims.sh verify (stubbed in the offline test): a pass receipt with exit 0 and a fail receipt with exit 1 agree and pass; a pass receipt with exit 1 or a fail receipt with exit 0 disagrees and fails; a MISMATCH, an unresolvable receipt, or a reproduced unverified receipt with exit 0 (claimed pass) fails, while a command without a `receipt` is not a receipt failure; without the mode the existing completeness fixtures behave unchanged"))
   )
+  (subsection g3-factory-receipts
+   (status planned)
+   (execution
+    (scope g3)
+    (kind code))
+   (details
+    (doc (|
+      G3 of gate-receipts/integration. The loop's card-advancing gate
+      runs - the implement pass (factory/loop.py:4188,4194) and the
+      merge pass (factory/loop.py:5065,5071) - each run one gate command
+      under tuna/scripts/gate-receipt.sh with that command's captured
+      log, and factory/evidence.py receives the mint's claim path and
+      verdict and records them per command as {label, cmd, rc, receipt,
+      verdict}. The gate's own result stays the command's exit status,
+      read from the wrapper's `exit=` line: gate-receipt.sh exits 0
+      whenever a receipt was minted whatever the verdict and 2 on
+      operational failure (tuna/scripts/gate-receipt.sh:36-38), so its
+      process exit is never the gate result. A gate that does not apply
+      (gate_applies false, no dune project) and the rollback and uifix
+      gates (factory/loop.py:4526,4644) are not G3's gate commands: they
+      advance as today and are recorded not-run, never as a missing
+      receipt. The runner identity comes from the factory's receipt
+      configuration in factory/config.json - a base URL and a token
+      file, never a token value - and the wrapper's env carries
+      TUNA_BASE and TUNA_TOKEN past dune_env's allowlist
+      (factory/loop.py:2724). A card cannot advance on a gate whose
+      receipt verdict is unverified: an unconfigured runner, a mint
+      failure (including a log above the value cap, exit 2), a
+      resolution failure, a missing receipt, or a pass gate with a
+      non-pass receipt blocks the pass with a diagnostic that names the
+      gate - never a skip and never a silent green. Blocking is an
+      abort, not a log line: the implement pass records a BLOCKED ledger
+      row, sets no code_pass_state and keeps its branch, because a
+      config or mint failure is not a diff failure; the merge returns
+      before the push and leaves master untouched. A red gate's receipt
+      may read fail; its redness comes from its own exit and it already
+      blocks. The gate slug passed to the wrapper is unique per
+      invocation (it carries the pass and the attempt), because
+      claims.sh is write-once and refuses an existing
+      u.<runner>.claim.<date>.gate.<project>.<rev12>.<slug> path
+      (tuna/scripts/claims.sh:203-207); re-running a gate whose receipt
+      already exists resolves that claim instead of failing. Resolution
+      is claims.sh verify's exit status only; the verdict recorded is the
+      one gate-receipt.sh printed at mint (line 253), so G3 changes
+      neither the wrapper nor claims.sh and does not depend on G2's
+      verdict= line. The seam takes an injected receipt runner so the law
+      is testable offline with a stub that answers pass, fail or
+      unverified without a network; with no injection the production
+      default is the real wrapper, and an absent configuration blocks
+      rather than switching receipts off.
+    |))
+   )
+   (verify
+    (test "G3: every card-advancing gate command the loop runs (the implement and merge build and test gates) produces one receipt (claim path and verdict) recorded per command in the evidence the ledger row carries and the advance check reads; a pass gate whose receipt verdict is not pass, a missing receipt, an unresolvable receipt, a mint that failed (including a log above the value cap), or an unconfigured base/token file blocks the pass - the implement pass records BLOCKED, sets no state and keeps its branch, the merge leaves master untouched - with a diagnostic naming the gate; a gate that does not apply, and the rollback and uifix gates, are recorded not-run, not as missing receipts; a red gate still blocks on its own exit whatever its receipt verdict; the gate's rc is read from the wrapper's exit= line, not the wrapper's process exit; and an injected runner answering pass leaves existing gate behavior unchanged (factory/tests/test_evidence.py for the receipt-verdict decision, factory/tests/test_merge_gates.py for the loop's implement and merge refusal in a temp repo with /bin/true gates; the unconfigured case is exercised with no injection, not with a stub)"))
+  )
   (subsection failure-definitions
    (status planned)
    (details
