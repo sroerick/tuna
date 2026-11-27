@@ -1,16 +1,16 @@
-; board-add.sabra — the board chapter's create call site (board.borg L5).
+; board-add.sabra — Midden-backed board create (board v2).
 ;
-; Pure vocabulary over the v0.3 prelude row todo-add: the page hands
-; path/title/who/when as run inputs (rim-encoded cstr/cstr/cstr/int),
-; the program does the one journaled tree/put.  Eta-wrapped because the
-; diff-corpus twin pins DIRECT def applications: the def itself is
-; todo-add; this program is the BOARD's callsite over it.
-;
-; Every mutation run must come back status normal, denial_count 0,
-; replay-verify verified - the F5 wire carried from defs to programs.
+; Builds a canonical `todo` v1 record (tags 1..4 in byte-sorted field order:
+; 1=created, 2=state, 3=title, 4=who) and writes it through `midden/put`
+; with prev="" (create).  Midden atomically updates `todo_by_created` and
+; `todo_counts` in the same transaction.
 
-(lambda (path)
+(lambda (entity)
   (lambda (title)
     (lambda (who)
-      (lambda (when)
-        (todo-add path title who when)))))
+      (lambda (created)
+        (prim "midden/put" "todo" entity ""
+          (pair (pair %10 (pair created %0))
+            (pair (pair %110 (pair "open" %0))
+              (pair (pair %1110 (pair title %0))
+                (pair (pair %11110 (pair who %0)) %0)))))))))

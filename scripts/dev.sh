@@ -144,6 +144,11 @@ start_pg() {
 build_all() {
   opam_env
   echo "[dev] building (${OPAM_SWITCH:-current switch})..."
+  local midden_prefix="$ROOT/_build/midden-prefix"
+  if [ -d "$ROOT/../midden" ]; then
+    (cd "$ROOT/.." && dune build --root=. midden @midden/install && dune install --root=. --prefix="$midden_prefix" midden >/dev/null 2>&1)
+    export OCAMLPATH="$midden_prefix/lib${OCAMLPATH:+:$OCAMLPATH}"
+  fi
   (cd "$ROOT" && dune build --root "$ROOT" @all)
 }
 

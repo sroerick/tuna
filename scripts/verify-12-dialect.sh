@@ -97,12 +97,11 @@ echo "  bracket=$BR pair-chain=$PAIR (equal); rec-upd corpus steps=$RECSTEPS"
 
 echo "[12.5] todo bridge: in-calculus board, journaled + replay-verified"
 PREFIX="todo-cal-v12"
-psql_q -q -c "DELETE FROM tree_paths WHERE path LIKE '$PREFIX/%'" >/dev/null 2>&1 || true
 python3 "$ROOT/scripts/dialect/bridge_probe.py" --prefix "$PREFIX" || \
   fail "12.5: todo bridge"
 
 echo "[12.6] manifest + corpus hygiene"
-MF=$(psql_q -tA -c "SELECT count(*) FROM repl_dict d JOIN identities i ON i.id=d.identity_id WHERE i.name='sabralib'")
+MF=$(psql_q -tA -c "SELECT count(*) FROM def_view WHERE \"identity-name\"='sabralib'")
 [ "$MF" -ge 76 ] || fail "12.6: sabralib must hold >=76 defs, got $MF"
 ls "$ROOT"/scripts/diff-corpus/dialect_*.corpus >/dev/null 2>&1 || \
   fail "12.6: dialect corpus rows missing"

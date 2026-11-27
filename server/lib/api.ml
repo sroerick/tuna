@@ -1350,9 +1350,14 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                                     authority"
                                    (Option.value path_prefix ~default:""))
                           | true -> (
+                              let scope_schema = get_string_opt j "scope_schema" in
+                              let scope_namespace = get_string_opt j "scope_namespace" in
+                              let scope_projection = get_string_opt j "scope_projection" in
                               Store.mint_grant pool ~prim
                                 ~args_attenuation:attenuation
-                                ~path_prefix:path_prefix ~caller
+                                ~path_prefix:path_prefix
+                                ~scope_schema ~scope_namespace ~scope_projection
+                                ~caller
                                 ~minted_by:(Some auth.auth_id) ()
                               >>= fun g ->
                               return
@@ -1361,6 +1366,9 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                                     [ ("id", `String g.Store.g_id)
                                     ; ("prim", `String g.Store.g_prim)
                                     ; ("path_prefix", opt_str g.Store.g_path_prefix)
+                                    ; ("scope_schema", opt_str g.Store.g_scope_schema)
+                                    ; ("scope_namespace", opt_str g.Store.g_scope_namespace)
+                                    ; ("scope_projection", opt_str g.Store.g_scope_projection)
                                     ; ("caller", `String g.Store.g_caller)
                                     ; ( "args_attenuation"
                                       , `String g.Store.g_args_attenuation )
@@ -3347,7 +3355,65 @@ let api_routes pool =
             (with_auth pool (put_retention_policy pool))
         ; Web.post "/api/admin/retention/sweep"
             (with_auth pool (post_retention_sweep pool))
-        ; Web.get "/api/retention" (with_auth pool (get_retention_policy pool)) ]
+        ; Web.get "/api/retention" (with_auth pool (get_retention_policy pool))
+        (* Midden M2 evaluator & schema/projection/claim surfaces *)
+        ; Web.get "/api/midden/schemas" (with_auth pool (fun _ _ ->
+            Midden_eval.list_schemas pool >>= fun (code, j) -> j_ok ~code j))
+        ; Web.post "/api/midden/schemas" (with_auth pool (fun auth req ->
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match get_string_opt j "form" with
+                  | None -> j_err "missing \"form\""
+                  | Some form_str ->
+                      Midden_eval.register_schema pool ~form_str
+                      >>= fun (code, out) -> j_ok ~code out)))
+        ; Web.post "/api/midden/projections" (with_auth pool (fun auth req ->
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match get_string_opt j "form" with
+                  | None -> j_err "missing \"form\""
+                  | Some form_str ->
+                      Midden_eval.define_projection pool ~form_str
+                      >>= fun (code, out) -> j_ok ~code out)))
+        ; Web.post "/api/midden/verify/well-formed" (with_auth pool (fun auth req ->
+            body_json req >>= function
+            | Error msg -> j_err msg
+            | Ok j -> (
+                match get_string_opt j "schema_hash" with
+                | None -> j_err "missing \"schema_hash\""
+                | Some schema_hash ->
+                    Midden_eval.verify_well_formed pool ~caller:auth.auth_id
+                      ~author:auth.auth_name ~schema_hash
+                    >>= fun (code, out) -> j_ok ~code out)))
+        ; Web.post "/api/midden/verify/lens-total" (with_auth pool (fun auth req ->
+            body_json req >>= function
+            | Error msg -> j_err msg
+            | Ok j -> (
+                match (get_string_opt j "from_hash", get_string_opt j "to_hash") with
+                | Some from_hash, Some to_hash ->
+                    Midden_eval.verify_lens_total pool ~caller:auth.auth_id
+                      ~author:auth.auth_name ~from_hash ~to_hash
+                    >>= fun (code, out) -> j_ok ~code out
+                | _ -> j_err "missing \"from_hash\" or \"to_hash\"")))
+        ; Web.post "/api/midden/verify/projection" (with_auth pool (fun auth req ->
+            body_json req >>= function
+            | Error msg -> j_err msg
+            | Ok j -> (
+                match get_string_opt j "projection" with
+                | None -> j_err "missing \"projection\""
+                | Some projection_name ->
+                    Midden_eval.verify_projection pool ~caller:auth.auth_id
+                      ~author:auth.auth_name ~projection_name
+                    >>= fun (code, out) -> j_ok ~code out)))
+        ; Web.get "/api/midden/claims" (with_auth pool (fun _ req ->
+            let kind = Web.query req "kind" in
+            Midden_eval.list_claims pool ?kind () >>= fun (code, out) -> j_ok ~code out)) ]
 
 (* the public artifact directory (pp-slice T3): scripts/deploy/build-public.sh
    writes src.tgz here at boot/refresh; absent file is a plain 404 *)
@@ -3375,6 +3441,7 @@ let serve ~env ~sw ~port ~bootstrap_token =
   let cfg = Db.config_from_env () in
   Tuna_store.Pgx_eio.with_ctx (Tuna_store.Pgx_eio.Ctx.of_stdenv ~sw env) @@ fun () ->
   let pool = Db.init cfg in
+  Tuna_store.Tuna_schemas.ensure_all pool;
   let _boot =
     Store.fetch_identity_by_name pool "root"
     |> function

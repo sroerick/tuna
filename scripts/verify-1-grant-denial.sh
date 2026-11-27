@@ -144,7 +144,7 @@ tj() { curl_code -X POST -H "$MAUTH" -H 'Content-Type: application/json' \
 [ "$(tj list "{\"prefix\":\"$FLOOR/\"}")" = 403 ] \
   || fail "grantless member tree/list must 403"
 NJ=$(psql_q -tAc \
-  "SELECT count(*) FROM tree_ops WHERE actor='$MEM_ID' AND path LIKE '$FLOOR%'" \
+  "SELECT count(*) FROM op_audit_by_seq WHERE actor='$MEM_ID' AND path LIKE '$FLOOR%'" \
   | tr -d ' ')
 [ "$NJ" -ge 3 ] || fail "denied tree ops must be journaled (got $NJ rows)"
 echo "  deny-all holds: grantless 403 x3, denials journaled ($NJ rows)"

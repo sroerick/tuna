@@ -103,7 +103,7 @@ let corpus =
   ; ("high-bit", "\255\254\128\127")
     (* valid ternary bytes: the byte kind and the tree kind must stay
        disjoint even when the bytes would parse as ternary *)
-  ; ("ternary-shaped", "2210200010")
+  ; ("ternary-shaped", "22102000")
   ; ("100k-html", html_page ()) ]
 
 let test_byte_roundtrip () =
@@ -191,18 +191,19 @@ let test_byte_roundtrip () =
   in
   iter_corpus corpus
   >>= fun () ->
-  (* kind disjoint (law 1): the ternary-shaped byte value is NOT in the
-     tree store until a tree twin is stored; same hash, both tables, no
-     coalescing *)
+  (* Unified CAS law: a byte blob stored via value/put is NOT returned as
+     kind=tree; a Base-243 tree stored via value_put is returned as kind=tree
+     under its Tpack hash while raw bytes stay kind=bytes under their raw hash. *)
   let tbytes = List.assoc "ternary-shaped" corpus in
   let thash = independent_sha256 tbytes in
   Api.value_get_core p ~auth:a ~hash:thash ~kind:(Some "tree")
   >>= fun (kcode, _, _, _) ->
   Alcotest.(check int) "tree kind absent while only bytes stored" 404 kcode;
-  S.value_put p ~hash:thash ~ternary:tbytes >>= fun () ->
-  Api.value_get_core p ~auth:a ~hash:thash ~kind:(Some "tree")
+  let tree_hash = Tuna.Hash.hex_of_trits tbytes in
+  S.value_put p ~hash:tree_hash ~ternary:tbytes >>= fun () ->
+  Api.value_get_core p ~auth:a ~hash:tree_hash ~kind:(Some "tree")
   >>= fun (tcode, _, tbody, thdrs) ->
-  Alcotest.(check int) "tree kind present after tree twin" 200 tcode;
+  Alcotest.(check int) "tree kind present after tree put" 200 tcode;
   Alcotest.(check string) "tree twin returns the ternary" tbytes tbody;
   Alcotest.(check (option string)) "tree kind header" (Some "tree")
     (header thdrs "X-Tuna-Kind");
@@ -224,7 +225,7 @@ let test_byte_dedup_and_bloat () =
   let h2 = Option.value (json_string j2 "hash") ~default:"?" in
   Alcotest.(check string) "dedup returns the same hash" h1 h2;
   Db.q ~params:[ S.p_str h1 ] p
-    "SELECT count(*)::text FROM byte_values WHERE hash = $1"
+    "SELECT count(*)::text FROM midden_values WHERE hash = $1"
   >>= (function
         | [ r ] ->
             Alcotest.(check string) "storage does not grow (one row)" "1"

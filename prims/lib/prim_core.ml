@@ -63,17 +63,24 @@ let names =
   ; "math/sub"
   ; "math/mul"
   ; "math/cmp"
-  ; "math/neg" ]
+  ; "math/neg"
+    (* Midden state-plane prims (Phase 3): schema-validated typed records,
+       optimistic CAS by prev head, tombstones, and declarative projection
+       queries, gated by structural schema/namespace/projection grants *)
+  ; "midden/get"
+  ; "midden/put"
+  ; "midden/delete"
+  ; "midden/query" ]
 
 let exists name = List.mem name names
 
-(* the mint surface's prim vocabulary: a registered prim, or the "*"
-   wildcard the route layer mints for program routes.  An unknown name
-   is refused at mint time instead of stored as a capability no boundary
-   can ever answer. *)
 let wildcard = "*"
 
 let mintable name = exists name || String.equal name wildcard
+
+let midden_addressed = function
+  | "midden/get" | "midden/put" | "midden/delete" | "midden/query" -> true
+  | _ -> false
 
 (* prims whose calls address TREE PATHS.  A grant for one of these is a
    path capability, so the mint surface requires an explicit prefix the

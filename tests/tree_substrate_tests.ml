@@ -405,7 +405,7 @@ let test_ops_chain () =
    | `Bad msg -> Alcotest.failf "fresh chain must verify: %s" msg);
   (* tamper a payload field in place -> the chain walk must fail *)
   Db.q_unit ~params:[ S.p_str "t6/ops/a" ] p
-    "UPDATE tree_ops SET path = 't6/tampered' WHERE path = $1"
+    "UPDATE op_audit_by_seq SET path = 't6/tampered' WHERE path = $1"
   >>= fun () ->
   S.ops_fold p ~from_seq:0L ()
   >>= fun ops' ->

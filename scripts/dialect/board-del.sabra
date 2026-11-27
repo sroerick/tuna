@@ -1,9 +1,9 @@
-; board-del.sabra — the canonical board delete (board.borg L5).
+; board-del.sabra — Midden-backed tombstone delete (board v2).
 ;
-; The prim's op kind is the canonical "delete", retiring the host
-; page's nonstandard "del" op kind with the swap.  Deleted items are
-; interesting to rewind-as-fold: the op chain records the version so
-; the fold replays the tombstone.
+; Reads current head via `midden/get` and appends a tombstone commit via
+; `midden/delete`, preserving commit history while retracting the item from
+; `todo_by_created`, `todo_open`, and `todo_counts`.
 
-(lambda (path)
-  (prim "tree/del" path))
+(lambda (entity)
+  (let ((got (prim "midden/get" "todo" entity)))
+    (prim "midden/delete" "todo" entity (first got))))

@@ -52,8 +52,8 @@ let ops_with p ~op ~path =
 let test_fed_tree_roundtrip () =
   setup () >>= fun p ->
   admin p >>= fun me ->
-  let ternary = "2202102010" in
-  let hash = independent_sha256 ternary in
+  let ternary = "2202102000" in
+  let hash = Tuna.Hash.hex_of_trits ternary in
   S.value_put p ~hash ~ternary >>= fun () ->
   Api.fed_value_core p ~auth:(auth_of me) ~hash
   >>= fun (code, body) ->
@@ -68,7 +68,7 @@ let test_fed_tree_roundtrip () =
   (* the rehash contract: recompute the hash from the payload alone *)
   let payload = Option.value (json_string j "payload") ~default:"?" in
   Alcotest.(check string) "tree: rehash matches" hash
-    (independent_sha256 payload);
+    (Tuna.Hash.hex_of_trits payload);
   return ()
 
 let test_fed_bytes_roundtrip () =
@@ -97,7 +97,7 @@ let test_fed_bytes_roundtrip () =
 let test_fed_program_hash () =
   setup () >>= fun p ->
   admin p >>= fun me ->
-  let ternary = "221010210" in
+  let ternary = "2210102100" in
   let hash = Tuna.Hash.hex_of_trits ternary in
   S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None ~source:None >>= fun _ ->
   Api.fed_value_core p ~auth:(auth_of me) ~hash >>= fun (code, body) ->
@@ -108,7 +108,7 @@ let test_fed_program_hash () =
   Alcotest.(check (option string)) "program: payload is the ternary"
     (Some ternary) (json_string j "payload");
   Alcotest.(check string) "program: rehash matches" hash
-    (independent_sha256 ternary);
+    (Tuna.Hash.hex_of_trits ternary);
   return ()
 
 (* absent hashes answer 404 with an error field, and even denials land
@@ -138,8 +138,8 @@ let test_fed_peer_attribution () =
   setup () >>= fun p ->
   admin p >>= fun _ ->
   peer p "fed-peer-testpeer" >>= fun pe ->
-  let ternary = "2201022100" in
-  let hash = independent_sha256 ternary in
+  let ternary = "22010221000" in
+  let hash = Tuna.Hash.hex_of_trits ternary in
   S.value_put p ~hash ~ternary >>= fun () ->
   Api.fed_value_core p ~auth:(auth_of pe) ~hash >>= fun (code, _) ->
   Alcotest.(check int) "peer: fed get 200 (no grant needed)" 200 code;
@@ -179,7 +179,7 @@ let test_fed_peer_names () =
 (* seed a source-namespace effect exactly as /api/tree/put does:
    content-addressed value + path row + one linked op row. *)
 let seed_path p ~actor ~path ~ternary =
-  let hash = independent_sha256 ternary in
+  let hash = Tuna.Hash.hex_of_trits ternary in
   S.value_put p ~hash ~ternary >>= fun () ->
   S.path_put p ~path ~value_hash:hash ~owner:actor >>= fun v ->
   S.op_append p ~op:"put" ~path ~value_hash:(Some hash) ~prev_version:None
@@ -208,9 +208,9 @@ let test_f2_pull_window () =
   admin p >>= fun me ->
   let a = auth_of me in
   let src = "f2src/pull/" in
-  seed_path p ~actor:me.S.i_id ~path:(src ^ "one") ~ternary:"2202102010"
+  seed_path p ~actor:me.S.i_id ~path:(src ^ "one") ~ternary:"2202102000"
   >>= fun h1 ->
-  seed_path p ~actor:me.S.i_id ~path:(src ^ "two") ~ternary:"221010210"
+  seed_path p ~actor:me.S.i_id ~path:(src ^ "two") ~ternary:"2210102100"
   >>= fun _ ->
   pull_ops p ~auth:a ~prefix:src ~after_seq:0 >>= fun ops ->
   Alcotest.(check bool) "window non-empty" true (List.length ops >= 2);
@@ -238,9 +238,9 @@ let test_f2_apply_roundtrip () =
   let a = auth_of me in
   let src = "f2src/rt/" in
   let dst = "ns/town/f2rt/" in
-  seed_path p ~actor:me.S.i_id ~path:(src ^ "alpha") ~ternary:"2202102010"
+  seed_path p ~actor:me.S.i_id ~path:(src ^ "alpha") ~ternary:"2202102000"
   >>= fun h1 ->
-  seed_path p ~actor:me.S.i_id ~path:(src ^ "beta") ~ternary:"221010210"
+  seed_path p ~actor:me.S.i_id ~path:(src ^ "beta") ~ternary:"2210102100"
   >>= fun h2 ->
   pull_ops p ~auth:a ~prefix:src ~after_seq:0 >>= fun ops ->
   Api.fed_apply_core p ~auth:(auth_of pe) (apply_body ~src ~dst ops)
@@ -278,7 +278,7 @@ let test_f2_apply_shadow () =
   let a = auth_of me in
   let src = "f2src/shadow/" in
   let dst = "ns/shadow/f2sh/" in
-  seed_path p ~actor:me.S.i_id ~path:(src ^ "x") ~ternary:"2202102010"
+  seed_path p ~actor:me.S.i_id ~path:(src ^ "x") ~ternary:"2202102000"
   >>= fun _ ->
   pull_ops p ~auth:a ~prefix:src ~after_seq:0 >>= fun ops ->
   (* first apply: version 1 *)
@@ -306,7 +306,7 @@ let test_f2_apply_rejects () =
   let a = auth_of me in
   let src = "f2src/rej/" in
   let dst = "ns/reject/f2rej/" in
-  seed_path p ~actor:me.S.i_id ~path:(src ^ "keep") ~ternary:"2202102010"
+  seed_path p ~actor:me.S.i_id ~path:(src ^ "keep") ~ternary:"2202102000"
   >>= fun _ ->
   pull_ops p ~auth:a ~prefix:src ~after_seq:0 >>= fun ops ->
   (* 1. broken chain: tamper an op_hash in the window *)
@@ -425,7 +425,7 @@ let test_f2_apply_admin_any_ns () =
   let a = auth_of me in
   let src = "f2src/admin/" in
   let dst = "ns/anything/admin/" in
-  seed_path p ~actor:me.S.i_id ~path:(src ^ "v") ~ternary:"2202102010"
+  seed_path p ~actor:me.S.i_id ~path:(src ^ "v") ~ternary:"2202102000"
   >>= fun _ ->
   pull_ops p ~auth:a ~prefix:src ~after_seq:0 >>= fun ops ->
   Api.fed_apply_core p ~auth:a (apply_body ~src ~dst ops)
@@ -479,9 +479,9 @@ let test_vis_private_by_default () =
   admin p >>= fun me ->
   identity_of p ~is_admin:false ~name:"visOwnA" >>= fun a ->
   identity_of p ~is_admin:false ~name:"visOwnB" >>= fun b ->
-  seed_path p ~actor:a.S.i_id ~path:"dict/visOwnA/foo" ~ternary:"2202102010"
+  seed_path p ~actor:a.S.i_id ~path:"dict/visOwnA/foo" ~ternary:"2202102000"
   >>= fun _ ->
-  seed_path p ~actor:a.S.i_id ~path:"plain/kept" ~ternary:"221010210"
+  seed_path p ~actor:a.S.i_id ~path:"plain/kept" ~ternary:"2210102100"
   >>= fun _ ->
   S.ops_head_seq p >>= fun head ->
   (* B sees the ordinary row and no dict row; last_seq crosses them all *)
@@ -526,7 +526,7 @@ let test_vis_peer_namespace_rows () =
   identity_of p ~is_admin:false ~name:"visNsB" >>= fun b ->
   peer p "fed-peer-vispeer" >>= fun pe ->
   seed_path p ~actor:me.S.i_id ~path:"ns/vispeer/dict/visNsA/x"
-    ~ternary:"2202102010"
+    ~ternary:"2202102000"
   >>= fun _ ->
   pull_paths p ~auth:(auth_of b) ~prefix:"ns/" ~after_seq:0 ~limit:1000
   >>= fun (paths, _, _) ->
@@ -548,11 +548,11 @@ let test_vis_paging_all_hidden () =
   identity_of p ~is_admin:false ~name:"visPageA" >>= fun a ->
   identity_of p ~is_admin:false ~name:"visPageB" >>= fun b ->
   S.ops_head_seq p >>= fun head0 ->
-  seed_path p ~actor:a.S.i_id ~path:"dict/visPageA/h1" ~ternary:"2202102010"
+  seed_path p ~actor:a.S.i_id ~path:"dict/visPageA/h1" ~ternary:"2202102000"
   >>= fun _ ->
-  seed_path p ~actor:a.S.i_id ~path:"dict/visPageA/h2" ~ternary:"221010210"
+  seed_path p ~actor:a.S.i_id ~path:"dict/visPageA/h2" ~ternary:"2210102100"
   >>= fun _ ->
-  seed_path p ~actor:a.S.i_id ~path:"dict/visPageA/h3" ~ternary:"2201022100"
+  seed_path p ~actor:a.S.i_id ~path:"dict/visPageA/h3" ~ternary:"22010221000"
   >>= fun _ ->
   (* a FULL (limit-row) window whose rows are all hidden: more is true,
      the op list is empty *)
@@ -589,7 +589,7 @@ let test_vis_setting_only_by_command () =
   Alcotest.(check bool) "refused set appended no row" false
     (List.mem "visSetA" public);
   (* an ordinary put/cas at vis/visSetA/public sets nothing *)
-  seed_path p ~actor:me.S.i_id ~path:"vis/visSetA/public" ~ternary:"2202102010"
+  seed_path p ~actor:me.S.i_id ~path:"vis/visSetA/public" ~ternary:"2202102000"
   >>= fun _ ->
   S.dict_visibility_public p >>= fun public ->
   Alcotest.(check bool) "ordinary write at vis/ sets nothing" false
@@ -621,7 +621,7 @@ let test_vis_peer_push_changes_nothing () =
      ns/<peer>/, so the row arrives at ns/vispush/vis/visPushA/public *)
   let src = "vispushsrc/" in
   seed_path p ~actor:me.S.i_id ~path:"vispushsrc/vis/visPushA/public"
-    ~ternary:"2202102010"
+    ~ternary:"2202102000"
   >>= fun _ ->
   pull_ops p ~auth ~prefix:src ~after_seq:0 >>= fun ops ->
   Api.fed_apply_core p ~auth:(auth_of pe)
@@ -748,11 +748,11 @@ let test_l5_backfill_unchanged () =
   S.bootstrap_identity p ~is_admin:false ~name:"l5bk" ~token:"l5bk-token" ()
   >>= fun me ->
   (* a pre-L5 dictionary row the op log does not carry yet *)
-  S.dict_set p ~identity_id:me.S.i_id ~name:"bkConst" ~ternary:"2202102010"
+  S.dict_set p ~identity_id:me.S.i_id ~name:"bkConst" ~ternary:"2202102000"
   >>= fun () ->
   S.dict_list p ~identity_id:me.S.i_id >>= fun before ->
   Alcotest.(check (list (pair string string))) "pre-backfill dictionary"
-    [ ("bkConst", "2202102010") ]
+    [ ("bkConst", "2202102000") ]
     (List.map (fun d -> (d.S.d_name, d.S.d_ternary)) before);
   S.dict_backfill p >>= fun () ->
   (* after migration every identity's effective dictionary is unchanged *)
@@ -766,12 +766,12 @@ let test_l5_backfill_unchanged () =
   (match rows with
    | [ o ] ->
        Alcotest.(check (option string)) "backfill row cites the value hash"
-         (Some (Tuna.Hash.hex_of_trits "2202102010")) o.S.o_value_hash
+         (Some (Tuna.Hash.hex_of_trits "2202102000")) o.S.o_value_hash
    | _ -> Alcotest.fail "expected exactly one backfill put at the dict path");
   (* the dictionary at any past op is a fold of the log *)
   S.dict_fold p ~identity:"l5bk" () >>= fun fold ->
   Alcotest.(check (list (pair string string))) "fold holds the entry"
-    [ ("bkConst", Tuna.Hash.hex_of_trits "2202102010") ] fold;
+    [ ("bkConst", Tuna.Hash.hex_of_trits "2202102000") ] fold;
   (* idempotent: a second backfill appends nothing *)
   S.dict_backfill p >>= fun () ->
   ops_with p ~op:"put" ~path:"dict/l5bk/bkConst" >>= fun rows2 ->

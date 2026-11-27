@@ -29,46 +29,31 @@ repl() {
 }
 repl_field() { jget "d['round']['$2']" <<<"$1"; }
 
-echo "[8.1] manifest drift: recompute from repl_dict(sabralib), diff"
+echo "[8.1] manifest drift: recompute from Midden def_view(sabralib), diff"
 ROWS=$(mktemp)
 trap 'rm -f "$ROWS"' EXIT
 psql_q -At -F'|' -c \
-  "SELECT d.name, d.ternary FROM repl_dict d
-   JOIN identities i ON i.id=d.identity_id
-   WHERE i.name='sabralib' ORDER BY d.name" > "$ROWS"
+  "SELECT d.name, d.\"value-hash\" FROM def_view d
+   WHERE d.\"identity-name\"='sabralib' ORDER BY d.name" > "$ROWS"
 python3 - "$MANIFEST" "$ROWS" <<'PYEOF' || fail "manifest drift detected (see above)"
-import sys, hashlib
-
-def parse(s, i=0):
-    c = s[i]; i += 1
-    if c == '0':
-        return 1, i
-    if c == '1':
-        n, i = parse(s, i)
-        return n + 1, i
-    n1, i = parse(s, i)
-    n2, i = parse(s, i)
-    return 1 + n1 + n2, i
+import sys
 
 live = {}
 for line in open(sys.argv[2]):
-    name, ternary = line.rstrip("\n").split("|", 1)
-    size, off = parse(ternary)
-    if off != len(ternary):
-        sys.exit(f"unbalanced ternary for {name}")
-    live[name] = (size, hashlib.sha256(ternary.encode()).hexdigest())
+    name, h = line.rstrip("\n").split("|", 1)
+    live[name] = h
 
 manifest = {}
 for line in open(sys.argv[1]):
     name, size, h = line.split()
-    manifest[name] = (int(size), h)
+    manifest[name] = h
 
 drift = []
-for name, (size, h) in sorted(manifest.items()):
+for name, h in sorted(manifest.items()):
     if name not in live:
         drift.append(f"missing in store: {name}")
-    elif live[name] != (size, h):
-        drift.append(f"{name}: manifest {size}/{h[:12]} != store {live[name][0]}/{live[name][1][:12]}")
+    elif live[name] != h:
+        drift.append(f"{name}: manifest {h[:12]} != store {live[name][:12]}")
 for name in sorted(live):
     if name not in manifest:
         drift.append(f"extra in store: {name}")
@@ -115,8 +100,7 @@ echo "[8.3] list-length / int-add / tree-eq green"
 
 echo "[8.4] seeding attributed + additive"
 COUNT=$(psql_q -At -c \
-  "SELECT count(*) FROM repl_dict d
-   JOIN identities i ON i.id=d.identity_id WHERE i.name='sabralib'")
+  "SELECT count(*) FROM def_view WHERE \"identity-name\"='sabralib'")
 MF_COUNT=$(wc -l < "$MANIFEST")
 [ "$COUNT" = "$MF_COUNT" ] || \
   fail "sabralib row count $COUNT != manifest $MF_COUNT"
