@@ -43,6 +43,10 @@ let test_parse_command () =
     | Tuna_server.Repl_cmd.Patch (p, t, Some h) -> "patch:" ^ p ^ ":" ^ t ^ ":" ^ h
     | Tuna_server.Repl_cmd.FirstDiff (a, b) -> "fd:" ^ a ^ ":" ^ b
     | Tuna_server.Repl_cmd.Dict -> "dict"
+    | Tuna_server.Repl_cmd.DictVisibility (None, public) ->
+        "dict-visibility:" ^ (if public then "public" else "private")
+    | Tuna_server.Repl_cmd.DictVisibility (Some t, public) ->
+        "dict-visibility:" ^ t ^ ":" ^ (if public then "public" else "private")
   in
   let check name expected line =
     match Tuna_server.Repl_cmd.parse_command line with

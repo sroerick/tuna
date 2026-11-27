@@ -117,6 +117,23 @@ let exec st opts (cmd : C.command) : (outcome, string) result =
       if List.mem_assoc name (S.dict_hashes st) then
         S.bind st ~name ~value_hash:S.undef_marker;
       Ok (outcome ~note:("undefined " ^ name) "undef")
+  | C.DictVisibility (target, public) -> (
+      (* the offline CLI is self-only: L2 fixes one identity per
+         directory, so a local call names no other target *)
+      let target = Option.value target ~default:st.S.identity in
+      if target <> S.identity st then
+        Error
+          (Printf.sprintf
+             "the local CLI sets only its own dictionary (identity %S)"
+             (S.identity st))
+      else (
+        S.set_visibility st ~target ~public;
+        Ok
+          (outcome
+             ~note:
+               (Printf.sprintf "dictionary of %s is now %s" target
+                  (if public then "public" else "private"))
+             "dict-visibility")))
   | C.Get (path, h) -> (
       match P.normalize_path path with
       | None -> Error (Printf.sprintf "bad path %S" path)

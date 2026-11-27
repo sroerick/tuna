@@ -2387,8 +2387,27 @@ let fed_ops_core pool ~(auth : auth) ~prefix ~after_seq ~limit =
     | [] -> Int64.of_int after_seq
     | r :: _ -> r.Store.w_op.Store.o_seq
   in
+  (* dictionary-visibility (borg/federation.borg dictionary-visibility):
+     the ownership filter runs AFTER the window is read and after
+     verify_window_rows, over the UNFILTERED window, so last_seq and
+     more still count hidden rows and chain verification still catches
+     a tampered hidden row.  A row naming a dictionary is served only
+     to that identity, to admin, or once that identity's visibility is
+     public; every other row is served exactly as FED2 serves it. *)
+  Store.dict_visibility_public pool
+  >>= fun public_dicts ->
+  Store.is_admin pool auth.auth_id
+  >>= fun caller_admin ->
+  let names_dictionary r =
+    match Store.dict_path_identity r.Store.w_op.Store.o_path with
+    | None -> true
+    | Some id ->
+        caller_admin || id = auth.auth_name || id = auth.auth_id
+        || List.mem id public_dicts
+  in
   let keep r =
-    prefix = "" || Store.prefix_match prefix r.Store.w_op.Store.o_path
+    (prefix = "" || Store.prefix_match prefix r.Store.w_op.Store.o_path)
+    && names_dictionary r
   in
   let ops_json =
     List.map

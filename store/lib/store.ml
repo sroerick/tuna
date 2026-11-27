@@ -2377,6 +2377,94 @@ let ops_window p ~from_seq ~limit =
          { w_op = tree_op_of_row r; w_prev_hash = text r 9 "window.prev_hash" })
        rows)
 
+(* -- dictionary visibility (borg/federation.borg dictionary-visibility) --
+
+   LO2's deliberate narrowing: a window row whose path names a dictionary
+   is served only to that identity, to admin, or to anyone once that
+   identity's dictionary is public (the fold of its dict-visibility rows,
+   the last one by seq winning, private when none exists).  A put or cas
+   at vis/... changes nothing - only a dict-visibility row sets the flag,
+   which is what makes "changed only through this command" true - and a
+   fed-applied row lands under ns/<peer>/vis/..., so no peer can publish
+   another identity's dictionary. *)
+
+(* the identity a row path names as a dictionary, else None.  Shape:
+   dict/<identity>/... or ns/<peer>/dict/<identity>/... .  The trailing
+   slash is required (dict/A and dict/AB/... are not A's rows) and the
+   identity is the single segment between dict/ and the next slash, so an
+   empty identity matches no identity (fail closed). *)
+let dict_path_identity (path : string) : string option =
+  let at_dict off =
+    let pre = "dict/" in
+    let plen = String.length pre in
+    if String.length path > off + plen && String.sub path off plen = pre then
+      match String.index_from_opt path (off + plen) '/' with
+      | Some i -> Some (String.sub path (off + plen) (i - off - plen))
+      | None -> None
+    else None
+  in
+  match at_dict 0 with
+  | Some id -> Some id
+  | None ->
+      let pre = "ns/" in
+      if
+        String.length path > String.length pre
+        && String.sub path 0 (String.length pre) = pre
+      then
+        match String.index_from_opt path (String.length pre) '/' with
+        | Some i -> at_dict (i + 1)
+        | None -> None
+      else None
+
+(* vis/<identity>/public|private <-> (identity, public?); None for every
+   other shape (a vis/ row names no dictionary: it is an ordinary row) *)
+let dict_visibility_of_path (path : string) : (string * bool) option =
+  let pre = "vis/" in
+  if
+    String.length path > String.length pre
+    && String.sub path 0 (String.length pre) = pre
+  then
+    match String.rindex_opt path '/' with
+    | Some i when i > String.length pre ->
+        let id = String.sub path (String.length pre) (i - String.length pre) in
+        (match String.sub path (i + 1) (String.length path - i - 1) with
+         | "public" -> Some (id, true)
+         | "private" -> Some (id, false)
+         | _ -> None)
+    | _ -> None
+  else None
+
+let dict_visibility_path ~identity ~public =
+  "vis/" ^ identity ^ (if public then "/public" else "/private")
+
+(* append the setting row: op kind dict-visibility, no value hash (it
+   carries no effect, so fed apply lands it as a cas proof row like any
+   other non-effect).  The actor is the caller; the path names the
+   target. *)
+let dict_visibility_set p ~actor ~target ~public =
+  op_append p ~op:"dict-visibility"
+    ~path:(dict_visibility_path ~identity:target ~public)
+    ~value_hash:None ~prev_version:None ~version:None ~actor
+
+(* the identities whose dictionary is public: the fold of the log's
+   dict-visibility rows, the last one per identity by seq winning, so a
+   past setting is the fold up to that seq *)
+let dict_visibility_public p =
+  Db.q p "SELECT path FROM tree_ops WHERE op = 'dict-visibility' ORDER BY seq"
+  >>= fun rows ->
+  let tbl = Hashtbl.create 8 in
+  List.iter
+    (fun r ->
+      match dict_visibility_of_path (text r 0 "tree_ops.path") with
+      | Some (id, public) -> Hashtbl.replace tbl id public
+      | None -> ())
+    rows;
+  Direct.return
+    (List.sort compare
+       (Hashtbl.fold
+          (fun id public acc -> if public then id :: acc else acc)
+          tbl []))
+
 (* one applied effect row: value_hash + a FRESH version (1 if the
    destination path is first seen, else existing+1).  Returns the new
    version. *)

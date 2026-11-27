@@ -13,6 +13,8 @@ type command =
   | Patch of string * string * string option  (* path, new ternary, target *)
   | FirstDiff of string * string
   | Dict
+  | DictVisibility of string option * bool
+    (* (target identity, public?); None = the caller's own dictionary *)
 
 exception Parse_error of string
 
@@ -59,11 +61,19 @@ let parse_command (line : string) : command =
       match rest with
       | [ a; b ] -> FirstDiff (a, b)
       | _ -> parse_error "usage: first-diff <hashA> <hashB>")
+  | "dict-visibility" :: rest -> (
+      match rest with
+      | [ ("public" | "private") as v ] -> DictVisibility (None, v = "public")
+      | [ target; ("public" | "private") as v ] ->
+          DictVisibility (Some target, v = "public")
+      | _ ->
+          parse_error
+            "usage: dict-visibility [<identity>] public|private")
   | _ when is_term_source trimmed -> Eval trimmed
   | _ ->
       parse_error
         "unknown command (try: eval / def / undef / get / patch / \
-         first-diff / dict)"
+         first-diff / dict / dict-visibility)"
 
 (* compile + the dictionary-usage census: every dictionary hit fires
    on_resolve (def-usage, borg/call-sites.borg cousin).  The collector

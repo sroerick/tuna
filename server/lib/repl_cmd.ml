@@ -378,6 +378,39 @@ let do_undef pool ~caller name =
   S.dict_del pool ~identity_id:caller ~name >>= fun () ->
   return (Ok (outcome ~kind:"undef" ~note:("undefined " ^ name) ()))
 
+(* dict-visibility [<identity>] public|private (borg/federation.borg
+   dictionary-visibility): the setting is per identity and private when
+   no dict-visibility row exists.  A non-admin sets only its OWN
+   dictionary; an admin may also set another identity's.  The appended
+   row's actor is the caller and its path names the target, with no
+   value hash: it carries no effect, so fed apply lands it as a cas
+   proof row like any other non-effect. *)
+let do_dict_visibility pool ~caller target_opt public =
+  S.fetch_identity pool caller >>= function
+  | None -> err_ "dict-visibility: unknown caller identity"
+  | Some me -> (
+      let target = Option.value target_opt ~default:me.S.i_name in
+      let append () =
+        S.dict_visibility_set pool ~actor:caller ~target ~public
+        >>= fun _ ->
+        return
+          (Ok
+             (outcome ~kind:"dict-visibility"
+                ~note:
+                  (Printf.sprintf "dictionary of %s is now %s" target
+                     (if public then "public" else "private"))
+                ()))
+      in
+      if target = me.S.i_name then append ()
+      else
+        S.is_admin pool caller >>= function
+        | true -> append ()
+        | false ->
+            err_
+              (Printf.sprintf
+                 "identity %s may set only its own dictionary visibility"
+                 me.S.i_name))
+
 (* -- the round -------------------------------------------------------- *)
 
 (* Parse the caller's input ternaries (one per element, as in the run
@@ -458,6 +491,8 @@ let execute pool ~caller ~command ~inputs ~grant_ids ~fuel ~size_cap
             do_def pool ~caller ~dictionary ~compile_fuel ~compile_size_cap
               ~compile_deadline name src
       | Undef name -> do_undef pool ~caller name
+      | DictVisibility (target, public) ->
+          do_dict_visibility pool ~caller target public
       | Get (path, h) -> do_get pool ~caller path h
       | Patch (path, t, h) -> do_patch pool ~caller path t h
       | FirstDiff (a, b) -> do_first_diff pool a b

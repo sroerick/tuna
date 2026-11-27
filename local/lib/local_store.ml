@@ -248,8 +248,10 @@ let verify t : (unit, string) result =
   go genesis 1L (ops t)
 
 (* append one effect op; versions are per path and local (federation:
-   the value hash is the shared fact). *)
-let append t ~path ~op ~value_hash ?prev_value_hash () : op =
+   the value hash is the shared fact).  [no_versions] appends a
+   non-effect row (dict-visibility), whose versions are null as on the
+   server, so fed apply lands it as a cas proof row. *)
+let append t ~path ~op ~value_hash ?prev_value_hash ?(no_versions = false) () : op =
   let all = ops t in
   let _, committed = committed_lines t in
   let last_seq, last_hash =
@@ -258,12 +260,15 @@ let append t ~path ~op ~value_hash ?prev_value_hash () : op =
     | o :: _ -> (o.seq, o.op_hash)
   in
   let prev_version =
-    List.fold_left
-      (fun acc o -> if o.path = path && o.version <> None then o.version else acc)
-      None all
+    if no_versions then None
+    else
+      List.fold_left
+        (fun acc o -> if o.path = path && o.version <> None then o.version else acc)
+        None all
   in
   let version =
-    Some (Int64.succ (Option.value prev_version ~default:0L))
+    if no_versions then None
+    else Some (Int64.succ (Option.value prev_version ~default:0L))
   in
   let o0 =
     { seq = Int64.succ last_seq; path; op; value_hash; prev_version; version;
@@ -284,6 +289,9 @@ let append t ~path ~op ~value_hash ?prev_value_hash () : op =
 
 (* run [f] holding the directory's lock (one round at a time) *)
 let with_lock t f = lock_file t.root f
+
+(* the identity fixed at directory creation (L2): a local call is self-only *)
+let identity t = t.identity
 
 (* -- the dictionary: a fold of dict/<identity>/ puts --------------------- *)
 
@@ -319,10 +327,53 @@ let last_value t path =
     (fun acc o -> if o.path = path && o.value_hash <> None then o.value_hash else acc)
     None (ops t)
 
+(* dict-visibility (borg/federation.borg dictionary-visibility): one
+   non-effect op, path vis/<identity>/public|private, no value hash, no
+   versions - what fed apply lands as a cas proof row.  Only this
+   writer sets the flag: a put or cas at vis/... never does. *)
+let visibility_path ~identity ~public =
+  "vis/" ^ identity ^ (if public then "/public" else "/private")
+
+let set_visibility t ~target ~public =
+  ignore
+    (append t ~path:(visibility_path ~identity:target ~public)
+       ~op:"dict-visibility" ~value_hash:None ~no_versions:true ())
+
 let bind t ~name ~value_hash =
   let path = dict_prefix t ^ name in
   let prev_value_hash = last_value t path in
   ignore (append t ~path ~op:"put" ~value_hash:(Some value_hash) ?prev_value_hash ())
+
+(* -- dictionary visibility (borg/federation.borg dictionary-visibility) --
+   the local chain's own fold of vis/<identity>/public|private rows, as the
+   server's dict_visibility_public folds its log.  Only a dict-visibility
+   row sets the flag; a put/cas at vis/... is ignored. *)
+
+let visibility_of_path path =
+  let pre = "vis/" in
+  if String.length path > String.length pre && String.sub path 0 (String.length pre) = pre
+  then
+    match String.rindex_opt path '/' with
+    | Some i when i > String.length pre ->
+        let id = String.sub path (String.length pre) (i - String.length pre) in
+        (match String.sub path (i + 1) (String.length path - i - 1) with
+         | "public" -> Some (id, true)
+         | "private" -> Some (id, false)
+         | _ -> None)
+    | _ -> None
+  else None
+
+let public_identities t : string list =
+  let tbl = Hashtbl.create 8 in
+  List.iter
+    (fun o ->
+      if o.op = "dict-visibility" then
+        match visibility_of_path o.path with
+        | Some (id, public) -> Hashtbl.replace tbl id public
+        | None -> ())
+    (ops t);
+  List.sort compare
+    (Hashtbl.fold (fun id public acc -> if public then id :: acc else acc) tbl [])
 
 (* -- session state -------------------------------------------------------- *)
 

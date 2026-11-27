@@ -433,6 +433,207 @@ let test_f2_apply_admin_any_ns () =
   Alcotest.(check int) "admin may write any ns (200)" 200 code;
   return ()
 
+(* -- dictionary visibility (borg/federation.borg dictionary-visibility) --
+
+   A dictionary is private to its identity by default: the pull omits
+   dict/<id>/... and ns/<peer>/dict/<id>/... rows for any caller that is
+   not that identity or admin, unless the identity's dictionary is
+   public (the fold of its dict-visibility rows).  last_seq and more stay
+   computed over the UNFILTERED window, and a put/cas at vis/... never
+   sets the flag. *)
+
+let identity_of p ~is_admin ~name =
+  S.bootstrap_identity p ~is_admin ~name ~token:(name ^ "-token") ()
+
+let pull_paths p ~auth ~prefix ~after_seq ~limit =
+  Api.fed_ops_core p ~auth ~prefix ~after_seq ~limit >>= fun (code, j) ->
+  Alcotest.(check int) "pull 200" 200 code;
+  (match J.Util.member "verified" j with
+   | `Bool true -> ()
+   | _ -> Alcotest.fail "pull window did not verify");
+  let paths =
+    match J.Util.member "ops" j with
+    | `List ops ->
+        List.map
+          (fun oj ->
+            match J.Util.member "path" oj with
+            | `String s -> s
+            | _ -> Alcotest.fail "op row has no path")
+          ops
+    | _ -> Alcotest.fail "pull response has no ops array"
+  in
+  let last_seq =
+    match J.Util.member "last_seq" j with
+    | `Int i -> i
+    | _ -> Alcotest.fail "pull response has no last_seq"
+  in
+  let more =
+    match J.Util.member "more" j with `Bool b -> b | _ -> Alcotest.fail "no more"
+  in
+  return (paths, last_seq, more)
+
+let contains needle hay = List.exists (( = ) needle) hay
+
+let test_vis_private_by_default () =
+  setup () >>= fun p ->
+  admin p >>= fun me ->
+  identity_of p ~is_admin:false ~name:"dictA" >>= fun a ->
+  identity_of p ~is_admin:false ~name:"dictB" >>= fun b ->
+  seed_path p ~actor:a.S.i_id ~path:"dict/dictA/foo" ~ternary:"2202102010"
+  >>= fun _ ->
+  seed_path p ~actor:a.S.i_id ~path:"plain/kept" ~ternary:"221010210"
+  >>= fun _ ->
+  S.ops_head_seq p >>= fun head ->
+  (* B sees the ordinary row and no dict row; last_seq crosses them all *)
+  pull_paths p ~auth:(auth_of b) ~prefix:"" ~after_seq:0 ~limit:1000
+  >>= fun (paths, last_seq, _) ->
+  Alcotest.(check bool) "B omits dict/dictA/foo" false
+    (contains "dict/dictA/foo" paths);
+  Alcotest.(check bool) "B still sees the ordinary row" true
+    (contains "plain/kept" paths);
+  Alcotest.(check int) "last_seq advances past hidden rows" (Int64.to_int head)
+    last_seq;
+  (* A sees its own rows *)
+  pull_paths p ~auth:(auth_of a) ~prefix:"dict/dictA/" ~after_seq:0 ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "A sees its own dict row" true
+    (contains "dict/dictA/foo" paths);
+  (* admin sees them *)
+  pull_paths p ~auth:(auth_of me) ~prefix:"dict/" ~after_seq:0 ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "admin sees the dict row" true
+    (contains "dict/dictA/foo" paths);
+  (* public makes B's next pull carry them, still verified *)
+  S.dict_visibility_set p ~actor:a.S.i_id ~target:"dictA" ~public:true
+  >>= fun _ ->
+  pull_paths p ~auth:(auth_of b) ~prefix:"dict/dictA/" ~after_seq:0 ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "B sees A's dict row once public" true
+    (contains "dict/dictA/foo" paths);
+  (* and private again hides it: the fold is last row by seq *)
+  S.dict_visibility_set p ~actor:a.S.i_id ~target:"dictA" ~public:false
+  >>= fun _ ->
+  pull_paths p ~auth:(auth_of b) ~prefix:"dict/dictA/" ~after_seq:0 ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "B omits A's dict row once private again" false
+    (contains "dict/dictA/foo" paths);
+  return ()
+
+let test_vis_peer_namespace_rows () =
+  setup () >>= fun p ->
+  admin p >>= fun me ->
+  identity_of p ~is_admin:false ~name:"dictA" >>= fun a ->
+  identity_of p ~is_admin:false ~name:"dictB" >>= fun b ->
+  peer p "fed-peer-vispeer" >>= fun pe ->
+  seed_path p ~actor:me.S.i_id ~path:"ns/vispeer/dict/dictA/x"
+    ~ternary:"2202102010"
+  >>= fun _ ->
+  pull_paths p ~auth:(auth_of b) ~prefix:"ns/" ~after_seq:0 ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "B omits ns/P/dict/A row" false
+    (contains "ns/vispeer/dict/dictA/x" paths);
+  pull_paths p ~auth:(auth_of pe) ~prefix:"ns/vispeer/" ~after_seq:0 ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "P's own pull omits dict/A rows" false
+    (contains "ns/vispeer/dict/dictA/x" paths);
+  pull_paths p ~auth:(auth_of a) ~prefix:"ns/vispeer/" ~after_seq:0 ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "A's pull carries them" true
+    (contains "ns/vispeer/dict/dictA/x" paths);
+  return ()
+
+let test_vis_paging_all_hidden () =
+  setup () >>= fun p ->
+  admin p >>= fun _ ->
+  identity_of p ~is_admin:false ~name:"dictA" >>= fun a ->
+  identity_of p ~is_admin:false ~name:"dictB" >>= fun b ->
+  S.ops_head_seq p >>= fun head0 ->
+  seed_path p ~actor:a.S.i_id ~path:"dict/dictA/h1" ~ternary:"2202102010"
+  >>= fun _ ->
+  seed_path p ~actor:a.S.i_id ~path:"dict/dictA/h2" ~ternary:"221010210"
+  >>= fun _ ->
+  seed_path p ~actor:a.S.i_id ~path:"dict/dictA/h3" ~ternary:"2201022100"
+  >>= fun _ ->
+  (* a FULL (limit-row) window whose rows are all hidden: more is true,
+     the op list is empty *)
+  pull_paths p ~auth:(auth_of b) ~prefix:"" ~after_seq:(Int64.to_int head0)
+    ~limit:3
+  >>= fun (paths, _, more) ->
+  Alcotest.(check int) "full all-hidden window is empty" 0 (List.length paths);
+  Alcotest.(check bool) "full all-hidden window answers more:true" true more;
+  (* the next read is past the three hidden rows: a short window of the
+     remaining rows answers more:false *)
+  pull_paths p ~auth:(auth_of b) ~prefix:"" ~after_seq:(Int64.to_int head0)
+    ~limit:100
+  >>= fun (paths, _, more) ->
+  Alcotest.(check int) "short all-hidden final window is empty" 0
+    (List.length paths);
+  Alcotest.(check bool) "short all-hidden final window answers more:false" false
+    more;
+  return ()
+
+let test_vis_setting_only_by_command () =
+  setup () >>= fun p ->
+  admin p >>= fun me ->
+  identity_of p ~is_admin:false ~name:"dictA" >>= fun a ->
+  identity_of p ~is_admin:false ~name:"dictB" >>= fun b ->
+  (* a non-admin may not set another identity's flag: refused, no row *)
+  Tuna_server.Repl_cmd.execute p ~caller:b.S.i_id
+    ~command:"dict-visibility dictA public" ~inputs:[] ~grant_ids:[] ~fuel:1000
+    ~size_cap:1000 ()
+  >>= (function
+        | Ok o ->
+            Alcotest.failf "non-admin cross-set was accepted (%s)" o.Tuna_server.Repl_cmd.o_kind
+        | Error _ -> return ());
+  S.dict_visibility_public p >>= fun public ->
+  Alcotest.(check bool) "refused set appended no row" false
+    (List.mem "dictA" public);
+  (* an ordinary put/cas at vis/dictA/public sets nothing *)
+  seed_path p ~actor:me.S.i_id ~path:"vis/dictA/public" ~ternary:"2202102010"
+  >>= fun _ ->
+  S.dict_visibility_public p >>= fun public ->
+  Alcotest.(check bool) "ordinary write at vis/ sets nothing" false
+    (List.mem "dictA" public);
+  (* an admin command does set it *)
+  Tuna_server.Repl_cmd.execute p ~caller:me.S.i_id
+    ~command:"dict-visibility dictA public" ~inputs:[] ~grant_ids:[] ~fuel:1000
+    ~size_cap:1000 ()
+  >>= (function
+        | Ok _ -> return ()
+        | Error (_, msg) -> Alcotest.failf "admin set refused: %s" msg);
+  S.dict_visibility_public p >>= fun public ->
+  Alcotest.(check bool) "admin command sets the flag" true (List.mem "dictA" public);
+  (* the actor is the caller and the path names the target *)
+  ops_with p ~op:"dict-visibility" ~path:"vis/dictA/public" >>= fun rows ->
+  (match rows with
+   | [ o ] ->
+       Alcotest.(check string) "setting actor is the caller" me.S.i_id o.S.o_actor
+   | _ -> Alcotest.fail "expected exactly one dict-visibility row");
+  ignore a;
+  return ()
+
+let test_vis_peer_push_changes_nothing () =
+  setup () >>= fun p ->
+  admin p >>= fun me ->
+  let auth = auth_of me in
+  peer p "fed-peer-vispush" >>= fun pe ->
+  let src = "vispushsrc/vis/dictA/" in
+  seed_path p ~actor:me.S.i_id ~path:(src ^ "public") ~ternary:"2202102010"
+  >>= fun _ ->
+  pull_ops p ~auth ~prefix:src ~after_seq:0 >>= fun ops ->
+  Api.fed_apply_core p ~auth:(auth_of pe)
+    (apply_body ~src ~dst:"ns/vispush/" ops)
+  >>= fun (code, j) ->
+  Alcotest.(check int) ("apply 200 (" ^ J.to_string j ^ ")") 200 code;
+  (* it landed under the peer namespace and set nothing *)
+  S.path_get p ~path:"ns/vispush/vis/dictA/public" >>= fun row ->
+  Alcotest.(check bool) "pushed vis row landed under ns/<peer>/" true
+    (row <> None);
+  S.dict_visibility_public p >>= fun public ->
+  Alcotest.(check bool) "pushed vis row changed nothing" false
+    (List.mem "dictA" public);
+  return ()
+
 let () =
   let lwt name f = Alcotest.test_case name `Quick f in
   Tuna_test_eio.run "fed"
@@ -449,4 +650,11 @@ let () =
            ; lwt "re-apply shadows, never merges" test_f2_apply_shadow
            ; lwt "rejects: chain/prefix/value/rehash/authz" test_f2_apply_rejects
            ; lwt "admin may write any namespace" test_f2_apply_admin_any_ns ] )
+       ; ( "dictionary-visibility"
+         , [ lwt "private by default, owner/admin/public" test_vis_private_by_default
+           ; lwt "ns/<peer>/dict/<id> rows" test_vis_peer_namespace_rows
+           ; lwt "paging over an all-hidden window" test_vis_paging_all_hidden
+           ; lwt "set only through the command" test_vis_setting_only_by_command
+           ; lwt "a peer push of vis/ changes nothing"
+               test_vis_peer_push_changes_nothing ] )
        ]
