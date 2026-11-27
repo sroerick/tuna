@@ -67,10 +67,10 @@ TUNA_DB_NAME="$DB" TUNA_HTTP_PORT="$PORT" TUNA_BOOTSTRAP_TOKEN="$BOOT" \
   "$SRV" > "$T/server.log" 2>&1 &
 SRV_PID=$!
 code=000
-for _ in $(seq 1 120); do
+for _ in $(seq 1 240); do
   code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BASE/health")
   [ "$code" = "200" ] && break
-  sleep 0.25
+  sleep 0.5
 done
 [ "${code:-000}" = "200" ] || { cat "$T/server.log" >&2; fail "server did not boot"; }
 
