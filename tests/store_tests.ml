@@ -808,7 +808,62 @@ let test_retention_policy () =
        Alcotest.(check int) "second sweep eligible" 0 r.S.rs_eligible;
        Alcotest.(check int) "second sweep collected" 0 r.S.rs_collected
    | _ -> Alcotest.fail "expected one swept identity (second run)");
-  return ()
+  (* 5. keep_failures=false: a failed run and an unverified run become
+        eligible, while another identity's old run stays untouched *)
+  S.insert_run p ~program_hash:leaf_hash ~caller:(Some me.S.i_id) ~fuel:10
+    ~size_cap:10 ()
+  >>= fun failed_run ->
+  S.insert_run p ~program_hash:leaf_hash ~caller:(Some me.S.i_id) ~fuel:10
+    ~size_cap:10 ()
+  >>= fun unverified_run ->
+  S.bootstrap_identity p ~is_admin:false ~name:"m10-retention-other"
+    ~token:"m10-retention-other-token" ()
+  >>= fun other ->
+  S.insert_run p ~program_hash:leaf_hash ~caller:(Some other.S.i_id) ~fuel:10
+    ~size_cap:10 ()
+  >>= fun other_run ->
+  Db.q_unit
+    ~params:[ S.p_str failed_run ]
+    p
+    "UPDATE runs SET status = 'error', created_at = now() - interval '3 \
+     days' WHERE id = $1::uuid"
+  >>= fun () ->
+  Db.q_unit
+    ~params:[ S.p_str unverified_run ]
+    p
+    "UPDATE runs SET created_at = now() - interval '3 days' \
+     WHERE id = $1::uuid"
+  >>= fun () ->
+  Db.q_unit
+    ~params:[ S.p_str other_run ]
+    p
+    "UPDATE runs SET status = 'normal', verify_status = 'verified', \
+     created_at = now() - interval '3 days' WHERE id = $1::uuid"
+  >>= fun () ->
+  S.put_retention_policy p ~identity:me.S.i_id ~keep_days:1
+    ~keep_failures:false ~enabled:true ~updated_by:me.S.i_id ()
+  >>= fun pol ->
+  Alcotest.(check string) "citation drops the keep-failures clause"
+    "retention:m10-retention:keep-1d"
+    (Printf.sprintf "retention:%s:keep-%dd%s" pol.S.rp_name pol.S.rp_keep_days
+       (if pol.S.rp_keep_failures then ":keep-failures" else ""));
+  S.sweep_retention p ~dry_run:false ()
+  >>= fun collected ->
+  (match List.find_opt (fun r -> r.S.rs_identity = me.S.i_id) collected with
+   | Some r ->
+       Alcotest.(check string) "citation in the swept row"
+         "retention:m10-retention:keep-1d" r.S.rs_policy;
+       Alcotest.(check int) "failed + unverified eligible" 2 r.S.rs_eligible;
+       Alcotest.(check int) "failed + unverified collected" 2 r.S.rs_collected
+   | None -> Alcotest.fail "expected a swept row for the policy identity");
+  S.fetch_run p other_run
+  >>= (function
+        | None -> Alcotest.fail "other identity's run vanished"
+        | Some r ->
+            Alcotest.(check (option string))
+              "another identity's run is untouched" (Some "verified")
+              r.S.r_verify_status;
+            return ())
 
 (* run-id resolution: full uuids pass through, hex prefixes resolve to
    the single matching run, anything else is None (callers answer 404,

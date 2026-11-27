@@ -7,10 +7,27 @@
    reads as VERIFIED.  PII redaction is an explicit chain break: the
    row's payload is nulled, the chain walk FAILS at that seq (visible
    break), the run re-verifies and reports ANSWER-UNKNOWN (failed) —
-   never silently-trusted.  OPEN: the automatic policy knob (per
-   caller/identity keep-N-days scheduling) — v0 GC is an explicit
-   admin-supplied-policy endpoint, which is why this stays partial
-   rather than implemented.|) *)
+   never silently-trusted.  2026-11-27 POLICY KNOB IMPLEMENTED:
+   migrations/0020-retention-policies.sql (identity uuid PK, keep_days
+   int > 0, keep_failures, enabled, updated_by, updated_at);
+   Store.fetch/list/put_retention_policy and Store.sweep_retention
+   (eligible = caller, journal_gced_at IS NULL, created_at STRICTLY
+   older than keep_days, and — while keep_failures — status='normal'
+   AND verify_status='verified'; each collection rides gc_journal's
+   single transaction, so the tombstone cites
+   retention:<name>:keep-<N>d[:keep-failures] and verify_status becomes
+   'gced', never 'verified'); the admin/own routes in
+   server/lib/api.ml (a non-admin gets 403 BEFORE the :identity is
+   resolved, so no existence leak; a missing dry_run is true);
+   tests/store_tests.ml test_retention_policy (no row = nothing, dry
+   run leaves the journal and the status alone, a second sweep is
+   empty, another identity's old run untouched, keep_failures=false
+   makes the failed and unverified runs eligible); and
+   scripts/verify-20-retention-policy.sh on live PG (the 403s, the
+   dry-run default, the cited tombstones, the kept failure, the
+   second-sweep no-op, the disabled policy, keep_failures=false).
+   There is still NO timer in the server: a sweep is an explicit admin
+   call, so a mistake is a refused or dry call.|) *)
 
 (project tuna-journal
    (* agent note (|M7 (prim-boundary loop): row-schema, recorded-
@@ -136,7 +153,7 @@
 
   (subsection retention-gc
    (doc "Retention, garbage collection, and PII")
-   (status in-progress)
+   (status implemented)
    (details
     (doc (|
          Three pressures priced up front:
