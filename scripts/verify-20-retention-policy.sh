@@ -199,12 +199,12 @@ S=$(sweep '{"dry_run":false}')
 # ---- 8. keep_failures=false makes the failed and unverified runs eligible -
 set_policy "$IA" '{"keep_days":1,"keep_failures":false,"enabled":true}' >/dev/null
 S=$(sweep '{"dry_run":false}')
-python3 -c '
+printf '%s' "$S" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 r = [x for x in d["swept"] if x["identity"] == sys.argv[1]][0]
 assert r["collected"] == 3, r          # A2 failed, A3 verified, A4 unverified
-assert r["policy"] == "retention:%s:keep-1d" % sys.argv[1], r' "$S" "$NA"
+assert r["policy"] == "retention:%s:keep-1d" % sys.argv[1], r' "$NA"
 [ "$(journal_rows "$A2")" = 0 ] || fail "A2 must be collected with keep_failures=false"
 [ "$(gced_policy "$A2")" = "retention:$NA:keep-1d" ] || fail "A2 citation"
 [ "$(journal_rows "$A4")" = 0 ] || fail "A4 must not be kept with keep_failures=false"
