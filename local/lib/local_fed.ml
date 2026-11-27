@@ -210,13 +210,28 @@ let render_divergence d =
 
 (* -- the 413 retry: drop the rows citing the oversize value ------------ *)
 
+(* the 413 body is JSON ({"error":"value <hash> exceeds the value cap"}),
+   so the hash is found as the one 64-char hex run in the message rather
+   than by splitting on spaces and expecting a bare "value <hex>" pair. *)
 let oversize_hash msg =
-  let rec go = function
-    | "value" :: h :: _ when String.length h = 64 -> Some h
-    | _ :: tl -> go tl
-    | [] -> None
+  let is_hex c =
+    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
   in
-  go (String.split_on_char ' ' msg)
+  let n = String.length msg in
+  let rec window i =
+    if i + 64 > n then None
+    else
+      let ok = ref true in
+      for k = i to i + 63 do
+        if not (is_hex msg.[k]) then ok := false
+      done;
+      let bounded =
+        (i = 0 || not (is_hex msg.[i - 1]))
+        && (i + 64 = n || not (is_hex msg.[i + 64]))
+      in
+      if !ok && bounded then Some (String.sub msg i 64) else window (i + 1)
+  in
+  window 0
 
 let run_id_of_path path =
   let pre = "runs/" in

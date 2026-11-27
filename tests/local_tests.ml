@@ -503,7 +503,11 @@ let test_l6_413_retry () =
     incr calls;
     last := sent;
     if !calls = 1 then
-      Ok (413, Printf.sprintf "value %s exceeds the value cap" rec_hash)
+      (* the server answers the 413 as j_err: a JSON error body *)
+      Ok
+        ( 413
+        , Printf.sprintf "{\"error\":\"value %s exceeds the value cap\"}"
+            rec_hash )
     else Ok (200, "{}")
   in
   match LF.push_rows ~apply rows with
