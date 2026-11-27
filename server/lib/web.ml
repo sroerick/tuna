@@ -287,6 +287,7 @@ and route_method = RMeth of string | RAny
 
 let get path h = (RMeth "GET", path, h)
 let post path h = (RMeth "POST", path, h)
+let put path h = (RMeth "PUT", path, h)
 let any path h = (RAny, path, h)
 
 let route_matches meth m =

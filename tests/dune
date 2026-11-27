@@ -236,6 +236,25 @@
    (setenv TUNA_L6_PREBUILT 1
     (bash "%{workspace_root}/scripts/verify-19-l6-sync.sh")))))
 
+; journal/retention-gc policy knob: the declared acceptance as one alias -
+; the store suite (the policy predicate, the dry-run default, the cited
+; tombstones) on its own scratch database, then the live script, which
+; boots its own database and server.  Kept out of the default runtest
+; alias (it binds a port and needs PG), and runnable from dune so a
+; read-only review pass can run exactly the gate it judges.
+(rule
+ (alias retention-gate)
+ (deps
+  store_tests.exe ../scripts/test-store.sh
+  ../scripts/verify-20-retention-policy.sh (source_tree ../migrations)
+  %{exe:../server/bin/main.exe})
+ (action
+  (progn
+   (bash
+    "bash %{workspace_root}/scripts/test-store.sh %{exe:store_tests.exe} ../migrations tuna_test_store")
+   (setenv TUNA_RETENTION_PREBUILT 1
+    (bash "%{workspace_root}/scripts/verify-20-retention-policy.sh")))))
+
 (rule
  (alias runtest)
  (deps fed_tests.exe ../scripts/test-store.sh (source_tree ../migrations))

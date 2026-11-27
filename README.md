@@ -140,6 +140,10 @@ GET    /api/runs?caller=&program=  → list
 GET    /api/runs/:id               → row + journal (auto-verifies an unverified finished run)
 GET    /api/runs/verify?all=1      → replay-verification sweep over all runs
 POST   /api/runs/:id/gc            → retention GC: cited tombstone, verifier reports GONE never VERIFIED
+PUT    /api/admin/retention/:identity {"keep_days","keep_failures","enabled"} → policy row (admin; 403 to a non-admin)
+GET    /api/admin/retention        → every policy row (admin)
+GET    /api/retention              → the caller's own row, {"policy":null} when unset
+POST   /api/admin/retention/sweep  {"dry_run"} → per-identity eligible/collected + up to 10 run ids (admin; a missing dry_run is true)
 GET    /api/journals/:run_id       → full journal
 POST   /api/journals/:run_id/fork  {"edits":[{seq, result_ternary|error, ...}]} → counterfactual run (chain rebuilt, edited suffix re-executed)
 POST   /api/grants                 {"prim","args_attenuation"?,"path_prefix"?,"identity"?} → grant id ("*" = wildcard; a path-addressed prim requires a path_prefix INSIDE authority the caller already covers, "identity" is admin-only issuance for another identity, unknown prim 400)

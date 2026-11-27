@@ -6,8 +6,83 @@
 #   old runs through the existing tombstone path, citing the policy.  With
 #   keep_failures=true a failed run and an unverified old run are kept;
 #   another identity's old run is untouched; a second sweep collects nothing.
+#
+# Self-contained: makes its own scratch database from migrations and boots
+# its own server (127.0.0.1, an ephemeral port), so the declared
+# verification runs with no dev server assumed.
+#
+# Env: TUNA_DB_HOST/PORT/USER (as scripts/test-store.sh), TMPDIR.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+fail() { echo "FAIL verify-20: $*" >&2; exit 1; }
+
+T=$(mktemp -d "${TMPDIR:-/tmp}/tuna-retention.XXXXXX") || fail "mktemp"
+DB=tuna_retention_e2e_$$
+PORT=$(python3 - <<'PY'
+import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
+PY
+)
+BOOT=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+DB_HOST="${TUNA_DB_HOST:-/tmp}"
+DB_PORT="${TUNA_DB_PORT:-5434}"
+DB_USER="${TUNA_DB_USER:-tuna}"
+PSQL=psql
+command -v psql >/dev/null 2>&1 || PSQL="$HOME/pg/bin/psql"
+BASE="http://127.0.0.1:$PORT"
+psql_admin() { "$PSQL" -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d postgres "$@"; }
+psql_db() { "$PSQL" -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB" "$@"; }
+psql_q() { psql_db "$@"; }
+
+cleanup() {
+  [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null
+  psql_admin -q -c "DROP DATABASE IF EXISTS $DB" >/dev/null 2>&1
+  rm -rf "$T"
+}
+trap cleanup EXIT
+
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$HOME/pg/lib"
+psql_admin -tAc "SELECT 1" >/dev/null 2>&1 \
+  || fail "postgres is down ($DB_HOST:$DB_PORT)"
+psql_admin -q -c "DROP DATABASE IF EXISTS $DB" >/dev/null || fail "drop $DB"
+psql_admin -q -c "CREATE DATABASE $DB" >/dev/null || fail "create $DB"
+for sql in migrations/*.sql; do
+  psql_db -q -v ON_ERROR_STOP=1 -f "$sql" >/dev/null || fail "migration $sql"
+done
+
+# Standalone: build the server.  Under the dune alias the rule has already
+# built it as a dep, and this script's root is the build root.
+if [ -z "${TUNA_RETENTION_PREBUILT:-}" ]; then
+  dune build --root "$PWD" server/bin/main.exe 2>&1 | head -20
+  BIN=$PWD/_build/default
+else
+  BIN=$PWD
+fi
+SRV=$BIN/server/bin/main.exe
+[ -x "$SRV" ] || fail "server binary did not build"
+
+TUNA_DB_HOST="$DB_HOST" TUNA_DB_PORT="$DB_PORT" TUNA_DB_USER="$DB_USER" \
+TUNA_DB_NAME="$DB" TUNA_HTTP_PORT="$PORT" TUNA_BOOTSTRAP_TOKEN="$BOOT" \
+  "$SRV" > "$T/server.log" 2>&1 &
+SRV_PID=$!
+code=000
+for _ in $(seq 1 240); do
+  code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BASE/health")
+  [ "$code" = "200" ] && break
+  sleep 0.5
+done
+[ "${code:-000}" = "200" ] || { cat "$T/server.log" >&2; fail "server did not boot"; }
+
+AUTH="Authorization: Bearer $BOOT"
+curl_code() { curl -s -m 300 -o /dev/null -w '%{http_code}' "$@"; }
+jget() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
+post_source() {
+  curl -sf -m 300 -X POST -H "$AUTH" --data-binary "{\"source\":$1}" \
+    $BASE/api/programs | jget "d['hash']" || fail "POST source program $1"
+}
+
 set -e
-. "$(dirname "$0")/verify-lib.sh"
 
 N="$RANDOM$RANDOM$(date +%s)"
 journal_rows() { psql_q -tAc "SELECT count(*) FROM journals WHERE run_id='$1'"; }
@@ -24,12 +99,12 @@ import json, sys
 d = json.load(sys.stdin)
 rows = [x for x in d.get("swept") or [] if x.get("identity") == sys.argv[1]]
 print(json.dumps(rows[0] if rows else {}))' "$2"; }
-row_has() { printf '%s' "$1" | python3 -c '
+row_has() { python3 -c '
 import json, sys
 d = json.loads(sys.stdin.read())
 assert d, "no swept row"
 assert d["collected"] == int(sys.argv[1]), d
-assert d["eligible"] == int(sys.argv[2]), d' "$2" "$3"; }
+assert d["eligible"] == int(sys.argv[2]), d' "$1" "$2"; }
 
 # ---- two fresh identities (A: the policy, B: the control) -----------------
 AJSON=$(mint_id "retention-a-$N"); TA=$(printf '%s' "$AJSON" | jget "d['token']")
@@ -124,12 +199,12 @@ S=$(sweep '{"dry_run":false}')
 # ---- 8. keep_failures=false makes the failed and unverified runs eligible -
 set_policy "$IA" '{"keep_days":1,"keep_failures":false,"enabled":true}' >/dev/null
 S=$(sweep '{"dry_run":false}')
-python3 -c '
+printf '%s' "$S" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 r = [x for x in d["swept"] if x["identity"] == sys.argv[1]][0]
 assert r["collected"] == 3, r          # A2 failed, A3 verified, A4 unverified
-assert r["policy"] == "retention:%s:keep-1d" % sys.argv[1], r' "$S" "$NA"
+assert r["policy"] == "retention:%s:keep-1d" % sys.argv[1], r' "$NA"
 [ "$(journal_rows "$A2")" = 0 ] || fail "A2 must be collected with keep_failures=false"
 [ "$(gced_policy "$A2")" = "retention:$NA:keep-1d" ] || fail "A2 citation"
 [ "$(journal_rows "$A4")" = 0 ] || fail "A4 must not be kept with keep_failures=false"

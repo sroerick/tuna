@@ -2763,6 +2763,112 @@ let gc_run pool auth req =
                               | None -> (j_err ~code:500 "gc lost the run row")
                               | Some r -> (j_ok ~code:200 (run_json r))))))
 
+(* -- retention policy knob (journal/retention-gc) --------------------
+
+   Retention is a PER-IDENTITY policy, and it is OFF until an admin
+   writes a row: no row or enabled=false collects nothing, and there is
+   no timer in this process - a sweep is an explicit admin call (a cron
+   entry may make it), so a mistake is a refused or dry call, never a
+   surprise delete.  The admin routes answer 403 to a non-admin BEFORE
+   the :identity is resolved, so they leak no existence.  Dry run is the
+   default: a missing dry_run measures, and only an explicit false
+   collects - through the existing single-transaction tombstone path. *)
+
+let retention_policy_json (pol : Store.retention_policy) : J.t =
+  `Assoc
+    [ ("identity", `String pol.Store.rp_identity)
+    ; ("name", `String pol.Store.rp_name)
+    ; ("keep_days", `Int pol.Store.rp_keep_days)
+    ; ("keep_failures", `Bool pol.Store.rp_keep_failures)
+    ; ("enabled", `Bool pol.Store.rp_enabled)
+    ; ("updated_at", `String pol.Store.rp_updated_at) ]
+
+(* PUT /api/admin/retention/:identity — write the policy row.  keep_days
+   must be > 0; a non-admin learns nothing about the identity. *)
+let put_retention_policy pool auth req =
+  if not auth.auth_is_admin then
+    (j_err ~code:403 "admin only: retention policy is an operator knob")
+  else
+    let id = Web.param req "identity" in
+    body_json req >>= function
+    | Error msg -> (j_err msg)
+    | Ok j -> (
+        match get_int_opt j "keep_days" with
+        | None -> (j_err "missing \"keep_days\"")
+        | Some keep_days ->
+            if keep_days <= 0 then (j_err "\"keep_days\" must be > 0")
+            else
+              let keep_failures =
+                Option.value (get_bool_opt j "keep_failures") ~default:true
+              in
+              let enabled =
+                Option.value (get_bool_opt j "enabled") ~default:false
+              in
+              Store.fetch_identity pool id
+              >>= (function
+                    | None -> (j_err ~code:404 "unknown identity")
+                    | Some i -> (
+                        Store.put_retention_policy pool ~identity:i.Store.i_id
+                          ~keep_days ~keep_failures ~enabled
+                          ~updated_by:auth.auth_id ()
+                        >>= fun pol ->
+                        (j_ok
+                           (`Assoc
+                             [ ("policy", retention_policy_json pol) ])))))
+
+(* GET /api/admin/retention — every policy row (the operator's roster) *)
+let get_retention_policies pool auth _req =
+  if not auth.auth_is_admin then
+    (j_err ~code:403 "admin only: retention policy is an operator knob")
+  else
+    Store.list_retention_policies pool ()
+    >>= fun pols ->
+    (j_ok
+       (`Assoc
+         [ ("policies", `List (List.map retention_policy_json pols))
+         ; ("count", `Int (List.length pols)) ]))
+
+(* GET /api/retention — the caller's OWN row, or {"policy": null}: read-
+   ing your own retention is not a privilege, writing it is *)
+let get_retention_policy pool auth _req =
+  Store.fetch_retention_policy pool ~identity:auth.auth_id
+  >>= fun pol ->
+  (j_ok
+     (`Assoc
+       [ ( "policy"
+         , match pol with
+           | None -> `Null
+           | Some p -> retention_policy_json p ) ]))
+
+let retention_sweep_json (r : Store.retention_sweep) : J.t =
+  `Assoc
+    [ ("identity", `String r.Store.rs_name)
+    ; ("policy", `String r.Store.rs_policy)
+    ; ("eligible", `Int r.Store.rs_eligible)
+    ; ("collected", `Int r.Store.rs_collected)
+    ; ("run_ids", `List (List.map (fun s -> `String s) r.Store.rs_run_ids)) ]
+
+(* POST /api/admin/retention/sweep — dry by default; only an explicit
+   dry_run=false collects, and each collection rides gc_journal's single
+   transaction so the tombstone cites the policy in force. *)
+let post_retention_sweep pool auth req =
+  if not auth.auth_is_admin then
+    (j_err ~code:403 "admin only: retention policy is an operator knob")
+  else
+    body_json req >>= function
+    | Error msg -> (j_err msg)
+    | Ok j ->
+        let dry_run = Option.value (get_bool_opt j "dry_run") ~default:true in
+        Store.sweep_retention pool ~dry_run () >>= fun rows ->
+        let collected =
+          List.fold_left (fun n r -> n + r.Store.rs_collected) 0 rows
+        in
+        (j_ok
+           (`Assoc
+             [ ("dry_run", `Bool dry_run)
+             ; ("collected", `Int collected)
+             ; ("swept", `List (List.map retention_sweep_json rows)) ]))
+
 (* -- /api/defs/usage (def-usage census) ------------------------------
 
    The vocabulary census: which dictionary defs do the town's programs
@@ -3227,7 +3333,14 @@ let api_routes pool =
         ; Web.post "/api/cron/heartbeat"
             (with_auth pool (post_cron_heartbeat pool))
         ; Web.get "/api/cron/heartbeats"
-            (with_auth pool (get_cron_heartbeats pool)) ]
+            (with_auth pool (get_cron_heartbeats pool))
+        ; Web.get "/api/admin/retention"
+            (with_auth pool (get_retention_policies pool))
+        ; Web.put "/api/admin/retention/:identity"
+            (with_auth pool (put_retention_policy pool))
+        ; Web.post "/api/admin/retention/sweep"
+            (with_auth pool (post_retention_sweep pool))
+        ; Web.get "/api/retention" (with_auth pool (get_retention_policy pool)) ]
 
 (* the public artifact directory (pp-slice T3): scripts/deploy/build-public.sh
    writes src.tgz here at boot/refresh; absent file is a plain 404 *)
