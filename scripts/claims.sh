@@ -221,7 +221,7 @@ cmd_mint() {
 
 cmd_verify() {
   local cit ph res st status fuel cap sem inputs h ternary body resp
-  local got_res got_st got_status
+  local got_res got_st got_status kind got_tern
   cit=$(citation_text "$1" || true)
   [ -n "$cit" ] || die "cannot read a citation from $1"
   ph=$(printf '%s\n' "$cit" | sed -n 's/^program=//p')
@@ -231,6 +231,7 @@ cmd_verify() {
   fuel=$(printf '%s\n' "$cit" | sed -n 's/^fuel=//p')
   cap=$(printf '%s\n' "$cit" | sed -n 's/^size_cap=//p')
   sem=$(printf '%s\n' "$cit" | sed -n 's/^semantics=//p')
+  kind=$(printf '%s\n' "$cit" | sed -n 's/^kind=//p')
   inputs=$(printf '%s\n' "$cit" | sed -n 's/^inputs=//p' | tr ',' '\n' | sed '/^$/d')
   { [ -n "$ph" ] && [ -n "$res" ] && [ -n "$st" ]; } || die "citation lacks program=, result= or steps="
   [ "$(getcode "/api/programs/$ph")" = 200 ] || die "cited program $ph is not published"
@@ -245,6 +246,20 @@ cmd_verify() {
   got_res=$(printf '%s' "$resp" | jstr result_hash)
   got_st=$(printf '%s' "$resp" | jint step_count)
   got_status=$(printf '%s' "$resp" | jstr status)
+  got_tern=$(printf '%s' "$resp" | jstr result_ternary)
+  # a gate receipt's verdict is the reproduced result tree (G1's verdict
+  # program answers pass 10, fail 110, unverified 1110); only a claim whose
+  # citation carries kind=gate gets the line, so every other claim's output
+  # stays as it was, even when its result happens to be one of those trees.
+  emit_verdict() {
+    [ "$kind" = gate ] || return 0
+    case "$got_tern" in
+      10)   echo "verdict=pass" ;;
+      110)  echo "verdict=fail" ;;
+      1110) echo "verdict=unverified" ;;
+    esac
+    return 0
+  }
   rr=$(printf '%s\n' "$cit" | sed -n 's/^run-record=//p')
   if [ -n "$rr" ]; then
     rec=$(fetch "/api/value/$rr?kind=bytes" || true)
@@ -255,6 +270,7 @@ cmd_verify() {
     echo "record  program=$rp result=$rres steps=$rst status=$rstat"
     if [ "$rp" != "$ph" ] || [ "$rres" != "$res" ] || [ "$rst" != "$st" ] || [ "$rstat" != "$status" ]; then
       echo "MISMATCH the projection disagrees with the run record it names"
+      emit_verdict
       return 1
     fi
   fi
@@ -262,9 +278,11 @@ cmd_verify() {
   echo "re-run  result=$got_res steps=$got_st status=$got_status"
   if [ "$got_res" = "$res" ] && [ "$got_st" = "$st" ] && [ "$got_status" = "$status" ]; then
     echo "VERIFIED result hash, step count and status agree"
+    emit_verdict
     return 0
   fi
   echo "MISMATCH the cited computation does not reproduce"
+  emit_verdict
   return 1
 }
 
