@@ -983,4 +983,12 @@ let () =
            ; lwt "set only through the command" test_vis_setting_only_by_command
            ; lwt "a peer push of vis/ changes nothing"
                test_vis_peer_push_changes_nothing ] )
+       ; ( "defs-as-ops"
+         , [ lwt "a def is one put at its dict path" test_l5_defs_as_ops
+           ; lwt "backfill keeps the effective dictionary"
+               test_l5_backfill_unchanged
+           ; lwt "def/undef rounds append ops, never deletes"
+               test_l5_def_round_ops
+           ; lwt "a def round is exactly one row" test_l5_def_is_one_op
+           ; lwt "backfill is idempotent" test_l5_backfill_keeps_dictionary ] )
        ]
