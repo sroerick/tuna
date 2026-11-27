@@ -134,6 +134,10 @@
   )
   (subsection l5-defs-as-ops
    (status planned)
+   (execution
+    (scope l5)
+    (kind code)
+    (depends "spec.tuna.borg.local#local/l6-local-peer"))
    (details
     (doc (|
       Definitions stop being a mutable table and become ops in the M10
@@ -178,9 +182,16 @@
       a def round appends exactly one tree_ops row at its dict path;
       another identity's ops pull omits a private dictionary's rows and
       still verifies, and includes them once that identity sets its
-      dictionary public. |))))
+      dictionary public. |))
+   )
+   (verify
+    (test "L5: after migration every identity's effective dictionary is unchanged; the dictionary at any past op is a fold of the log; a def round appends exactly one tree_ops row at its dict path; another identity's ops pull omits a private dictionary's rows and still verifies, and includes them once that identity sets its dictionary public"))
+  )
   (subsection l6-local-peer
    (status planned)
+   (execution
+    (scope l6)
+    (kind code))
    (details
     (doc (|
       A local instance syncs as a federation peer over the existing
@@ -276,7 +287,11 @@
       run's deriv record fetched back from the server verifies with
       deriv-check, and a different def of the same name made on the
       server meanwhile is reported with both hashes, neither
-      overwritten. |))))
+      overwritten. |))
+   )
+   (verify
+    (test "L6: an offline def and run pushed via fed apply land under ns/<laptop>/ at the same hashes, the deriv record fetched back verifies with deriv-check, and a concurrent server def of the same name is reported with both hashes, neither overwritten"))
+  )
   (subsection failure-definitions
    (status planned)
    (details
