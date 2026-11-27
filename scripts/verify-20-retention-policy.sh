@@ -68,8 +68,7 @@ TUNA_DB_NAME="$DB" TUNA_HTTP_PORT="$PORT" TUNA_BOOTSTRAP_TOKEN="$BOOT" \
 SRV_PID=$!
 code=000
 for _ in $(seq 1 120); do
-  code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' \
-    -H "Authorization: Bearer $BOOT" "$BASE/api/whoami")
+  code=$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$BASE/health")
   [ "$code" = "200" ] && break
   sleep 0.25
 done
