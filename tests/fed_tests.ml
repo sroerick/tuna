@@ -637,6 +637,329 @@ let test_vis_peer_push_changes_nothing () =
     (List.mem "visPushA" public);
   return ()
 
+(* -- defs as ops (borg/local.borg l5-defs-as-ops) ---------------------
+
+   A def appends exactly ONE put row at dict/<identity>/<name>; the
+   derived repl_dict index is the fold of that log; the dictionary at a
+   past op is the fold up to that seq; undef is a put of the zero-length
+   bytes marker, never a delete.  Another identity's ops pull omits a
+   private dictionary's rows (and still verifies), and includes them once
+   that identity sets its dictionary public.  dict/ is reserved for the
+   REPL host: a tree grant whose prefix reaches it is refused. *)
+
+let test_l5_defs_as_ops () =
+  setup () >>= fun p ->
+  admin p >>= fun me ->
+  identity_of p ~is_admin:false ~name:"l5DefA" >>= fun a ->
+  identity_of p ~is_admin:false ~name:"l5DefB" >>= fun b ->
+  let run caller command =
+    Tuna_server.Repl_cmd.execute p ~caller ~command ~inputs:[] ~grant_ids:[]
+      ~fuel:10_000 ~size_cap:10_000 ()
+  in
+  let ok what = function
+    | Ok _ -> return ()
+    | Error (_, msg) -> Alcotest.failf "%s refused: %s" what msg
+  in
+  run a.S.i_id "def l5x %0" >>= ok "def";
+  let path = "dict/l5DefA/l5x" in
+  ops_with p ~op:"put" ~path >>= fun rows ->
+  Alcotest.(check int) "a def appends exactly one put row" 1 (List.length rows);
+  let def_seq =
+    match rows with
+    | [ o ] ->
+        Alcotest.(check bool) "the row carries a value hash" true
+          (o.S.o_value_hash <> None);
+        o.S.o_seq
+    | _ -> Alcotest.fail "expected exactly one def row"
+  in
+  (* the derived index is the fold of the log *)
+  S.dict_fold p ~identity:"l5DefA" () >>= fun foldA ->
+  S.dict_list p ~identity_id:a.S.i_id >>= fun listed ->
+  Alcotest.(check (list (pair string string)))
+    "repl_dict is the fold of the log" foldA
+    (List.map
+       (fun (d : S.dict_entry) ->
+         (d.S.d_name, Tuna.Hash.hex_of_string d.S.d_ternary))
+       listed);
+  Alcotest.(check bool) "the name is in the effective dictionary" true
+    (List.mem_assoc "l5x" foldA);
+  (* the dictionary at a past op: the name is absent before its def *)
+  S.dict_fold p ~to_seq:(Int64.pred def_seq) ~identity:"l5DefA" ()
+  >>= fun past ->
+  Alcotest.(check int) "a past fold does not hold the name" 0
+    (List.length past);
+  (* undef is a put of the marker, never a delete, and removes the name *)
+  run a.S.i_id "undef l5x" >>= ok "undef";
+  ops_with p ~op:"put" ~path >>= fun rows2 ->
+  Alcotest.(check int) "undef appends one more put, not a delete"
+    2 (List.length rows2);
+  Alcotest.(check bool) "the undef row cites the marker" true
+    (List.exists
+       (fun (o : S.tree_op) -> o.S.o_value_hash = Some S.undef_marker)
+       rows2);
+  S.dict_fold p ~identity:"l5DefA" () >>= fun after_undef ->
+  Alcotest.(check int) "undef removes the name from the fold" 0
+    (List.length after_undef);
+  (* another identity's pull omits a private dictionary, still verifying *)
+  pull_paths p ~auth:(auth_of b) ~prefix:"dict/l5DefA/" ~after_seq:0
+    ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "a private dictionary's rows are omitted" false
+    (contains path paths);
+  (* ... and carries them once the dictionary is public *)
+  run a.S.i_id "dict-visibility public" >>= ok "dict-visibility";
+  S.dict_visibility_set p ~actor:a.S.i_id ~target:"l5DefA" ~public:true
+  >>= fun _ ->
+  pull_paths p ~auth:(auth_of b) ~prefix:"dict/l5DefA/" ~after_seq:0
+    ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "a public dictionary's rows are served" true
+    (contains path paths);
+  (* WRITE AUTHORITY: a tree grant whose prefix reaches dict/ is refused *)
+  let mint prim prefix =
+    let j =
+      `Assoc
+        (("prim", `String prim)
+        :: (match prefix with
+            | None -> []
+            | Some s -> [ ("path_prefix", `String s) ]))
+    in
+    Api.grant_mint_core p (auth_of a) j
+  in
+  mint "tree/put" None >>= fun (code, _) ->
+  Alcotest.(check int) "an unscoped tree grant is refused" 400 code;
+  mint "tree/put" (Some "dict/l5DefA/") >>= fun (code, _) ->
+  Alcotest.(check int) "a dict/ prefix is refused" 400 code;
+  mint "tree/put" (Some "d") >>= fun (code, _) ->
+  Alcotest.(check int) "a partial prefix reaching dict/ is refused" 400 code;
+  ignore me;
+  return ()
+
+(* -- definitions as ops (borg/local.borg l5-defs-as-ops) ----------------
+
+   A def is ONE put row at dict/<identity>/<name> in tree_ops; repl_dict
+   is the derived index of that log, so the effective dictionary is
+   unchanged after the migration, the dictionary at any past op is a fold
+   up to that seq, and undef is a put of the zero-length-bytes marker,
+   never a delete (apply replicates only rows carrying a value hash). *)
+
+let test_l5_backfill_unchanged () =
+  setup () >>= fun p ->
+  S.bootstrap_identity p ~is_admin:false ~name:"l5bk" ~token:"l5bk-token" ()
+  >>= fun me ->
+  (* a pre-L5 dictionary row the op log does not carry yet *)
+  S.dict_set p ~identity_id:me.S.i_id ~name:"bkConst" ~ternary:"2202102010"
+  >>= fun () ->
+  S.dict_list p ~identity_id:me.S.i_id >>= fun before ->
+  Alcotest.(check (list (pair string string))) "pre-backfill dictionary"
+    [ ("bkConst", "2202102010") ]
+    (List.map (fun d -> (d.S.d_name, d.S.d_ternary)) before);
+  S.dict_backfill p >>= fun () ->
+  (* after migration every identity's effective dictionary is unchanged *)
+  S.dict_list p ~identity_id:me.S.i_id >>= fun after ->
+  Alcotest.(check (list (pair string string)))
+    "post-backfill dictionary is unchanged"
+    (List.map (fun d -> (d.S.d_name, d.S.d_ternary)) before)
+    (List.map (fun d -> (d.S.d_name, d.S.d_ternary)) after);
+  (* history starts at the switch-over: one put op at the dict path *)
+  ops_with p ~op:"put" ~path:"dict/l5bk/bkConst" >>= fun rows ->
+  (match rows with
+   | [ o ] ->
+       Alcotest.(check (option string)) "backfill row cites the value hash"
+         (Some (Tuna.Hash.hex_of_string "2202102010")) o.S.o_value_hash
+   | _ -> Alcotest.fail "expected exactly one backfill put at the dict path");
+  (* the dictionary at any past op is a fold of the log *)
+  S.dict_fold p ~identity:"l5bk" () >>= fun fold ->
+  Alcotest.(check (list (pair string string))) "fold holds the entry"
+    [ ("bkConst", Tuna.Hash.hex_of_string "2202102010") ] fold;
+  (* idempotent: a second backfill appends nothing *)
+  S.dict_backfill p >>= fun () ->
+  ops_with p ~op:"put" ~path:"dict/l5bk/bkConst" >>= fun rows2 ->
+  Alcotest.(check int) "backfill is idempotent" 1 (List.length rows2);
+  return ()
+
+let test_l5_def_round_ops () =
+  setup () >>= fun p ->
+  S.bootstrap_identity p ~is_admin:false ~name:"l5def" ~token:"l5def-token" ()
+  >>= fun me ->
+  let run command =
+    Tuna_server.Repl_cmd.execute p ~caller:me.S.i_id ~command ~inputs:[]
+      ~grant_ids:[] ~fuel:1000 ~size_cap:1000 ()
+    >>= function
+    | Ok _ -> return ()
+    | Error (_, msg) -> Alcotest.failf "round refused: %s" msg
+  in
+  run "def bk %22102000" >>= fun () ->
+  ops_with p ~op:"put" ~path:"dict/l5def/bk" >>= fun rows ->
+  Alcotest.(check int) "a def round appends exactly one put row" 1
+    (List.length rows);
+  let first = List.hd rows in
+  Alcotest.(check (option string)) "the row cites the defined tree"
+    (Some (Tuna.Hash.hex_of_string "22102000")) first.S.o_value_hash;
+  (* the dictionary at that past op is the fold up to its seq *)
+  S.dict_fold p ~to_seq:first.S.o_seq ~identity:"l5def" () >>= fun past ->
+  Alcotest.(check (list (pair string string))) "past dictionary is a fold"
+    [ ("bk", Tuna.Hash.hex_of_string "22102000") ] past;
+  (* a redef appends one more row; the fold follows the log *)
+  run "def bk %0" >>= fun () ->
+  ops_with p ~op:"put" ~path:"dict/l5def/bk" >>= fun rows2 ->
+  Alcotest.(check int) "a redef appends one more row" 2 (List.length rows2);
+  S.dict_fold p ~identity:"l5def" () >>= fun now ->
+  S.dict_get p ~identity_id:me.S.i_id ~name:"bk" >>= fun derived ->
+  (match derived with
+   | Some d ->
+       Alcotest.(check (pair string string))
+         "the dictionary is the log's fold"
+         ("bk", Tuna.Hash.hex_of_string d.S.d_ternary) (List.hd now)
+   | None -> Alcotest.fail "derived row missing after a def");
+  (* undef is a put of the marker: no delete row ever lands on dict/ *)
+  run "undef bk" >>= fun () ->
+  ops_with p ~op:"put" ~path:"dict/l5def/bk" >>= fun rows3 ->
+  Alcotest.(check int) "undef appends a put, not a delete" 3
+    (List.length rows3);
+  (match List.rev rows3 with
+   | last :: _ ->
+       Alcotest.(check (option string)) "undef is a put of the marker"
+         (Some S.undef_marker) last.S.o_value_hash
+   | [] -> Alcotest.fail "expected dict rows");
+  S.ops_fold p ~prefix:"dict/l5def/" () >>= fun dict_ops ->
+  Alcotest.(check bool) "dict/ carries no delete op" false
+    (List.exists (fun (o : S.tree_op) -> o.S.o_op = "delete") dict_ops);
+  S.dict_fold p ~identity:"l5def" () >>= fun after_undef ->
+  Alcotest.(check (list (pair string string)))
+    "undef removes the name from the fold" [] after_undef;
+  S.dict_list p ~identity_id:me.S.i_id >>= fun rows4 ->
+  Alcotest.(check int) "the derived index drops the name" 0 (List.length rows4);
+  return ()
+
+(* -- L5: definitions as ops (borg/local.borg l5-defs-as-ops) ----------
+
+   A def is a put of the defined tree's value hash at the path
+   dict/<identity>/<name> in the tree_ops chain; repl_dict is the derived
+   index of that log.  So a def round appends exactly ONE row at its dict
+   path, the dictionary at any past op is a fold, and the migration
+   backfill carries a pre-existing repl_dict row into the log without
+   changing the effective dictionary.  The dictionary is still private by
+   default on the pull surface. *)
+
+(* a per-run suffix: the scratch db is never recreated between runs *)
+let fresh_seq = ref 0
+
+let fresh_name prefix =
+  incr fresh_seq;
+  Printf.sprintf "%s%d" prefix !fresh_seq
+
+let test_l5_def_is_one_op () =
+  setup () >>= fun p ->
+  admin p >>= fun me ->
+  let who = fresh_name "l5Def" in
+  identity_of p ~is_admin:false ~name:who >>= fun a ->
+  let path = "dict/" ^ who ^ "/l5id" in
+  let count () =
+    ops_with p ~op:"put" ~path >>= fun ops -> return (List.length ops)
+  in
+  let def src =
+    Tuna_server.Repl_cmd.execute p ~caller:a.S.i_id ~command:("def " ^ src)
+      ~inputs:[] ~grant_ids:[] ~fuel:1000 ~size_cap:1000 ()
+    >>= (function
+          | Ok o ->
+              Alcotest.(check string) "a def round answers kind def" "def"
+                o.Tuna_server.Repl_cmd.o_kind;
+              return ()
+          | Error (_, msg) -> Alcotest.failf "def round refused: %s" msg)
+  in
+  count () >>= fun before ->
+  def "l5id (lambda (x) x)" >>= fun () ->
+  count () >>= fun after ->
+  Alcotest.(check int) "a def round appends exactly one tree_ops row"
+    (before + 1) after;
+  ops_with p ~op:"put" ~path >>= fun rows ->
+  let last = List.nth rows (List.length rows - 1) in
+  (* the row names the def value hash; the version is local and climbs *)
+  Alcotest.(check string) "the row's actor is the def round's caller" a.S.i_id
+    last.S.o_actor;
+  Alcotest.(check bool) "the row carries a value hash" true
+    (Option.is_some last.S.o_value_hash);
+  Alcotest.(check (option int64)) "the version climbs by one per op"
+    (Some (Int64.of_int (before + 1))) last.S.o_version;
+  Alcotest.(check (option int64)) "the row cites its predecessor version"
+    (if before = 0 then None else Some (Int64.of_int before))
+    last.S.o_prev_version;
+  (* the derived index is the fold of the log *)
+  S.dict_list p ~identity_id:a.S.i_id >>= fun rows_d ->
+  S.dict_fold p ~identity:who () >>= fun fold ->
+  (match (rows_d, List.assoc_opt "l5id" fold) with
+   | [ d ], Some h ->
+       Alcotest.(check string) "the derived index keeps the name" "l5id"
+         d.S.d_name;
+       Alcotest.(check (option string)) "index and fold hold the same hash"
+         last.S.o_value_hash (Some h)
+   | _ -> Alcotest.fail "expected one derived row agreeing with the fold");
+  (* the dictionary at any past op is a fold: after a re-def, the fold up
+     to the first row still holds the FIRST binding *)
+  let first_seq = last.S.o_seq in
+  def "l5id (lambda (y) (lambda (x) x))" >>= fun () ->
+  S.dict_fold p ~to_seq:first_seq ~identity:who () >>= fun past ->
+  S.dict_fold p ~identity:who () >>= fun now ->
+  (match (List.assoc_opt "l5id" past, List.assoc_opt "l5id" now) with
+   | Some old_h, Some new_h ->
+       Alcotest.(check bool) "the past fold is the earlier binding" true
+         (old_h <> new_h);
+       Alcotest.(check (option string)) "the past fold is the first row's hash"
+         last.S.o_value_hash (Some old_h)
+   | _ -> Alcotest.fail "both folds must bind the name");
+  (* another identity's pull omits the private dictionary's rows and the
+     window still verifies; once public, the rows arrive *)
+  identity_of p ~is_admin:false ~name:(fresh_name "l5Peer") >>= fun b ->
+  pull_paths p ~auth:(auth_of b) ~prefix:("dict/" ^ who ^ "/") ~after_seq:0
+    ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "a private dictionary's rows are omitted" false
+    (contains path paths);
+  S.dict_visibility_set p ~actor:me.S.i_id ~target:who ~public:true
+  >>= fun _ ->
+  pull_paths p ~auth:(auth_of b) ~prefix:("dict/" ^ who ^ "/") ~after_seq:0
+    ~limit:1000
+  >>= fun (paths, _, _) ->
+  Alcotest.(check bool) "a public dictionary's rows are served" true
+    (contains path paths);
+  return ()
+
+let test_l5_backfill_keeps_dictionary () =
+  setup () >>= fun p ->
+  let who = fresh_name "l5Back" in
+  identity_of p ~is_admin:false ~name:who >>= fun bf ->
+  let path = "dict/" ^ who ^ "/l5old" in
+  let count () =
+    ops_with p ~op:"put" ~path >>= fun ops -> return (List.length ops)
+  in
+  (* a derived row the log does not carry yet (the pre-migration shape) *)
+  S.dict_set p ~identity_id:bf.S.i_id ~name:"l5old" ~ternary:"22102000"
+  >>= fun () ->
+  count () >>= fun before ->
+  Alcotest.(check int) "no op row before the migration" 0 before;
+  S.dict_backfill p >>= fun () ->
+  count () >>= fun after ->
+  Alcotest.(check int) "the backfill appends one row" 1 after;
+  (* the effective dictionary is unchanged and is now a fold of the log *)
+  S.dict_list p ~identity_id:bf.S.i_id >>= fun rows ->
+  (match rows with
+   | [ d ] ->
+       Alcotest.(check string) "the effective dictionary is unchanged"
+         "22102000" d.S.d_ternary
+   | _ -> Alcotest.fail "the backfill must not touch the derived row");
+  S.dict_fold p ~identity:who () >>= fun fold ->
+  (match List.assoc_opt "l5old" fold with
+   | Some h ->
+       Alcotest.(check string) "the fold binds the backfilled value hash"
+         (Tuna.Hash.hex_of_string "22102000") h
+   | None -> Alcotest.fail "the fold must hold the backfilled name");
+  (* idempotent: a second run appends nothing *)
+  S.dict_backfill p >>= fun () ->
+  count () >>= fun again ->
+  Alcotest.(check int) "the backfill is idempotent" 1 again;
+  return ()
+
 let () =
   let lwt name f = Alcotest.test_case name `Quick f in
   Tuna_test_eio.run "fed"

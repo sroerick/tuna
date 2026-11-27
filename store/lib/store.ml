@@ -2377,6 +2377,115 @@ let ops_window p ~from_seq ~limit =
          { w_op = tree_op_of_row r; w_prev_hash = text r 9 "window.prev_hash" })
        rows)
 
+(* -- definitions as ops (borg/local.borg l5-defs-as-ops) ---------------
+
+   A def is a put of the defined tree's value hash at the path
+   dict/<identity>/<name> in the tree_ops chain; undef is a put of the
+   undef marker, the zero-length BYTES value (it is not a tree, so the
+   leaf - false, nil and zero at once - never collides with it, and
+   [def x 0] stays a def).  The substrate delete op is never used here:
+   apply replicates only rows that carry a value hash, so a delete would
+   not reach a peer.
+
+   repl_dict stays the DERIVED index the compiler reads - the fold of
+   this log, exactly as tree_paths derives from the same chain - so a
+   round's effective dictionary is unchanged and the dictionary at any
+   past op is [dict_fold] up to that seq.  dict/ is reserved for the
+   REPL host (the mint surface refuses a tree grant whose prefix reaches
+   it, Api.grant_mint_core).  tree_ops versions stay local and carry no
+   meaning across instances; the shared fact is the value hash. *)
+
+let undef_marker =
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+(* the op path of one definition: dict/<identity>/<name> *)
+let dict_path_of ~identity ~name = "dict/" ^ identity ^ "/" ^ name
+
+(* append ONE put row at the dict path and refresh the derived index
+   (the ternary, or none for the undef marker).  The version is local:
+   1 the first time the path is seen, +1 for every later op on it. *)
+let dict_op_put p ~actor ~identity_id ~identity ~name ~value_hash ~ternary =
+  let path = dict_path_of ~identity ~name in
+  ops_fold p ~prefix:path ()
+  >>= fun ops ->
+  let seen =
+    List.length (List.filter (fun (o : tree_op) -> o.o_path = path) ops)
+  in
+  op_append p ~op:"put" ~path ~value_hash:(Some value_hash)
+    ~prev_version:(if seen = 0 then None else Some (Int64.of_int seen))
+    ~version:(Some (Int64.of_int (seen + 1))) ~actor
+  >>= fun _ ->
+  match ternary with
+  | Some t -> dict_set p ~identity_id ~name ~ternary:t
+  | None -> dict_del p ~identity_id ~name
+
+(* UNDEF: a put of the marker, never a delete.  The marker lives in
+   byte_values so a window carrying it can ship it inline like any other
+   value. *)
+let dict_op_undef p ~actor ~identity_id ~identity ~name =
+  byte_value_put p ~hash:undef_marker ~bytes:""
+  >>= fun () ->
+  dict_op_put p ~actor ~identity_id ~identity ~name ~value_hash:undef_marker
+    ~ternary:None
+
+(* the dictionary at any past op: a fold of the log's dict rows up to
+   [to_seq], the undef marker removing the name.  Names, not paths: a
+   row whose path leaves the prefix names no dictionary entry. *)
+let dict_fold p ?(to_seq = Int64.max_int) ~identity () =
+  let pre = "dict/" ^ identity ^ "/" in
+  let n = String.length pre in
+  ops_fold p ~prefix:pre ~to_seq ()
+  >>= fun ops ->
+  let tbl = Hashtbl.create 8 in
+  List.iter
+    (fun (o : tree_op) ->
+      if String.length o.o_path > n && String.sub o.o_path 0 n = pre then
+        match o.o_value_hash with
+        | None -> ()
+        | Some h ->
+            let name = String.sub o.o_path n (String.length o.o_path - n) in
+            Hashtbl.replace tbl name h)
+    ops;
+  Direct.return
+    (List.sort compare
+       (Hashtbl.fold
+          (fun name h acc -> if h = undef_marker then acc else (name, h) :: acc)
+          tbl []))
+
+(* migration backfill (L5): a repl_dict row the log does not carry yet
+   becomes a put op at its dict path, so history starts at the switch
+   over.  Idempotent: a name the fold already holds is left alone, and
+   the derived row is never rewritten. *)
+let dict_backfill p =
+  Db.q p
+    "SELECT identity_id::text, name, ternary FROM repl_dict \
+     ORDER BY identity_id, name"
+  >>= fun rows ->
+  let rec go = function
+    | [] -> Direct.return ()
+    | r :: rest -> (
+        let identity_id = text r 0 "repl_dict.identity_id" in
+        let name = text r 1 "repl_dict.name" in
+        let ternary = text r 2 "repl_dict.ternary" in
+        fetch_identity p identity_id
+        >>= function
+        | None -> go rest
+        | Some me -> (
+            dict_fold p ~identity:me.i_name ()
+            >>= fun held ->
+            if List.mem_assoc name held then go rest
+            else
+              let hash = Tuna.Hash.hex_of_string ternary in
+              value_put p ~hash ~ternary
+              >>= fun () ->
+              op_append p ~op:"put"
+                ~path:(dict_path_of ~identity:me.i_name ~name)
+                ~value_hash:(Some hash) ~prev_version:None ~version:(Some 1L)
+                ~actor:identity_id
+              >>= fun _ -> go rest))
+  in
+  go rows
+
 (* -- dictionary visibility (borg/federation.borg dictionary-visibility) --
 
    LO2's deliberate narrowing: a window row whose path names a dictionary

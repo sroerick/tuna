@@ -192,20 +192,32 @@ let do_def pool ~caller ~dictionary
       err_ ("compile error: " ^ Tuna_compiler.Ir.show_error (p, msg))
   | exception B.Compile_failed msg -> err_ ("compile failed: " ^ msg)
   | (artifact, resolved, lock) -> (
-      S.dict_set pool ~identity_id:caller ~name ~ternary:artifact.B.ternary
-      >>= fun () ->
-      journaled_round pool ~caller ~artifact ~source:(Some src) ~input_trees:[]
-        ~grant_ids:[] ~fuel:1_000_000 ~size_cap:1_000_000 ~resolved ~lock ()
-      >>= (function
-            | Error (code, msg) -> return (Error (code, msg))
-            | Ok (row, _js, phash) ->
-                return
-                  (Ok
-                     ({ (run_outcome "def" row phash) with
+      (* L5: a def is a put of the defined tree's value hash at the path
+         dict/<identity>/<name> in the tree_ops chain; the repl_dict row
+         is the derived index of that log, never storage truth. *)
+      match S.fetch_identity pool caller with
+      | None -> err_ "def: unknown caller identity"
+      | Some me -> (
+          (* the value bytes first (content-addressed, dedup by hash),
+             then the op row: the log's row cites what the store holds *)
+          S.value_put pool ~hash:artifact.B.hash_hex
+            ~ternary:artifact.B.ternary;
+          S.dict_op_put pool ~actor:caller ~identity_id:caller
+            ~identity:me.S.i_name ~name ~value_hash:artifact.B.hash_hex
+            ~ternary:(Some artifact.B.ternary);
+          journaled_round pool ~caller ~artifact ~source:(Some src)
+            ~input_trees:[] ~grant_ids:[] ~fuel:1_000_000 ~size_cap:1_000_000
+            ~resolved ~lock ()
+          >>= (function
+                | Error (code, msg) -> return (Error (code, msg))
+                | Ok (row, _js, phash) ->
+                    return
+                      (Ok
+                         ({ (run_outcome "def" row phash) with
                         o_ternary = artifact.B.ternary
                       ; o_hash = artifact.B.hash_hex
                       ; o_note = Printf.sprintf "defined %s" name
-                      ; o_lock = lock }))))
+                      ; o_lock = lock })))))
 
 (* -- structural commands ---------------------------------------------- *)
 
@@ -374,9 +386,17 @@ let do_dict pool ~caller =
             (if rows = [] then "dictionary is empty" else "dictionary entries")
           ()))
 
+(* L5: undef is a put of the undef marker (the zero-length BYTES value),
+   never a delete - apply replicates only rows that carry a value hash, so
+   a delete would not reach a peer. *)
 let do_undef pool ~caller name =
-  S.dict_del pool ~identity_id:caller ~name >>= fun () ->
-  return (Ok (outcome ~kind:"undef" ~note:("undefined " ^ name) ()))
+  S.fetch_identity pool caller
+  >>= (function
+        | None -> err_ "undef: unknown caller identity"
+        | Some me ->
+            (S.dict_op_undef pool ~actor:caller ~identity_id:caller
+               ~identity:me.S.i_name ~name;
+             return (Ok (outcome ~kind:"undef" ~note:("undefined " ^ name) ()))))
 
 (* dict-visibility [<identity>] public|private (borg/federation.borg
    dictionary-visibility): the setting is per identity and private when

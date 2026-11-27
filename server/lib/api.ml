@@ -1299,7 +1299,19 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
           match J.from_string attenuation with
           | exception Yojson.Json_error _ -> err "args_attenuation must be JSON"
           | _ ->
-              if
+              (* WRITE AUTHORITY (borg/local.borg l5-defs-as-ops): dict/ is
+                 reserved for the REPL host.  A tree grant whose path prefix
+                 covers it - the unscoped grant, the empty prefix and partial
+                 prefixes such as "d" included - is refused, so a prim run can
+                 never rewrite a dictionary; only def/undef rounds (and, under
+                 ns/<peer>/, fed apply) write there. *)
+              if Prims.path_addressed prim && Tree_prims.reaches_dict path_prefix
+              then
+                err
+                  (Printf.sprintf
+                     "%s addresses tree paths: dict/ is reserved for the REPL \
+                      host, so no grant may cover it" prim)
+              else if
                 (not auth.auth_is_admin)
                 && Prims.path_addressed prim
                 && path_prefix = None
@@ -3276,6 +3288,12 @@ let serve ~env ~sw ~port ~bootstrap_token =
        | None -> ())
    | _ -> ());
   boot_fed_peers pool;
+  (* defs-as-ops migration (borg/local.borg l5-defs-as-ops): every
+     repl_dict row the op log does not carry yet becomes a put op at its
+     dict path, so history starts at the switch-over and the effective
+     dictionary is unchanged.  Idempotent: a name the fold already holds
+     is left alone. *)
+  Store.dict_backfill pool;
   (* sabra stdlib v1 (borg/stdlib.borg): seed the sabralib dictionary
      by replaying every def record through the ordinary def round.
      Additive, skip-if-exists; each entry lands journaled +

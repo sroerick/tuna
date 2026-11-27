@@ -90,6 +90,19 @@ let grant_prefix what = function
       | Some e -> Error e
       | None -> Ok (Some s))
 
+(* dict/ is reserved for the REPL host (borg/local.borg l5-defs-as-ops):
+   grant minting refuses a tree grant whose prefix reaches it - the
+   unscoped (None) grant, the empty prefix and partial prefixes such as
+   "d" included - so a prim run can never rewrite a dictionary.  Only
+   def/undef rounds write there. *)
+let reaches_dict = function
+  | None -> true
+  | Some pfx ->
+      let d = "dict/" in
+      let n = String.length d and len = String.length pfx in
+      if len <= n then String.equal (String.sub d 0 len) pfx
+      else String.equal (String.sub pfx 0 n) d
+
 (* best-effort path candidate from a call's args (first element as a
    string tree): what the denial op row records when the boundary
    answers an error.  Undecodable args give "". *)
