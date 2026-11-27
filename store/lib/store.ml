@@ -1195,16 +1195,16 @@ let put_retention_policy p ~identity ~keep_days ~keep_failures ~enabled
 
 (* the sweep predicate, in the book's words: caller is that identity,
    journal_gced_at IS NULL, created_at STRICTLY older than keep_days,
-   status = 'normal', and - while failures are kept - verify_status
+   and - while failures are kept - status = 'normal' AND verify_status
    'verified'.  A failure is status <> 'normal' or verify_status
    'failed'; an unverified run is kept while failures are kept because
-   it can still become verified.  One identity's policy never touches
-   another identity's runs. *)
+   it can still become verified.  With keep_failures = false nothing is
+   spared, so the failed run becomes eligible too.  One identity's
+   policy never touches another identity's runs. *)
 let retention_where =
   "caller = $1::uuid AND journal_gced_at IS NULL \
    AND created_at < now() - ($2::int * interval '1 day') \
-   AND status = 'normal' \
-   AND (NOT $3::bool OR verify_status = 'verified')"
+   AND (NOT $3::bool OR (status = 'normal' AND verify_status = 'verified'))"
 
 let retention_params pol =
   [ p_str pol.rp_identity; p_int pol.rp_keep_days; p_bool pol.rp_keep_failures ]

@@ -731,13 +731,13 @@ let test_retention_policy () =
     ~size_cap:10 ()
   >>= fun fresh_run ->
   Db.q_unit
-    ~params:[ p_str old_run ]
+    ~params:[ S.p_str old_run ]
     p
     "UPDATE runs SET status = 'normal', verify_status = 'verified', \
      created_at = now() - interval '3 days' WHERE id = $1::uuid"
   >>= fun () ->
   Db.q_unit
-    ~params:[ p_str fresh_run ]
+    ~params:[ S.p_str fresh_run ]
     p
     "UPDATE runs SET status = 'normal', verify_status = 'verified' \
      WHERE id = $1::uuid"
