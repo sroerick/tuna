@@ -2,6 +2,6 @@
 ; REPL rounds (L2) and the local run host (L3).  No database, no server.
 (library
  (name tuna_local)
- (modules local_store local_repl local_run)
+ (modules local_store local_repl local_run local_fed)
  (libraries tuna tuna_interp tuna_compiler tuna_repl tuna_stdlib tuna_prims tuna_deriv
-   yojson unix))
+   yojson base64 unix))

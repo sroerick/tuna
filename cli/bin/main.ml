@@ -393,8 +393,119 @@ let repl_cmd argv off =
   loop ();
   exit (if !failed then 1 else 0)
 
+(* tuna fed: the local directory as a federation peer (borg/local.borg
+   L6).  push sends the local ops window into ns/<peer>/... with the
+   values its effect rows cite; pull walks the owner's server dictionary
+   and rehashes every value; check compares os/<peer>/dict/... with the
+   owner's dictionary name by name.  A push writes shared state, so it
+   asks on the terminal before each apply unless --yes is given (standing
+   approval); the prompt is client guidance, the server's per-peer authz
+   is the enforcement. *)
+let fed_cmd argv off =
+  match if off < Array.length argv then argv.(off) else "" with
+  | "push" | "pull" | "check" as sub ->
+      let dir = ref None and base = ref None and peer = ref None in
+      let tokens = ref None and yes = ref false in
+      let value i =
+        if i + 1 < Array.length argv then argv.(i + 1)
+        else (prerr_endline ("fed: " ^ argv.(i) ^ " needs a value"); exit 2)
+      in
+      let rec go i =
+        if i < Array.length argv then
+          match argv.(i) with
+          | "--dir" -> dir := Some (value i); go (i + 2)
+          | "--base" -> base := Some (value i); go (i + 2)
+          | "--peer" -> peer := Some (value i); go (i + 2)
+          | "--tokens" -> tokens := Some (value i); go (i + 2)
+          | "--yes" -> yes := true; go (i + 1)
+          | a -> prerr_endline ("fed: unexpected argument " ^ a); exit 2
+      in
+      go (off + 1);
+      let base =
+        match !base with
+        | Some b -> b
+        | None -> prerr_endline "fed: --base is required"; exit 2
+      in
+      let tokens =
+        match !tokens with
+        | Some t -> t
+        | None -> prerr_endline "fed: --tokens is required"; exit 2
+      in
+      let st =
+        try
+          Tuna_local.Local_store.open_
+            (match !dir with
+             | Some d -> d
+             | None -> Tuna_local.Local_store.default_root ())
+        with Failure msg | Sys_error msg -> prerr_endline ("fed: " ^ msg); exit 2
+      in
+      let tk =
+        try Tuna_local.Local_fed.read_tokens tokens
+        with Sys_error msg -> prerr_endline ("fed: " ^ msg); exit 2
+      in
+      let fail msg = prerr_endline ("fed: " ^ msg); exit 1 in
+      (match sub with
+       | "pull" -> (
+           match Tuna_local.Local_fed.pull st ~base ~tokens:tk with
+           | Error e -> fail e
+           | Ok rows ->
+               Printf.printf "pull %d rows from %s\n" (List.length rows) base)
+       | "check" -> (
+           let peer =
+             match !peer with
+             | Some p -> p
+             | None -> prerr_endline "fed check: --peer is required"; exit 2
+           in
+           match
+             Tuna_local.Local_fed.divergence_report st ~base ~peer ~tokens:tk
+           with
+           | Error e -> fail e
+           | Ok (ds, pushed) ->
+               List.iter
+                 (fun (d : Tuna_local.Local_fed.divergence) ->
+                   print_endline (Tuna_local.Local_fed.render_divergence d))
+                 ds;
+               Printf.printf "divergences %d pushed %d\n" (List.length ds)
+                 (List.length pushed))
+       | _ ->
+           let peer =
+             match !peer with
+             | Some p -> p
+             | None -> prerr_endline "fed push: --peer is required"; exit 2
+           in
+           if not !yes then (
+             if Unix.isatty Unix.stdin then (
+               Printf.printf "fed: push this laptop's window to %s as ns/%s/? [y/N] %!"
+                 base peer;
+               let answer =
+                 match input_line stdin with l -> String.trim l | exception End_of_file -> ""
+               in
+               if answer <> "y" && answer <> "Y" && answer <> "yes" then (
+                 prerr_endline "fed: push declined"; exit 1))
+             else
+               (prerr_endline
+                  "fed: push writes shared state and stdin is not a terminal; \
+                   pass --yes for a standing approval for this laptop";
+                exit 2));
+           match Tuna_local.Local_fed.push st ~base ~peer ~tokens:tk with
+           | Error e -> fail e
+           | Ok a ->
+               Printf.printf "push applied %d rows to ns/%s/\n" a.Tuna_local.Local_fed.ap_rows
+                 peer;
+               List.iter
+                 (fun (run_id, h) ->
+                   Printf.printf "push dropped %s (value %s above the size cap)\n"
+                     run_id h)
+                 a.Tuna_local.Local_fed.ap_dropped)
+  | _ ->
+      prerr_endline
+        "usage: tuna fed push|pull|check --base URL --tokens FILE [--dir D] \
+         [--peer NAME] [--yes]";
+      exit 2
+
 let () =
   match Sys.argv.(1) with
+  | "fed" -> fed_cmd Sys.argv 2
   | "eval" ->
       let program, args, fuel, cap = read_corpus Sys.argv.(2) in
       print_result (Tuna_interp.Eval.eval ~fuel ~size_cap:cap ~program args)

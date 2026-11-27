@@ -455,6 +455,101 @@ let test_run_semantics () =
   | _ -> Alcotest.fail "unknown semantics must be refused"
   | exception Failure _ -> ()
 
+(* -- L6: the local directory as a federation peer (borg/local.borg L6) -- *)
+
+module LF = Tuna_local.Local_fed
+
+(* the token file: one local file holds the push peer token and the
+   owner's bearer, key=value lines; a comment or an unknown key is
+   ignored, never guessed at *)
+let test_l6_tokens () =
+  let p = Filename.temp_file "tuna-tokens" "" in
+  Out_channel.with_open_gen [ Open_trunc; Open_binary ] 0o600 p (fun oc ->
+      Out_channel.output_string oc
+        "# laptop\npeer=peer-token-value\nowner=owner-token-value\n");
+  let tk = LF.read_tokens p in
+  Alcotest.(check string) "peer token" "peer-token-value" tk.LF.peer;
+  Alcotest.(check string) "owner bearer" "owner-token-value" tk.LF.owner;
+  Sys.remove p
+
+(* the push window's destination shape: every local path keeps its shape
+   under ns/<peer>/, so a dict row lands at ns/<peer>/dict/<identity>/... *)
+let test_l6_groups () =
+  Alcotest.(check (list (pair string string)))
+    "local prefix -> ns/<peer> prefix"
+    [ ("dict/", "ns/laptop/dict/"); ("runs/", "ns/laptop/runs/");
+      ("vis/", "ns/laptop/vis/") ]
+    (LF.groups ~peer:"laptop")
+
+(* the 413 retry: a value above the store's cap refuses the WHOLE apply
+   before anything lands, so the window is resent without the rows that
+   cite it - rows verify one by one - and the drop is reported by run id *)
+let test_l6_413_retry () =
+  let st = LS.open_ (fresh_dir ()) in
+  ignore (run st "def inc (lambda (x) (int-add x 1))");
+  let r = run_src st (cfg ()) {|(lambda (x) (runtime (prim "echo" x)))|} [ {|\"k\"|} ] in
+  let d = r.LRun.record in
+  let rec_hash = r.LRun.record_hash in
+  let rows = LS.ops st in
+  Alcotest.(check bool) "the window carries the record's put" true
+    (List.exists
+       (fun (o : LS.op) -> o.LS.path = "runs/" ^ d.D.d_run_id)
+       rows);
+  let calls = ref 0 and last = ref [] in
+  let apply sent =
+    incr calls;
+    last := sent;
+    if !calls = 1 then
+      Ok (413, Printf.sprintf "value %s exceeds the value cap" rec_hash)
+    else Ok (200, "{}")
+  in
+  match LF.push_rows ~apply rows with
+  | Error e -> Alcotest.failf "413 retry: %s" e
+  | Ok a ->
+      Alcotest.(check int) "the window was resent once" 2 !calls;
+      Alcotest.(check (list (pair string string))) "the record is reported by run id"
+        [ (d.D.d_run_id, rec_hash) ] a.LF.ap_dropped;
+      Alcotest.(check bool) "the resent window drops the oversize put" false
+        (List.exists
+           (fun (o : LS.op) -> o.LS.value_hash = Some rec_hash)
+           !last);
+      Alcotest.(check int) "the remaining rows are still sent"
+        (List.length rows - 1) a.LF.ap_rows;
+      Alcotest.(check bool) "the record stays local" true
+        (LS.get_bytes st rec_hash <> None)
+
+(* divergence: two name spaces compared name by name, both hashes
+   reported, nothing overwritten (L5's law; adopting a side is a def) *)
+let test_l6_divergence () =
+  let local = [ ("a", "h-local-a"); ("b", "h-local-b") ] in
+  let server = [ ("a", "h-local-a"); ("b", "h-server-b"); ("c", "h-server-c") ] in
+  let dv = LF.divergences ~local ~server in
+  Alcotest.(check int) "only the mismatched names are reported" 2 (List.length dv);
+  let b = List.find (fun (d : LF.divergence) -> d.LF.dv_name = "b") dv in
+  Alcotest.(check (option string)) "the laptop's hash" (Some "h-local-b")
+    b.LF.dv_local;
+  Alcotest.(check (option string)) "the server's hash" (Some "h-server-b")
+    b.LF.dv_server;
+  let c = List.find (fun (d : LF.divergence) -> d.LF.dv_name = "c") dv in
+  Alcotest.(check (option string)) "a name only the server holds" None c.LF.dv_local;
+  Alcotest.(check string) "the report names both hashes"
+    "divergence b local h-local-b server h-server-b" (LF.render_divergence b);
+  (* agreeing names are never reported *)
+  Alcotest.(check int) "agreeing names are not reported" 0
+    (List.length
+       (LF.divergences ~local:[ ("a", "h") ] ~server:[ ("a", "h") ]))
+
+(* the fold a window carries: undef (the zero-length bytes marker)
+   removes a name, exactly as the server's dict_fold does *)
+let test_l6_fold_dict () =
+  let prefix = "dict/owner/" in
+  let rows =
+    [ ("dict/owner/x", Some "h1"); ("dict/owner/y", Some "h2");
+      ("dict/owner/x", Some LS.undef_marker); ("dict/other/z", Some "h3") ]
+  in
+  Alcotest.(check (list (pair string string))) "undef removes, others fold"
+    [ ("y", "h2") ] (LF.fold_dict ~prefix rows)
+
 let () =
   Alcotest.run "local"
     [ ( "l1-stdlib-offline",
@@ -472,4 +567,10 @@ let () =
         [ Alcotest.test_case "record verifies, server replay agrees, tamper fails" `Quick test_run_record;
           Alcotest.test_case "grants are arguments" `Quick test_run_denial;
           Alcotest.test_case "repl rounds answer prims and seal no record" `Quick test_repl_prims;
-          Alcotest.test_case "v1 and fast1-fast3 records verify offline" `Quick test_run_semantics ] ) ]
+          Alcotest.test_case "v1 and fast1-fast3 records verify offline" `Quick test_run_semantics ] );
+      ( "l6-local-peer",
+        [ Alcotest.test_case "token file: peer + owner, comments ignored" `Quick test_l6_tokens;
+          Alcotest.test_case "push groups keep the local path shape" `Quick test_l6_groups;
+          Alcotest.test_case "413 resend drops the row, reports the run id" `Quick test_l6_413_retry;
+          Alcotest.test_case "divergence reports both hashes, overwrites none" `Quick test_l6_divergence;
+          Alcotest.test_case "undef removes a name from the window fold" `Quick test_l6_fold_dict ] ) ]
