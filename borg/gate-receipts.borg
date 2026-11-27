@@ -263,13 +263,21 @@
     (kind code))
    (details
     (doc (|
-      G3 of gate-receipts/integration. The loop's card-advancing gate
-      runs - the implement pass (factory/loop.py:4188,4194) and the
+      G3 of gate-receipts/integration. The loop's card-advancing TEST
+      gates - the implement pass (factory/loop.py:4188,4194) and the
       merge pass (factory/loop.py:5065,5071) - each run one gate command
       under tuna/scripts/gate-receipt.sh with that command's captured
       log, and factory/evidence.py receives the mint's claim path and
       verdict and records them per command as {label, cmd, rc, receipt,
-      verdict}. The gate's own result stays the command's exit status,
+      verdict}. The BUILD command of each pass is recorded the same way
+      but is not a receipt-law gate: a successful build prints no test
+      summary, so its receipt is unverified by construction and would
+      block every card (measured 2026-11-27: `dune build` exit 0 ->
+      counts unparsed -> unverified). A green build advances on its own
+      exit; a red build still blocks. When the wrapper cannot mint at
+      all, the build runs directly and the record says so, so a missing
+      runner never skips compilation. The gate's own result stays the
+      command's exit status,
       read from the wrapper's `exit=` line: gate-receipt.sh exits 0
       whenever a receipt was minted whatever the verdict and 2 on
       operational failure (tuna/scripts/gate-receipt.sh:36-38), so its
@@ -284,7 +292,7 @@
       (factory/loop.py:2724). A card cannot advance on a gate whose
       receipt verdict is unverified: an unconfigured runner, a mint
       failure (including a log above the value cap, exit 2), a
-      resolution failure, a missing receipt, or a pass gate with a
+      resolution failure, a missing receipt, or a pass TEST gate with a
       non-pass receipt blocks the pass with a diagnostic that names the
       gate - never a skip and never a silent green. Blocking is an
       abort, not a log line: the implement pass records a BLOCKED ledger
@@ -309,7 +317,7 @@
     |))
    )
    (verify
-    (test "G3: every card-advancing gate command the loop runs (the implement and merge build and test gates) produces one receipt (claim path and verdict) recorded per command in the evidence the ledger row carries and the advance check reads; a pass gate whose receipt verdict is not pass, a missing receipt, an unresolvable receipt, a mint that failed (including a log above the value cap), or an unconfigured base/token file blocks the pass - the implement pass records BLOCKED, sets no state and keeps its branch, the merge leaves master untouched - with a diagnostic naming the gate; a gate that does not apply, and the rollback and uifix gates, are recorded not-run, not as missing receipts; a red gate still blocks on its own exit whatever its receipt verdict; the gate's rc is read from the wrapper's exit= line, not the wrapper's process exit; and an injected runner answering pass leaves existing gate behavior unchanged (factory/tests/test_evidence.py for the receipt-verdict decision, factory/tests/test_merge_gates.py for the loop's implement and merge refusal in a temp repo with /bin/true gates; the unconfigured case is exercised with no injection, not with a stub)"))
+    (test "G3: every card-advancing test gate command the loop runs (the implement and merge test commands) produces one receipt (claim path and verdict) recorded per command in the evidence the ledger row carries and the advance check reads, and the build command is recorded the same way but is not a receipt-law gate; a pass TEST gate whose receipt verdict is not pass, a missing receipt, an unresolvable receipt, a mint that failed (including a log above the value cap), or an unconfigured base/token file blocks the pass - the implement pass records BLOCKED, sets no state and keeps its branch, the merge leaves master untouched - with a diagnostic naming the gate, while a green build with an unverified receipt advances and a red build still blocks on its own exit; a gate that does not apply, and the rollback and uifix gates, are recorded not-run, not as missing receipts; the gate's rc is read from the wrapper's exit= line, not the wrapper's process exit; and an injected runner answering pass leaves existing gate behavior unchanged (factory/tests/test_evidence.py for the receipt-verdict decision, factory/tests/test_merge_gates.py for the loop's implement and merge refusal, the green-build-unverified advance and the red-build block in a temp repo with /bin/true gates; the unconfigured case is exercised with no injection, not with a stub)"))
   )
   (subsection failure-definitions
    (status planned)
