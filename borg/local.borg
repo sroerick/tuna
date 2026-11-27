@@ -137,7 +137,7 @@
    (execution
     (scope l5)
     (kind code)
-    (depends "spec.tuna.borg.local#local/l6-local-peer"))
+    (depends "spec.tuna.borg.federation#federation/dictionary-visibility"))
    (details
     (doc (|
       Definitions stop being a mutable table and become ops in the M10
@@ -191,7 +191,8 @@
    (status planned)
    (execution
     (scope l6)
-    (kind code))
+    (kind code)
+    (depends "spec.tuna.borg.local#local/l5-defs-as-ops"))
    (details
     (doc (|
       A local instance syncs as a federation peer over the existing
