@@ -175,6 +175,9 @@
          peer of the chain. |))))
   (subsection dictionary-visibility
    (status planned)
+   (execution
+    (scope visibility)
+    (kind code))
    (details
     (doc (|
       A deliberate narrowing of the FED2 ops window: the LO2 instance
@@ -277,7 +280,11 @@
       B's next pull of dict/A/ carry A's rows; a put or cas at
       vis/A/public by an ordinary tree write leaves A's visibility
       unchanged; a push of vis/A/... by peer P lands at ns/P/vis/A/...
-      and changes nothing. |))))
+      and changes nothing. |))
+   )
+   (verify
+    (test "Visibility filter: with A private, a pull by B at any prefix contains no dict/A/... row, still answers verified:true and advances last_seq past the omitted rows; an admin pull carries them; after A runs dict-visibility public B's next pull carries them and still verifies; with A private and peer P having applied rows at ns/P/dict/A/..., B's pull of ns/ or ns/P/ omits them, P's own pull of ns/P/ omits them, and A's pull carries them; a pull selecting no dictionary rows carries FED2's rows and last_seq, verified:true; a FULL all-hidden window answers more:true with an empty list, a short all-hidden final window more:false; a non-admin B running dict-visibility A public is refused with no row, the offline CLI refuses a non-self target; an admin running dict-visibility A public makes B's next pull of dict/A/ carry A's rows; a put or cas at vis/A/public by an ordinary write leaves visibility unchanged; a push of vis/A/... by peer P lands at ns/P/vis/A/... and changes nothing"))
+  )
   (subsection pre-registered-failures
    (status implemented)
    (details
