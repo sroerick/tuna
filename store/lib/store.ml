@@ -1109,19 +1109,20 @@ let check_midden_grant p ~id ~caller ?schema ?(namespace = "local") ?projection 
             match (schema, projection) with
             | _, Some proj_name -> (
                 match g.g_scope_projection with
-                | Some p when String.equal p proj_name -> (
-                    match (g.g_scope_schema, schema) with
-                    | None, _ -> true
-                    | Some s, Some target_s -> String.equal s target_s
-                    | Some _, None -> false)
-                | _ -> (
+                | Some p ->
+                    String.equal p proj_name
+                    && (match (g.g_scope_schema, schema) with
+                        | None, _ -> true
+                        | Some s, Some target_s -> String.equal s target_s
+                        | Some _, None -> false)
+                | None -> (
                     match (g.g_scope_schema, schema) with
                     | Some s, Some target_s -> String.equal s target_s
                     | _ -> false))
             | Some target_s, None -> (
-                match g.g_scope_schema with
-                | Some s -> String.equal s target_s
-                | None -> false)
+                match (g.g_scope_projection, g.g_scope_schema) with
+                | None, Some s -> String.equal s target_s
+                | _ -> false)
             | None, None -> true
           in
           if ns_ok && target_ok then Direct.return `Ok
@@ -1883,7 +1884,8 @@ let has_covering_midden_grant p caller ~prim ~scope_schema ~scope_namespace
             in
             let proj_ok =
               match (gp, scope_projection) with
-              | _, None -> true
+              | None, None -> true
+              | Some _, None -> false
               | Some a, Some b -> String.equal a b
               | None, Some proj_name -> (
                   (* A schema grant covers a projection ONLY when that

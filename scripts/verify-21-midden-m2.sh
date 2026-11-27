@@ -96,14 +96,22 @@ ESC_PROJ=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $NADM_TOK" -H 'Content-Type: application/json' \
   -d '{"prim":"midden/query","scope_schema":"todo","scope_projection":"def_view"}' "$BASE/api/grants")
 [ "$ESC_PROJ" = "403" ] || fail "21.7: cross-schema projection escalation expected 403, got $ESC_PROJ"
-OK_NARROW=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+OK_NARROW_JSON=$(curl -sf -X POST \
   -H "Authorization: Bearer $NADM_TOK" -H 'Content-Type: application/json' \
   -d '{"prim":"midden/query","scope_schema":"todo","scope_projection":"todo_counts"}' "$BASE/api/grants")
-[ "$OK_NARROW" = "201" ] || fail "21.7: valid narrowing to todo_counts expected 201, got $OK_NARROW"
+G_NARROW=$(echo "$OK_NARROW_JSON" | jget "d['id']")
+[ -n "$G_NARROW" ] || fail "21.7: valid narrowing to todo_counts failed: $OK_NARROW_JSON"
+# The narrowed todo_counts grant must deny querying sibling projection todo_by_created
+H_SIB=$(curl -sf -X POST -H "Authorization: Bearer $NADM_TOK" -H 'Content-Type: application/json' \
+  -d '{"source":"(lambda (x) (prim \"midden/query\" \"todo_by_created\" \"\" \"\" x))"}' "$BASE/api/programs" | jget "d['hash']")
+SIB_RUN=$(curl -sf -X POST -H "Authorization: Bearer $NADM_TOK" -H 'Content-Type: application/json' \
+  -d "{\"program_hash\":\"$H_SIB\",\"inputs\":[\"0\"],\"grants\":[\"$G_NARROW\"]}" "$BASE/api/runs")
+echo "$SIB_RUN" | grep -q 'target outside grant scope' \
+  || fail "21.7: narrowed todo_counts grant allowed querying todo_by_created: $SIB_RUN"
 VER_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
   -H "Authorization: Bearer $NADM_TOK" -H 'Content-Type: application/json' \
   -d '{"projection":"todo_counts"}' "$BASE/api/midden/verify/projection")
 [ "$VER_CODE" = "403" ] || fail "21.7: non-admin /api/midden/verify/projection expected 403, got $VER_CODE"
-echo "  21.7 non-admin midden/* escalation (403/403/403), valid narrowing (201), and verify/* (403) verified"
+echo "  21.7 non-admin midden/* escalation (403/403/403), valid narrowing + sibling denial, and verify/* (403) verified"
 
 echo "ACCEPT 21 OK: Midden M2 claims (WELL-FORMED, LENS-TOTAL, PROJECTION) + structural grants verified"
