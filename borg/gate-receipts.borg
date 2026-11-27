@@ -4,6 +4,7 @@
  (convention ocaml-dune)
  (* agent note (|2026-11-23 design discussion (roerick + Claude, onboarding session). MOTIVATION, both observed the same day: (1) tuna's three-engine differential gate built no binaries after the monorepo merge, failed 93/93, and the runtest rule's `&& ... || echo` reported it as "sbcl missing: skipped" - make -C tuna test exited 0 (fixed in 3cd448d5); (2) pp's image/test/data_spaces_test.ml prints SKIP and marks every case [OK] when Postgres is unreachable, so a default-env run reports 15/15 green while testing nothing. The organization policy installed the same day (nomia: engineering.verify-change, engineering.independent-review) already demands gate evidence over claims; nomia's review-change check-evidence.sh says of itself "a completeness check, not a truth check". This chapter is the truth half. FRAMING DECISION: tuna does not run the gate. Shell commands are host effects that no journal can make replayable; what tuna CAN make replayable is the DECISION (pass, fail, unverified) given the facts, and what it can make tamper-evident is WHO asserted the facts. Everything below follows from keeping those two apart.|) *)
  (* agent note (|2026-11-24 G1 LANDED. Artifacts: scripts/gate-receipts/verdict.sabra (prim-free, self-contained), scripts/gate-receipts/adapt.sh (alcotest, differential, make-test), scripts/gate-receipts/encode.sh (the record codec in awk), scripts/gate-receipt.sh (the wrapper), tests/gate_receipt_tests.ml (19 alcotest cases, no PG, no HTTP). claims.sh gained the gate claim kind for the 8-segment receipt path. EVIDENCE: fixtures green; before/after replay at a90487b3 fail (the log's 93/93 FAILED outranks its misleading sbcl-missing line) and at 3cd448d5 pass; a non-admin second identity verified the receipt while getting 404 on the runner's run row; every observation field changes the input hash, and a tampered citation naming changed facts under the original result reports MISMATCH. DEVIATIONS FROM THE ORIGINAL TEXT, forced by reality: (a) the chapter predicted unverified for the a90487b3 log, but that log states 93/93 FAILED, so the honest verdict is fail; (b) "changing any field breaks verification of the original claim" is not a shape claims.sh has - it verifies a citation, and the original citation still pins its own immutable input - so the measured property is the hash binding plus a mismatch when a citation names changed facts under the original result. Project status stays planned because the G2 verify line (check-evidence receipt mode) is unrun; the three G1 subsections are marked implemented.|) *)
+ (* agent note (|2026-11-27 ADAPTERS EXTENDED (operator repair, independent review). The factory's own gates are not all alcotest: `python3 -m unittest` and shell harnesses had no adapter, and a successful `dune build` has no counts at all. Measured: a green alcotest run under the wrapper parsed `counts=unparsed` while its captured log carried colour escape bytes; `python3 -m unittest` and a PASS-printing shell script were unparsed too. The strip is defensive: a pty-captured or FORCE_COLORed log must not turn a green suite into unverified. adapt.sh now strips CSI escapes, understands the unittest shapes and an explicit COUNTS line in the aggregate, counts "unexpected successes" as failures, refuses an inconsistent COUNTS line, and the wrapper accepts --adapter unittest. tests/gate_receipt_tests.ml pins the colour case, the unittest shapes (including the real 3.14 unexpected-successes log), the aggregate path the factory actually uses, and COUNTS consistency; 22 cases green. THE BUILD-GATE LIMIT IS NOT AN ADAPTER GAP: a successful build prints no test summary, so a build receipt is unverified by construction. The owner decided (2026-11-27) that only the TEST gate is a receipt-law gate; a build's own exit still blocks, and when the wrapper cannot mint the build runs directly and the record says so. That decision lives in the G3 subsection.|) *)
  (section gate-receipts
   (doc "Three layers with different trust: OBSERVATION (attested by a runner identity, not proven), VERDICT (a pure tuna program, re-derivable by anyone), REPRODUCTION (optional re-execution of the command at the same revision by a reviewer).")
   (status planned)
@@ -88,7 +89,30 @@
                      outranks it, because the log states it.  Extra
                      checks in the same log that print their own lines
                      (the filmstrip CDP gate) are not counted; their
-                     failure rides the command's exit status.
+                     failure rides the command's exit status.  The
+                     aggregate also reads the unittest shapes and an
+                     explicit COUNTS line, so a log mixing harnesses
+                     sums them as one gate.
+        unittest     python -m unittest: "Ran N tests in ..." is the run
+                     count; "OK" makes them passes and "OK (skipped=K)"
+                     adds K skips; "FAILED (...)" takes failures, errors
+                     and unexpected successes.  A FAILED line with no
+                     recognised count is one failure, never zero - stock
+                     3.14 emits "FAILED (unexpected successes=N)" for a
+                     suite that did not do what it said.
+        COUNTS line  (make-test only) a harness with no standard summary
+                     prints one line
+                     "COUNTS run=N passed=N failed=N skipped=N" and it is
+                     a suite summary like any other; an inconsistent line
+                     (run != passed + failed + skipped) is not a summary.
+                     The line is authored by the harness whose exit code
+                     and log hash the receipt attests, exactly as the
+                     alcotest summary is.
+
+      ANSI escape sequences are stripped before matching: a colourised
+      summary is still a summary, and a pty-captured log must not make a
+      green suite unparsed.  A token containing a CSI sequence cannot
+      forge a summary, because the match is anchored on the fixed prefix.
       A log with no recognisable suite summary is unparsed.  A cached
       dune run that prints nothing is therefore unverified, never pass;
       run the gate from a clean build (a fresh worktree or --force).
