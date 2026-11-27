@@ -104,7 +104,7 @@ import json, sys
 d = json.loads(sys.stdin.read())
 assert d, "no swept row"
 assert d["collected"] == int(sys.argv[1]), d
-assert d["eligible"] == int(sys.argv[2]), d' "$2" "$3"; }
+assert d["eligible"] == int(sys.argv[2]), d' "$1" "$2"; }
 
 # ---- two fresh identities (A: the policy, B: the control) -----------------
 AJSON=$(mint_id "retention-a-$N"); TA=$(printf '%s' "$AJSON" | jget "d['token']")
