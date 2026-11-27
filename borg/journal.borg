@@ -33,6 +33,8 @@
  (doc "Tuna book chapter: journal — the effect record. Every boundary event is journaled; the journal is the recorded environment and the only non-derivable artifact in the system.")
  (status implemented)
  (convention ocaml-dune)
+
+ (* agent note (|2026-11-27 RETENTION-GC IMPLEMENTED (factory card brg_08720d23, branch factory/spec-tuna-borg-journal-journal-1127-brg_08, tip 8e7c2859, merged 7c1594a0, pushed origin/main; independent factory code review PASS). CODE: migrations/0020-retention-policies.sql (per-identity policy row, keep_days>0, keep_failures, enabled default false), store/lib/store.ml retention_where/retention_citation/sweep_retention over the existing single-transaction GC path, server/lib/api.ml admin and own retention routes with 403 before identity lookup. EVIDENCE: tests/store_tests.ml 19 cases green on PG (m10-2 pins off-by-default and dry-run) and scripts/verify-20-retention-policy.sh live on PG prints its final line and exits 0 (dry-run default, cited tombstone retention:<identity>:keep-<N>d[:keep-failures], second sweep collects nothing, another identity untouched, keep_failures=false collects the failed run). MERGE GATES: build receipt verdict=unverified rc=0 (a build is not a receipt-law gate), test receipt verdict=pass verified. UNRUN: the full tuna dune runtest; the leaf's declared gate (store_tests on PG) plus the live script are the run evidence.|) *)
  (section journal
   (doc "The journal: append rows per run at each prim boundary event. Everything else in the system is derivable from hashes plus semantics; the journal is what the world actually answered.")
   (status in-progress)
@@ -136,7 +138,7 @@
 
   (subsection retention-gc
    (doc "Retention, garbage collection, and PII")
-   (status in-progress)
+   (status implemented)
    (details
     (doc (|
          Three pressures priced up front:
