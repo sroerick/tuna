@@ -37,14 +37,14 @@
 set -eu
 
 usage() {
-  echo "usage: adapt.sh <alcotest|differential|make-test> <log>  (log = - for stdin)" >&2
+  echo "usage: adapt.sh <alcotest|differential|make-test|unittest> <log>  (log = - for stdin)" >&2
   exit 2
 }
 [ $# -eq 2 ] || usage
 adapter="$1"
 log="$2"
 case "$adapter" in
-  alcotest|differential|make-test) : ;;
+  alcotest|differential|make-test|unittest) : ;;
   *) usage ;;
 esac
 if [ "$log" != "-" ]; then
@@ -52,6 +52,15 @@ if [ "$log" != "-" ]; then
 fi
 
 LC_ALL=C awk -v adapter="$adapter" '
+  # a harness may colourise its summary (a pty-captured log, FORCE_COLOR,
+  # or a tool that colours unconditionally).  Strip CSI sequences first, or
+  # a green suite parses as unparsed and a gate the book calls verified is
+  # refused.
+  {
+    gsub(/\033\[[0-9;]*[A-Za-z]/, "")
+    line = $0
+  }
+  BEGIN { ran = -1 }
   # summary lines share a shape: find the count immediately before the
   # word "test"/"tests" in "N tests run."
   function passes(   i, n) {
@@ -79,27 +88,80 @@ LC_ALL=C awk -v adapter="$adapter" '
     f = a[1] + 0; n = a[2] + 0
     run += n; passed += n - f; failed += f; summaries++
   }
+  # python -m unittest.  "Ran N tests" then "OK"[ (skipped=K)] or
+  # "FAILED (...)".  Stock 3.14 also emits "FAILED (unexpected successes=N)"
+  # for a suite that did not do what it said - a FAILING suite - so a
+  # FAILED line with no recognised count is one failure, never zero.
+  function ut_failures(   f) {
+    f = 0
+    if (match(line, /failures=[0-9]+/)) f += substr(line, RSTART + 9, RLENGTH - 9) + 0
+    if (match(line, /errors=[0-9]+/)) f += substr(line, RSTART + 7, RLENGTH - 7) + 0
+    if (match(line, /unexpected successes=[0-9]+/))
+      f += substr(line, RSTART + 21, RLENGTH - 21) + 0
+    if (f < 1) f = 1
+    return f
+  }
+  function unittest_ok(   k) {
+    if (ran < 0) return
+    k = 0
+    if (match(line, /skipped=[0-9]+/)) k = substr(line, RSTART + 8, RLENGTH - 8) + 0
+    run += ran; passed += ran - k; skipped += k; summaries++
+    ran = -1
+  }
+  function unittest_failed(   f) {
+    if (ran < 0) ran = 0
+    f = ut_failures()
+    if (f > ran) ran = f
+    run += ran; passed += ran - f; failed += f; summaries++
+    ran = -1
+  }
   adapter == "alcotest" {
-    if ($0 ~ /^Test Successful in [0-9.]+s\. [0-9]+ tests? run\.$/) alcotest_success()
-    else if ($0 ~ /^[0-9]+ failures?! in [0-9.]+s\. [0-9]+ tests? run\.$/) alcotest_failure()
-    else if ($0 ~ /^SKIP/) skipped++
+    if (line ~ /^Test Successful in [0-9.]+s\. [0-9]+ tests? run\.$/) alcotest_success()
+    else if (line ~ /^[0-9]+ failures?! in [0-9.]+s\. [0-9]+ tests? run\.$/) alcotest_failure()
+    else if (line ~ /^SKIP/) skipped++
     next
   }
   adapter == "differential" {
-    if ($0 ~ /^differential: [0-9]+\/[0-9]+ corpus entries FAILED/) differential_fail()
-    else if ($0 ~ /^differential: all [0-9]+ corpus entries agree/) differential_ok()
-    else if ($0 ~ /^sbcl missing: differential harness skipped/) skip_marker = 1
+    if (line ~ /^differential: [0-9]+\/[0-9]+ corpus entries FAILED/) differential_fail()
+    else if (line ~ /^differential: all [0-9]+ corpus entries agree/) differential_ok()
+    else if (line ~ /^sbcl missing: differential harness skipped/) skip_marker = 1
     next
   }
   adapter == "make-test" {
-    if ($0 ~ /^Test Successful in [0-9.]+s\. [0-9]+ tests? run\.$/) alcotest_success()
-    else if ($0 ~ /^[0-9]+ failures?! in [0-9.]+s\. [0-9]+ tests? run\.$/) alcotest_failure()
-    else if ($0 ~ /^differential: [0-9]+\/[0-9]+ corpus entries FAILED/) differential_fail()
-    else if ($0 ~ /^differential: all [0-9]+ corpus entries agree/) differential_ok()
-    else if ($0 ~ /^SKIP/) skipped++
-    else if ($0 ~ /^store tests skipped \(postgres down/) skip_marker = 1
-    else if ($0 ~ /^filmstrip_cdp: skip/) skip_marker = 1
-    else if ($0 ~ /^sbcl missing: differential harness skipped/) skip_marker = 1
+    if (line ~ /^Test Successful in [0-9.]+s\. [0-9]+ tests? run\.$/) alcotest_success()
+    else if (line ~ /^[0-9]+ failures?! in [0-9.]+s\. [0-9]+ tests? run\.$/) alcotest_failure()
+    else if (line ~ /^differential: [0-9]+\/[0-9]+ corpus entries FAILED/) differential_fail()
+    else if (line ~ /^differential: all [0-9]+ corpus entries agree/) differential_ok()
+    else if (line ~ /^COUNTS run=[0-9]+ passed=[0-9]+ failed=[0-9]+ skipped=[0-9]+$/) {
+      r = p = f = k = 0
+      for (i = 1; i <= NF; i++) {
+        split($i, kv, "=")
+        if (kv[1] == "run") r = kv[2]
+        else if (kv[1] == "passed") p = kv[2]
+        else if (kv[1] == "failed") f = kv[2]
+        else if (kv[1] == "skipped") k = kv[2]
+      }
+      if (r == p + f + k) { run += r; passed += p; failed += f; skipped += k; summaries++ }
+      # an inconsistent line cannot describe one run: mark the whole gate
+      # unparsed, even when another suite in the same log parsed, rather than
+      # believing a subset of the evidence
+      else skip_marker = 1
+    }
+    else if (line ~ /^Ran [0-9]+ tests? in /) { ran = $2 + 0 }
+    else if (line ~ /^OK/) unittest_ok()
+    else if (line ~ /^FAILED/) unittest_failed()
+    else if (line ~ /^SKIP/) skipped++
+    else if (line ~ /^store tests skipped \(postgres down/) skip_marker = 1
+    else if (line ~ /^filmstrip_cdp: skip/) skip_marker = 1
+    else if (line ~ /^sbcl missing: differential harness skipped/) skip_marker = 1
+    next
+  }
+  # python -m unittest: "Ran N tests in Xs" then "OK"/"OK (skipped=S)" or
+  # "FAILED (failures=F, errors=E)".
+  adapter == "unittest" {
+    if (line ~ /^Ran [0-9]+ tests? in /) { ran = $2 + 0 }
+    else if (line ~ /^OK/) unittest_ok()
+    else if (line ~ /^FAILED/) unittest_failed()
     next
   }
   END {

@@ -18,7 +18,7 @@
 #        u.<runner>.claim.<date>.gate.<project>.<rev12>.<gate-slug>
 #      and print the verdict and claim path.
 #
-# Adapters: alcotest | differential | make-test | none (default
+# Adapters: alcotest | differential | make-test | unittest | none (default
 # make-test).  A gate whose log no adapter can parse is recorded as
 # counts=unparsed, and the verdict is unverified - never pass.
 #
@@ -50,7 +50,7 @@ TOKEN="${TUNA_TOKEN:-}"
 
 die() { echo "gate-receipt: $*" >&2; exit 2; }
 usage() {
-  echo "usage: gate-receipt.sh <gate-slug> [--adapter alcotest|differential|make-test|none] -- <command...>" >&2
+  echo "usage: gate-receipt.sh <gate-slug> [--adapter alcotest|differential|make-test|unittest|none] -- <command...>" >&2
   exit 2
 }
 
@@ -99,8 +99,8 @@ while [ $# -gt 0 ]; do
 done
 [ $# -ge 1 ] || usage
 case "$adapter" in
-  alcotest|differential|make-test|none) : ;;
-  *) die "unknown adapter '$adapter' (alcotest|differential|make-test|none)" ;;
+  alcotest|differential|make-test|unittest|none) : ;;
+  *) die "unknown adapter '$adapter' (alcotest|differential|make-test|unittest|none)" ;;
 esac
 
 # -- the tree under test ----------------------------------------------

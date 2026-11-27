@@ -269,6 +269,72 @@ let make_test_aggregate () =
   Alcotest.(check string) "the old bug's real failure is still fail"
     "93 0 93 0" (run_adapter "make-test" diff_old_bug_log)
 
+(* alcotest colourises its summary even when the log is a file; a green
+   suite must still parse.  The wrapper's log carries the escape bytes. *)
+let colored_log =
+  "\027[32mTest Successful\027[0m in 1.200s. 3 tests run.\n"
+
+let colored_counts () =
+  Alcotest.(check string) "ANSI colour does not hide a green suite"
+    "3 3 0 0" (run_adapter "make-test" colored_log)
+
+(* python -m unittest: a first-class harness in the factory's gates. *)
+let unittest_ok_log =
+  "............\n"
+  ^ "----------------------------------------------------------------------\n"
+  ^ "Ran 12 tests in 0.004s\n\nOK\n"
+
+let unittest_failed_log =
+  "Ran 4 tests in 0.002s\n\nFAILED (failures=1, errors=1)\n"
+
+let unittest_skipped_log = "Ran 5 tests in 0.001s\n\nOK (skipped=2)\n"
+
+(* stock 3.14 emits this for a suite that did not do what it said; it is
+   a FAILING suite, and counting it as pass is the fail-open the review
+   measured. *)
+let unittest_unexpected_log =
+  "Ran 1 test in 0.000s\n\nFAILED (unexpected successes=1)\n"
+
+let unittest_no_summary_log = "Ran 4 tests in 0.1s\n"
+
+let unittest_counts () =
+  Alcotest.(check string) "OK: every test passed" "12 12 0 0"
+    (run_adapter "unittest" unittest_ok_log);
+  Alcotest.(check string) "FAILED: failures and errors count" "4 2 2 0"
+    (run_adapter "unittest" unittest_failed_log);
+  Alcotest.(check string) "OK (skipped=N)" "5 3 0 2"
+    (run_adapter "unittest" unittest_skipped_log);
+  Alcotest.(check string) "unexpected successes is a failure" "1 0 1 0"
+    (run_adapter "unittest" unittest_unexpected_log);
+  Alcotest.(check string) "Ran without OK/FAILED is unparsed" "unparsed"
+    (run_adapter "unittest" unittest_no_summary_log);
+  Alcotest.(check string) "a bare FAILED line is one failure" "1 0 1 0"
+    (run_adapter "unittest" "Ran 1 test in 0.001s\nFAILED\n");
+  Alcotest.(check string) "a bare FAILED in the aggregate is one failure"
+    "11 10 1 0"
+    (run_adapter "make-test"
+       ("Test Successful in 0.1s. 10 tests run.\nFAILED\n"));
+  Alcotest.(check string) "the aggregate reads the same shapes" "16 14 2 0"
+    (run_adapter "make-test" (unittest_ok_log ^ unittest_failed_log));
+  Alcotest.(check string) "a coloured alcotest summary still parses" "3 3 0 0"
+    (run_adapter "alcotest" colored_log)
+
+(* a harness without a summary shape declares its counts explicitly; the
+   aggregate adapter sums the line like any other suite summary. *)
+let counts_line_log = "COUNTS run=12 passed=11 failed=0 skipped=1\n"
+
+let counts_line () =
+  Alcotest.(check string) "an explicit COUNTS line is a suite summary"
+    "12 11 0 1" (run_adapter "make-test" counts_line_log);
+  Alcotest.(check string) "an inconsistent COUNTS line is not a summary"
+    "unparsed"
+    (run_adapter "make-test" "COUNTS run=5 passed=1 failed=0 skipped=0\n");
+  Alcotest.(check string) "an inconsistent COUNTS poisons a mixed log"
+    "unparsed"
+    (run_adapter "make-test"
+       ("Test Successful in 0.1s. 10 tests run.\n"
+       ^ "COUNTS run=5 passed=1 failed=0 skipped=0\n"))
+
 let pp_shape_end_to_end () =
   let c = counts_of_string (run_adapter "alcotest" pp_log) in
   Alcotest.(check string) "pp shape verdict" unverified
@@ -396,6 +462,12 @@ let () =
             `Quick differential_counts
         ; Alcotest.test_case "make-test: sums suites, skips are unparsed"
             `Quick make_test_aggregate
+        ; Alcotest.test_case "alcotest: ANSI colour is stripped" `Quick
+            colored_counts
+        ; Alcotest.test_case "unittest: OK / FAILED / skipped" `Quick
+            unittest_counts
+        ; Alcotest.test_case "make-test: an explicit COUNTS line" `Quick
+            counts_line
         ; Alcotest.test_case "pp shape end to end -> unverified" `Quick
             pp_shape_end_to_end
         ; Alcotest.test_case "differential green end to end -> pass" `Quick
