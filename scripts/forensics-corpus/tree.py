@@ -90,8 +90,19 @@ def hexhash(s):
     return hashlib.sha256(s.encode()).hexdigest()
 
 
+def tpack(trits):
+    out = bytearray()
+    for i in range(0, len(trits), 5):
+        chunk = trits[i:i+5].ljust(5, '0')
+        v = 0
+        for ch in chunk:
+            v = v * 3 + (ord(ch) - 48)
+        out.append(v)
+    return bytes(out)
+
+
 def tree_hash(t):
-    return hexhash(encode(t))
+    return hashlib.sha256(tpack(encode(t))).hexdigest()
 
 
 def all_paths(t, path=""):

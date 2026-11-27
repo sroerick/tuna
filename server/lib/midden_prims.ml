@@ -74,6 +74,28 @@ let registered_schema pool name =
           | Ok sc -> Ok (hash, sc)))
   | _ -> Error (Printf.sprintf "unknown Midden schema %S" name)
 
+let schema_name_of_hash pool hash =
+  match
+    Db.q ~params:[ V.of_string hash ] pool
+      "SELECT name FROM midden_schema_versions WHERE hash = $1 \
+       UNION ALL \
+       SELECT name FROM midden_schema_refs WHERE hash = $1 LIMIT 1"
+  with
+  | [ r ] -> Some (S.text r 0 "schema.name")
+  | _ -> None
+
+let head_matches_schema pool ~entity ~expected_schema_name =
+  let m = Db.midden pool in
+  match MS.head m ~entity with
+  | Error e -> Error (MS.string_of_error e)
+  | Ok None | Ok (Some { head = None; _ }) -> Ok `Absent
+  | Ok (Some { head = Some head_hash; schema = Some sh; _ }) -> (
+      match schema_name_of_hash pool sh with
+      | Some actual when String.equal actual expected_schema_name ->
+          Ok (`Match head_hash)
+      | _ -> Ok `Wrong_schema)
+  | Ok (Some { head = Some _; schema = None; _ }) -> Ok `Wrong_schema
+
 let midden_get pool args =
   match Prims.list_of_tree args with
   | [ schema_t; entity_t ] -> (
@@ -82,13 +104,11 @@ let midden_get pool args =
           match registered_schema pool schema_name with
           | Error msg -> return (`Error ("midden/get: " ^ msg))
           | Ok (_sh, schema) -> (
-              let m = Db.midden pool in
-              match MS.head m ~entity with
-              | Error e ->
-                  return (`Error ("midden/get: " ^ MS.string_of_error e))
-              | Ok None | Ok (Some { head = None; _ }) ->
-                  return (`Ok Tuna.Tree.Leaf)
-              | Ok (Some { head = Some head_hash; _ }) -> (
+              match head_matches_schema pool ~entity ~expected_schema_name:schema_name with
+              | Error msg -> return (`Error ("midden/get: " ^ msg))
+              | Ok `Absent | Ok `Wrong_schema -> return (`Ok Tuna.Tree.Leaf)
+              | Ok (`Match head_hash) -> (
+                  let m = Db.midden pool in
                   match MS.get_as m ~entity ~version:schema.Midden.Schema.version with
                   | Error e ->
                       return (`Error ("midden/get: " ^ MS.string_of_error e))
@@ -142,17 +162,28 @@ let midden_delete pool ~actor args =
           match registered_schema pool schema_name with
           | Error msg -> return (`Error ("midden/delete: " ^ msg))
           | Ok _ -> (
-              let prev = if prev_s = "" then None else Some prev_s in
               match
-                MS.delete (Db.midden pool) ~entity ~prev ~author:actor
-                  ~reason:("midden/delete:" ^ schema_name) ()
+                head_matches_schema pool ~entity ~expected_schema_name:schema_name
               with
-              | Ok receipt ->
+              | Error msg -> return (`Error ("midden/delete: " ^ msg))
+              | Ok `Wrong_schema ->
                   return
-                    (`Ok
-                       (Prims.str (Printf.sprintf "deleted:%d" receipt.MS.seq)))
-              | Error e ->
-                  return (`Error ("midden/delete: " ^ MS.string_of_error e))))
+                    (`Error
+                       (Printf.sprintf
+                          "midden/delete: entity %s does not belong to schema %S"
+                          entity schema_name))
+              | Ok `Absent | Ok (`Match _) -> (
+                  let prev = if prev_s = "" then None else Some prev_s in
+                  match
+                    MS.delete (Db.midden pool) ~entity ~prev ~author:actor
+                      ~reason:("midden/delete:" ^ schema_name) ()
+                  with
+                  | Ok receipt ->
+                      return
+                        (`Ok
+                           (Prims.str (Printf.sprintf "deleted:%d" receipt.MS.seq)))
+                  | Error e ->
+                      return (`Error ("midden/delete: " ^ MS.string_of_error e)))))
       | _ ->
           return
             (`Error
@@ -296,27 +327,49 @@ let midden_query pool args =
                                      else q)
                                    cols)
                             in
-                            let where_parts, params =
+                            let filter_res =
                               List.fold_left
-                                (fun (ws, ps) (k, v) ->
-                                  let idx = List.length ps + 1 in
-                                  let dt = List.assoc k cols in
-                                  let param, cast =
-                                    match dt with
-                                    | "bigint" | "integer" | "smallint" ->
-                                        (V.of_int64 (Int64.of_string v), "bigint")
-                                    | "boolean" ->
-                                        (V.of_bool (String.equal v "true"), "boolean")
-                                    | "uuid" -> (V.of_string v, "uuid")
-                                    | _ -> (V.of_string v, "text")
-                                  in
-                                  let clause =
-                                    Printf.sprintf "%s = $%d::%s"
-                                      (quote_ident k) idx cast
-                                  in
-                                  (clause :: ws, ps @ [ param ]))
-                                ([], []) filters
+                                (fun acc (k, v) ->
+                                  match acc with
+                                  | Error _ as e -> e
+                                  | Ok (ws, ps) ->
+                                      let idx = List.length ps + 1 in
+                                      let dt = List.assoc k cols in
+                                      let param_res =
+                                        match dt with
+                                        | "bigint" | "integer" | "smallint" -> (
+                                            match Int64.of_string_opt v with
+                                            | Some n -> Ok (V.of_int64 n, "bigint")
+                                            | None ->
+                                                Error
+                                                  (Printf.sprintf
+                                                     "midden/query: filter %S expects an integer (got %S)"
+                                                     k v))
+                                        | "boolean" -> (
+                                            match v with
+                                            | "true" -> Ok (V.of_bool true, "boolean")
+                                            | "false" -> Ok (V.of_bool false, "boolean")
+                                            | _ ->
+                                                Error
+                                                  (Printf.sprintf
+                                                     "midden/query: filter %S expects true or false (got %S)"
+                                                     k v))
+                                        | "uuid" -> Ok (V.of_string v, "uuid")
+                                        | _ -> Ok (V.of_string v, "text")
+                                      in
+                                      match param_res with
+                                      | Error e -> Error e
+                                      | Ok (param, cast) ->
+                                          let clause =
+                                            Printf.sprintf "%s = $%d::%s"
+                                              (quote_ident k) idx cast
+                                          in
+                                          Ok (clause :: ws, ps @ [ param ]))
+                                (Ok ([], [])) filters
                             in
+                            match filter_res with
+                            | Error msg -> return (`Error msg)
+                            | Ok (where_parts, params) -> (
                             let where_sql =
                               match List.rev where_parts with
                               | [] -> ""
@@ -346,7 +399,14 @@ let midden_query pool args =
                             let params =
                               params @ [ V.of_int limit; V.of_int offset ]
                             in
-                            let rows = Db.q ~params pool sql in
+                            match
+                              try Ok (Db.q ~params pool sql)
+                              with e ->
+                                Error
+                                  ("midden/query: " ^ Printexc.to_string e)
+                            with
+                            | Error msg -> return (`Error msg)
+                            | Ok rows ->
                             let trees = List.map (tree_of_row cols) rows in
                             let result = Prims.tree_of_list trees in
                             if
@@ -356,7 +416,7 @@ let midden_query pool args =
                               return
                                 (`Error
                                    "midden/query: result exceeds the journal payload cap")
-                            else return (`Ok result)))))
+                            else return (`Ok result))))))
       | _ ->
           return
             (`Error

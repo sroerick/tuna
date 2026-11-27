@@ -161,9 +161,17 @@ let tree_to_csexp (schema : S.schema) (t : Tuna.Tree.t) : (C.t, string) result =
   in
   let* pairs = read_pairs [] t in
   let seen = Hashtbl.create 8 in
-  List.iter
-    (fun (tag, v) -> Hashtbl.replace seen tag v)
-    pairs;
+  let* () =
+    List.fold_left
+      (fun acc (tag, v) ->
+        let* () = acc in
+        if Hashtbl.mem seen tag then
+          Error (Printf.sprintf "midden_codec: duplicate field tag %d" tag)
+        else (
+          Hashtbl.add seen tag v;
+          Ok ()))
+      (Ok ()) pairs
+  in
   (* Check no unknown tags *)
   let* () =
     List.fold_left

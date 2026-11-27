@@ -37,8 +37,8 @@ echo "[11.2] a changed world names the changed seq in the world diff"
 # store/get reads the CURRENT prim_kv, which we move between the two.
 G2=$(mint_grant store/get)
 H2=$(post_source '"(lambda (x) (prim \"store/get\" x))"')
-# key_hash = sha256 of the canonical key ternary "10" (prim_kv PK)
-KEYH=$(printf '10' | sha256sum | cut -d' ' -f1)
+# key_hash = sha256 of Base-243 Tpack("10") (prim_kv PK)
+KEYH="4ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260"
 psql_q -q -c "INSERT INTO prim_kv (key_hash, key_ternary, value_ternary) \
   VALUES ('$KEYH', '10', '0') ON CONFLICT (key_hash) \
   DO UPDATE SET value_ternary = '0'" >/dev/null

@@ -72,4 +72,19 @@ echo "$BAD_RUN" | grep -q '"denial_count":1' \
   || fail "21.6: denial_count must be 1"
 echo "  21.6 structural grant scope denied cross-schema query (denial_count=1)"
 
+# 21.7 Security regressions: non-admin cannot self-mint midden/* grants or
+# call admin-only /api/midden/verify/*, and cross-schema midden/delete is refused
+NADM="v21-nonadmin-$(date +%s | tail -c 6)"
+NADM_TOK=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"$NADM\"}" "$BASE/api/identities" | jget "d['token']")
+MINT_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $NADM_TOK" -H 'Content-Type: application/json' \
+  -d '{"prim":"midden/put","scope_schema":"def"}' "$BASE/api/grants")
+[ "$MINT_CODE" = "403" ] || fail "21.7: non-admin midden/put self-mint expected 403, got $MINT_CODE"
+VER_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer $NADM_TOK" -H 'Content-Type: application/json' \
+  -d '{"projection":"todo_counts"}' "$BASE/api/midden/verify/projection")
+[ "$VER_CODE" = "403" ] || fail "21.7: non-admin /api/midden/verify/projection expected 403, got $VER_CODE"
+echo "  21.7 non-admin midden/* self-mint (403) and /api/midden/verify/* (403) denied"
+
 echo "ACCEPT 21 OK: Midden M2 claims (WELL-FORMED, LENS-TOTAL, PROJECTION) + structural grants verified"

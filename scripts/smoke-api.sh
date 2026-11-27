@@ -54,8 +54,8 @@ curl -sf -H "$AUTH" $BASE/api/programs/$NOT_HASH | grep -q '"ternary":"22102000"
 [ "$(curl_code -H "$AUTH" $BASE/api/programs/$(printf 0%.0s {1..64}))" = 404 ] || fail "GET unknown program"
 
 echo "[5] POST /api/programs/:hash/patch (CAS apply + conflict)"
-# not = "2"+"210200"+"0"; subtree at path 1 = "210200"
-SUB=$(python3 -c "import hashlib;print(hashlib.sha256(b'210200').hexdigest())")
+# not = "2"+"210200"+"0"; subtree at path 1 = "210200" (Base-243 Tpack hash)
+SUB=$(python3 -c "import hashlib; s='210200'; b=bytes(sum((ord(c)-48)*(3**(4-j)) for j,c in enumerate(s[i:i+5].ljust(5,'0'))) for i in range(0,len(s),5)); print(hashlib.sha256(b).hexdigest())")
 APPLIED=$(curl -sf -X POST -H "$AUTH" --data-binary \
   "{\"path\":\"1\",\"expected_old_hash\":\"$SUB\",\"new_ternary\":\"0\"}" \
   $BASE/api/programs/$NOT_HASH/patch) || fail "patch apply"

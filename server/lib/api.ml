@@ -1305,6 +1305,15 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                  prefixes such as "d" included - is refused, so a prim run can
                  never rewrite a dictionary; only def/undef rounds (and, under
                  ns/<peer>/, fed apply) write there. *)
+              let scope_schema = get_string_opt j "scope_schema" in
+              let scope_namespace = get_string_opt j "scope_namespace" in
+              let scope_projection = get_string_opt j "scope_projection" in
+              let claims_midden =
+                Prims.midden_addressed prim
+                || scope_schema <> None
+                || scope_namespace <> None
+                || scope_projection <> None
+              in
               if Prims.path_addressed prim && Tree_prims.reaches_dict path_prefix
               then
                 err
@@ -1320,6 +1329,16 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                   (Printf.sprintf
                      "%s addresses tree paths: supply \"path_prefix\" inside \
                       your own authority" prim)
+              else if
+                (not auth.auth_is_admin)
+                && Prims.midden_addressed prim
+                && scope_schema = None
+                && scope_projection = None
+              then
+                err
+                  (Printf.sprintf
+                     "%s addresses Midden state: supply \"scope_schema\" or \
+                      \"scope_projection\" inside your own authority" prim)
               else
                 let on_behalf = get_string_opt j "identity" in
                 (match on_behalf with
@@ -1333,14 +1352,13 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                       | Error m -> err ~code:404 m
                       | Ok caller -> (
                           (* the tenancy rule: scope can only be NARROWED,
-                             never created.  Any claimed prefix must sit
-                             inside a prefix the caller already covers, and
-                             a NULL row provides none; an admin (the
-                             operator) is unrestricted. *)
+                             never created.  Any claimed prefix or Midden scope
+                             must sit inside authority the caller already covers;
+                             an admin (the operator) is unrestricted. *)
                           (if auth.auth_is_admin then return true
                            else
                              match path_prefix with
-                             | None -> return true (* pathless: no scope claimed *)
+                             | None -> return true (* pathless: no tree scope claimed *)
                              | Some pfx -> Store.has_covering_grant pool caller pfx)
                           >>= function
                           | false ->
@@ -1350,29 +1368,36 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                                     authority"
                                    (Option.value path_prefix ~default:""))
                           | true -> (
-                              let scope_schema = get_string_opt j "scope_schema" in
-                              let scope_namespace = get_string_opt j "scope_namespace" in
-                              let scope_projection = get_string_opt j "scope_projection" in
-                              Store.mint_grant pool ~prim
-                                ~args_attenuation:attenuation
-                                ~path_prefix:path_prefix
-                                ~scope_schema ~scope_namespace ~scope_projection
-                                ~caller
-                                ~minted_by:(Some auth.auth_id) ()
-                              >>= fun g ->
-                              return
-                                ( 201
-                                , `Assoc
-                                    [ ("id", `String g.Store.g_id)
-                                    ; ("prim", `String g.Store.g_prim)
-                                    ; ("path_prefix", opt_str g.Store.g_path_prefix)
-                                    ; ("scope_schema", opt_str g.Store.g_scope_schema)
-                                    ; ("scope_namespace", opt_str g.Store.g_scope_namespace)
-                                    ; ("scope_projection", opt_str g.Store.g_scope_projection)
-                                    ; ("caller", `String g.Store.g_caller)
-                                    ; ( "args_attenuation"
-                                      , `String g.Store.g_args_attenuation )
-                                    ] ))))))
+                              (if auth.auth_is_admin || not claims_midden then
+                                 return true
+                               else
+                                 Store.has_covering_midden_grant pool caller
+                                   ~scope_schema ~scope_namespace ~scope_projection)
+                              >>= function
+                              | false ->
+                                  err ~code:403
+                                    "midden scope is outside the caller's authority"
+                              | true ->
+                                  Store.mint_grant pool ~prim
+                                    ~args_attenuation:attenuation
+                                    ~path_prefix:path_prefix
+                                    ~scope_schema ~scope_namespace ~scope_projection
+                                    ~caller
+                                    ~minted_by:(Some auth.auth_id) ()
+                                  >>= fun g ->
+                                  return
+                                    ( 201
+                                    , `Assoc
+                                        [ ("id", `String g.Store.g_id)
+                                        ; ("prim", `String g.Store.g_prim)
+                                        ; ("path_prefix", opt_str g.Store.g_path_prefix)
+                                        ; ("scope_schema", opt_str g.Store.g_scope_schema)
+                                        ; ("scope_namespace", opt_str g.Store.g_scope_namespace)
+                                        ; ("scope_projection", opt_str g.Store.g_scope_projection)
+                                        ; ("caller", `String g.Store.g_caller)
+                                        ; ( "args_attenuation"
+                                          , `String g.Store.g_args_attenuation )
+                                        ] ))))))
 
 let post_grant pool auth req =
   body_json req >>= function
@@ -1687,8 +1712,25 @@ let attenuate_grant pool auth req =
                       Option.value attenuation
                         ~default:parent.Store.g_args_attenuation
                     in
+                    let opt_field k default =
+                      match member_opt k j with
+                      | None -> default
+                      | Some `Null -> None
+                      | Some (`String s) -> Some s
+                      | Some _ -> default
+                    in
+                    let scope_schema =
+                      opt_field "scope_schema" parent.Store.g_scope_schema
+                    in
+                    let scope_namespace =
+                      opt_field "scope_namespace" parent.Store.g_scope_namespace
+                    in
+                    let scope_projection =
+                      opt_field "scope_projection" parent.Store.g_scope_projection
+                    in
                     Store.attenuate_grant pool ~parent_id ~prim
                       ~args_attenuation:attenuation ~path_prefix
+                      ~scope_schema ~scope_namespace ~scope_projection
                       ~caller:auth.auth_id ()
                     >>= function
                     | `Ok g ->
@@ -2699,6 +2741,9 @@ let fed_midden_commits_core pool ~(auth : auth) ~namespace ~after_seq ~limit =
         || List.mem id public_dicts
       in
       let visible (r : Midden_store.Store.commit_window_row) =
+        (* Default-deny for non-admins: only explicitly public or caller-owned
+           federation schemas are exposed; private state (messages, retention
+           policies, sessions, tree_compat, todos, cron tables) is admin-only. *)
         let c = r.commit in
         if caller_admin then true
         else
@@ -2707,12 +2752,18 @@ let fed_midden_commits_core pool ~(auth : auth) ~namespace ~after_seq ~limit =
               let id_name = Option.value (csexp_doc_field b "identity-name") ~default:"" in
               let id_id = Option.value (csexp_doc_field b "identity-id") ~default:"" in
               can_see_id id_name || can_see_id id_id
+          | Some sh, None when String.equal sh Tuna_store.Tuna_schemas.def_hash ->
+              can_see_id c.author
+          | Some sh, Some _ when String.equal sh Tuna_store.Tuna_schemas.def_visibility_hash ->
+              true
           | Some sh, Some b when String.equal sh Tuna_store.Tuna_schemas.op_audit_hash -> (
               match Option.bind (csexp_doc_field b "path") Store.dict_path_identity with
               | None -> true
               | Some id -> can_see_id id)
+          | Some sh, Some _ when String.equal sh Tuna_store.Tuna_schemas.claim_hash ->
+              true
           | None, _ -> can_see_id c.author
-          | _ -> true
+          | _ -> false
       in
       let opt_s = function Some s -> `String s | None -> `Null in
       let opt_b64 = function
@@ -3600,35 +3651,41 @@ let api_routes pool =
                       Midden_eval.define_projection pool ~form_str
                       >>= fun (code, out) -> j_ok ~code out)))
         ; Web.post "/api/midden/verify/well-formed" (with_auth pool (fun auth req ->
-            body_json req >>= function
-            | Error msg -> j_err msg
-            | Ok j -> (
-                match get_string_opt j "schema_hash" with
-                | None -> j_err "missing \"schema_hash\""
-                | Some schema_hash ->
-                    Midden_eval.verify_well_formed pool ~caller:auth.auth_id
-                      ~author:auth.auth_name ~schema_hash
-                    >>= fun (code, out) -> j_ok ~code out)))
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match get_string_opt j "schema_hash" with
+                  | None -> j_err "missing \"schema_hash\""
+                  | Some schema_hash ->
+                      Midden_eval.verify_well_formed pool ~caller:auth.auth_id
+                        ~author:auth.auth_name ~schema_hash
+                      >>= fun (code, out) -> j_ok ~code out)))
         ; Web.post "/api/midden/verify/lens-total" (with_auth pool (fun auth req ->
-            body_json req >>= function
-            | Error msg -> j_err msg
-            | Ok j -> (
-                match (get_string_opt j "from_hash", get_string_opt j "to_hash") with
-                | Some from_hash, Some to_hash ->
-                    Midden_eval.verify_lens_total pool ~caller:auth.auth_id
-                      ~author:auth.auth_name ~from_hash ~to_hash
-                    >>= fun (code, out) -> j_ok ~code out
-                | _ -> j_err "missing \"from_hash\" or \"to_hash\"")))
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match (get_string_opt j "from_hash", get_string_opt j "to_hash") with
+                  | Some from_hash, Some to_hash ->
+                      Midden_eval.verify_lens_total pool ~caller:auth.auth_id
+                        ~author:auth.auth_name ~from_hash ~to_hash
+                      >>= fun (code, out) -> j_ok ~code out
+                  | _ -> j_err "missing \"from_hash\" or \"to_hash\"")))
         ; Web.post "/api/midden/verify/projection" (with_auth pool (fun auth req ->
-            body_json req >>= function
-            | Error msg -> j_err msg
-            | Ok j -> (
-                match get_string_opt j "projection" with
-                | None -> j_err "missing \"projection\""
-                | Some projection_name ->
-                    Midden_eval.verify_projection pool ~caller:auth.auth_id
-                      ~author:auth.auth_name ~projection_name
-                    >>= fun (code, out) -> j_ok ~code out)))
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match get_string_opt j "projection" with
+                  | None -> j_err "missing \"projection\""
+                  | Some projection_name ->
+                      Midden_eval.verify_projection pool ~caller:auth.auth_id
+                        ~author:auth.auth_name ~projection_name
+                      >>= fun (code, out) -> j_ok ~code out)))
         ; Web.get "/api/midden/claims" (with_auth pool (fun _ req ->
             let kind = Web.query req "kind" in
             Midden_eval.list_claims pool ?kind () >>= fun (code, out) -> j_ok ~code out)) ]

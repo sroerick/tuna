@@ -765,15 +765,17 @@ let value_put p ~hash ~ternary =
   put_tree_value_blob p ~hash ~bytes
 
 let value_fetch p hash =
+  (* Kind-blind CAS lookup (byte-values.borg Law 5 / midden/borg/log.borg):
+     no first-write kind suppression — any midden_values row whose bytes
+     decode as canonical Base-243 Tpack is returned as its canonical ternary. *)
   Db.q ~params:[ p_str hash ] p
-    "SELECT bytes, kind FROM midden_values WHERE hash = $1"
+    "SELECT bytes FROM midden_values WHERE hash = $1"
   >>= function
   | [] -> Direct.return None
-  | [ r ] ->
-      let kind = text r 1 "midden_values.kind" in
-      if kind = "program" then
-        Direct.return (Some (ternary_of_tpack (binary r 0 "midden_values.bytes")))
-      else Direct.return None
+  | [ r ] -> (
+      match Tuna.Tpack.decode (binary r 0 "midden_values.bytes") with
+      | Ok tree -> Direct.return (Some (Tuna.Canon.encode tree))
+      | Error _ -> Direct.return None)
   | _ -> store_error "midden_values: multiple rows for hash %s" hash
 
 let byte_hash = Tuna.Hash.hex_of_string
@@ -1138,15 +1140,29 @@ let max_ternary_of kvs =
   | Some (`Int n) -> Some n
   | _ -> None
 
-let scope_narrower ~label parent child =
+(* Strict scope narrowing for schema/projection: a None parent authorizes
+   NO schema or projection (just as a NULL path_prefix authorizes no path),
+   so (None, Some _) is widening and must be rejected. *)
+let scope_narrower_strict ~label parent child =
   match (parent, child) with
   | None, None -> Ok ()
-  | None, Some _ -> Ok ()
+  | None, Some _ ->
+      Error (Printf.sprintf "a NULL-%s parent authorizes no %s scope" label label)
   | Some p, Some c when String.equal p c -> Ok ()
   | Some p, Some c ->
       Error (Printf.sprintf "%s %S does not match parent %S" label c p)
   | Some _, None ->
       Error (Printf.sprintf "dropping %s widens the parent" label)
+
+(* Namespace narrowing: None means any namespace, so (None, Some _) narrows. *)
+let namespace_narrower parent child =
+  match (parent, child) with
+  | None, None | None, Some _ -> Ok ()
+  | Some p, Some c when String.equal p c -> Ok ()
+  | Some p, Some c ->
+      Error (Printf.sprintf "scope_namespace %S does not match parent %S" c p)
+  | Some _, None ->
+      Error "dropping scope_namespace widens the parent"
 
 let attenuation_narrower ~prim ~args_attenuation ~path_prefix
     ?(scope_schema = None) ?(scope_namespace = None) ?(scope_projection = None)
@@ -1197,13 +1213,13 @@ let attenuation_narrower ~prim ~args_attenuation ~path_prefix
             match path_res with
             | Error e -> Error e
             | Ok () -> (
-                match scope_narrower ~label:"scope_schema" parent.g_scope_schema scope_schema with
+                match scope_narrower_strict ~label:"scope_schema" parent.g_scope_schema scope_schema with
                 | Error e -> Error e
                 | Ok () -> (
-                    match scope_narrower ~label:"scope_namespace" parent.g_scope_namespace scope_namespace with
+                    match namespace_narrower parent.g_scope_namespace scope_namespace with
                     | Error e -> Error e
                     | Ok () ->
-                        scope_narrower ~label:"scope_projection" parent.g_scope_projection scope_projection))))
+                        scope_narrower_strict ~label:"scope_projection" parent.g_scope_projection scope_projection))))
 
 let attenuate_grant p ~parent_id ~prim ~args_attenuation ~path_prefix
     ?(scope_schema = None) ?(scope_namespace = None) ?(scope_projection = None)
@@ -1819,6 +1835,61 @@ let has_covering_grant p caller path =
       seek rows)
     (fun e ->
       Printf.eprintf "[tuna] probe has_covering_grant failed: %s\n%!"
+        (Printexc.to_string e);
+      Direct.return false)
+
+let has_covering_midden_grant p caller ~scope_schema ~scope_namespace
+    ~scope_projection =
+  Direct.catch
+    (fun () ->
+      Db.q ~params:[ p_str caller ] p
+        "SELECT scope_schema, scope_namespace, scope_projection, \
+         parent_grant::text FROM grants \
+         WHERE caller = $1::uuid AND revoked_at IS NULL \
+           AND (prim = '*' OR prim LIKE 'midden/%')"
+      >>= fun rows ->
+      let rec seek = function
+        | [] -> Direct.return false
+        | r :: rest -> (
+            let gs = opt_text r 0
+            and gn = opt_text r 1
+            and gp = opt_text r 2
+            and parent = opt_text r 3 in
+            let ns_ok =
+              match (gn, scope_namespace) with
+              | None, _ -> true
+              | Some a, Some b -> String.equal a b
+              | Some _, None -> false
+            in
+            let schema_ok =
+              match (gs, scope_schema) with
+              | _, None -> true
+              | Some a, Some b -> String.equal a b
+              | None, Some _ -> false
+            in
+            let proj_ok =
+              match (gp, scope_projection) with
+              | _, None -> true
+              | Some a, Some b -> String.equal a b
+              | None, Some _ -> (
+                  (* A schema grant covers projections over that schema when
+                     the requested scope_schema matches gs. *)
+                  match (gs, scope_schema) with
+                  | Some a, Some b -> String.equal a b
+                  | _ -> false)
+            in
+            let target_claimed =
+              scope_schema <> None || scope_projection <> None
+            in
+            if target_claimed && ns_ok && schema_ok && proj_ok then (
+              match parent with
+              | None -> Direct.return true
+              | Some pid -> lineage_live p ~max_hops:64 pid)
+            else seek rest)
+      in
+      seek rows)
+    (fun e ->
+      Printf.eprintf "[tuna] probe has_covering_midden_grant failed: %s\n%!"
         (Printexc.to_string e);
       Direct.return false)
 
