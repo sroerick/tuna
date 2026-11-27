@@ -258,7 +258,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
     | [] -> return ()
     | t :: rest ->
         let ternary = Tuna.Canon.encode t in
-        let hash = Tuna.Hash.hex_of_string ternary in
+        let hash = Tuna.Hash.hex_of_tree t in
         S.upsert_program pool ~hash ~ternary ~ir:None
           ~created_by:(Some caller) ~source:None
         >>= fun _ -> store_inputs rest
@@ -297,6 +297,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
        row below; effects are journaled by the handlers themselves. *)
     let tree_op = Tree_prims.op_of_name name in
     let value_op = Value_prims.op_of_name name in
+    let is_midden = Midden_prims.exists name in
     let op_path =
       match tree_op with
       | Some _ -> Tree_prims.op_path_of_args args
@@ -346,7 +347,40 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
                    (Printf.sprintf "grant denial: no live grant for prim %s" name)
                , None
                 , Some args_ternary )
-           | Some (gid, attenuation) -> (
+           | Some (gid, attenuation) ->
+             if is_midden then (
+               let scope = Midden_prims.grant_scope pool name args in
+               let schema, projection =
+                 match scope with Some (s, p) -> (s, p) | None -> (None, None)
+               in
+               S.check_midden_grant pool ~id:gid ~caller ?schema ?projection ()
+               >>= function
+               | `Ok ->
+                   if attenuation_ok attenuation args_ternary then
+                     Midden_prims.dispatch ~pool ~actor:caller ~name ~args
+                     >>= fun a -> return (a, Some gid, Some args_ternary)
+                   else
+                     (note_denial ();
+                      return
+                        ( `Error
+                            (Printf.sprintf
+                               "grant denial: prim %s args exceed attenuation" name)
+                        , Some gid
+                        , Some args_ternary ))
+               | (`Revoked | `Wrong_caller | `Unknown | `Scope_denied) as denial ->
+                   note_denial ();
+                   return
+                     ( `Error
+                         (Printf.sprintf "grant denial (%s) for prim %s"
+                            (match denial with
+                             | `Revoked -> "revoked"
+                             | `Wrong_caller -> "wrong caller"
+                             | `Unknown -> "unknown"
+                             | `Scope_denied -> "target outside grant scope")
+                            name)
+                     , Some gid
+                     , Some args_ternary ))
+             else (
              S.check_grant pool ~id:gid ~caller ~paths:grant_paths ()
              >>= function
              | `Ok ->
@@ -428,7 +462,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
        | [] -> return ()
        | (fh, ah, rt) :: rest ->
            S.demand_memo_put pool ~caller ~fun_hash:fh ~arg_hash:ah
-             ~result_hash:(Tuna.Hash.hex_of_string rt) ~result_ternary:rt
+             ~result_hash:(Tuna.Hash.hex_of_trits rt) ~result_ternary:rt
            >>= fun () -> put rest
      in
      put clean

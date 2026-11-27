@@ -169,9 +169,9 @@ let eval_run st (cfg : config) ?(tags = []) ~program inputs : evaluated =
     let row0 =
       { D.Journal.j_seq = !seq; j_callsite_path = site_path site; j_prim = name;
         j_prim_contract = P.contract; j_grant_id = gid; j_args_ternary = args_inline;
-        j_args_hash = Option.map Tuna.Hash.hex_of_string args_inline;
+        j_args_hash = Option.map Tuna.Hash.hex_of_trits args_inline;
         j_result_ternary = result_ternary;
-        j_result_hash = Option.map Tuna.Hash.hex_of_string result_ternary;
+        j_result_hash = Option.map Tuna.Hash.hex_of_trits result_ternary;
         j_error = (match answer with `Ok _ -> None | `Error e -> Some e);
         j_wall_ms = Some (int_of_float ((Unix.gettimeofday () -. t0) *. 1000.));
         j_host_build = "tuna-local"; j_prev_hash = !prev; j_row_hash = "" }
@@ -201,11 +201,11 @@ let execute st (cfg : config) ?(tags = []) ?parent_run_id ~program inputs : run 
   let input_ternaries = List.map Tuna.Canon.encode inputs in
   let record =
     D.build ~run_id:e.ev_run_id ~semantics:cfg.semantics
-      ~program_hash:(Tuna.Hash.hex_of_string program_ternary) ~program_ternary
-      ~input_hashes:(List.map Tuna.Hash.hex_of_string input_ternaries)
+      ~program_hash:(Tuna.Hash.hex_of_tree program) ~program_ternary
+      ~input_hashes:(List.map Tuna.Hash.hex_of_tree inputs)
       ~input_ternaries ~fuel:cfg.fuel ~size_cap:cfg.size_cap ~status:e.ev_status
       ~result_ternary:e.ev_result_ternary
-      ~result_hash:(Option.map Tuna.Hash.hex_of_string e.ev_result_ternary)
+      ~result_hash:(Option.map Tuna.Hash.hex_of_trits e.ev_result_ternary)
       ~step_count:e.ev_steps ~parent_run_id ~journal:e.ev_journal
   in
   (* seal: the record's bytes by hash, cited from the op log *)

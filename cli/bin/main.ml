@@ -152,8 +152,8 @@ let compile_std src =
 let compile_cmd path =
   let art, lock = compile_std (read_file path) in
   Printf.printf
-    "hash %s\nternary %s\nsize %d\nsteps %d\n"
-    art.hash_hex art.ternary
+    "hash %s\ntrihex 0t%s\nternary %s\nsize %d\nsteps %d\n"
+    art.hash_hex (Tuna.Trihex.encode art.tree) art.ternary
     (Tuna.Tree.size art.tree) art.steps;
   List.iter (fun (n, h) -> Printf.printf "lock %s %s\n" n h) lock
 
@@ -202,10 +202,17 @@ let parse_run_flags argv first =
   (!fuel, !cap, !mode, !accel, List.rev !ins, !out, List.rev !rest)
 
 let eval_compiled_cmd argv off =
-  (* argv.(off) = program ternary, then args and run flags *)
+  (* argv.(off) = program ternary or 0t<trihex>, then args and run flags *)
   let fuel, cap, mode, accel, ins, out, rest = parse_run_flags argv (off + 1) in
+  let parse_arg s =
+    match Tuna.Canon.parse_any s with
+    | Ok p -> p
+    | Error (off', msg) ->
+        prerr_endline (Printf.sprintf "tree parse error at %d: %s" off' msg);
+        exit 2
+  in
   let program =
-    match Tuna.Canon.of_string argv.(off) with
+    match Tuna.Canon.parse_any argv.(off) with
     | Ok p -> p
     | Error (off', msg) ->
         prerr_endline (Printf.sprintf "program parse error at %d: %s" off' msg);
@@ -213,7 +220,7 @@ let eval_compiled_cmd argv off =
   in
   let args =
     match ins with
-    | [] -> List.map Tuna.Canon.parse rest
+    | [] -> List.map parse_arg rest
     | _ -> fst (run_inputs rest ins)
   in
   let result =
@@ -310,8 +317,7 @@ let run_cmd argv off =
   Printf.printf "%s %s %d\n" (D.status_to_string d.D.d_status)
     (Option.value d.D.d_result_ternary ~default:"-") d.D.d_step_count;
   Printf.printf "record %s\n"
-    (Filename.concat (Filename.concat st.Tuna_local.Local_store.root "bytes")
-       r.Tuna_local.Local_run.record_hash);
+    (Tuna_local.Local_store.value_path st r.Tuna_local.Local_run.record_hash);
   exit 0
 
 (* tuna repl: one round per stdin line against the local store.  A

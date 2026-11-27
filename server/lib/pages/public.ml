@@ -252,6 +252,10 @@ let prim_blurb = function
   | "math/mul" -> "law-5 integer multiply"
   | "math/cmp" -> "law-5 integer compare"
   | "math/neg" -> "law-5 integer negate"
+  | "midden/get" -> "read a typed Midden entity (returns head + dialect v1.1 record)"
+  | "midden/put" -> "write a typed Midden entity with optimistic prev-head CAS"
+  | "midden/delete" -> "tombstone-delete a Midden entity (preserving history)"
+  | "midden/query" -> "indexed, filtered, paged read over a Midden declarative projection"
   | _ -> "registered prim"
 
 let prims _pool _user _req =

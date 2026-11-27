@@ -551,6 +551,20 @@ let parse ?(dictionary : (string * Tuna.Tree.t) list = [])
                 in
                 let sp : Ir.span = { off; len = String.length a } in
                 Tree_lit ({ id = fresh (); span = sp; tree = nat n Tuna.Tree.Leaf })
+              else if
+                String.length a >= 2 && a.[0] = '0' && a.[1] = 't'
+              then
+                let body = String.sub a 2 (String.length a - 2) in
+                (match Tuna.Trihex.decode body with
+                 | Ok tree ->
+                     let sp : Ir.span = { off; len = String.length a } in
+                     Tree_lit ({ id = fresh (); span = sp; tree })
+                 | Error (o, msg) ->
+                     raise
+                       (Ir.Error
+                          ([],
+                           Printf.sprintf "bad trihex literal at offset %d: %s"
+                             (off + 2 + o) msg)))
               else if is_var_atom a then resolve_atom scope off a
               else if String.index_opt a '@' |> Option.fold ~none:false ~some:(fun i -> i > 0)
               then resolve_pinned scope off a

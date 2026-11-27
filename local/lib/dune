@@ -1,7 +1,8 @@
-; local chapter (borg/local.borg): the local directory store, the local
-; REPL rounds (L2) and the local run host (L3).  No database, no server.
+; local chapter (borg/local.borg): the local directory store backed by
+; Midden_local, the local REPL rounds (L2) and the local run host (L3).
+; No database, no server.
 (library
  (name tuna_local)
  (modules local_store local_repl local_run local_fed)
  (libraries tuna tuna_interp tuna_compiler tuna_repl tuna_stdlib tuna_prims tuna_deriv
-   yojson base64 unix))
+   midden midden.local yojson base64 unix))

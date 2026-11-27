@@ -13,29 +13,29 @@
 (lambda (obs)
   (lambda (skip-allowed)
     (let
-      ((gate (rec-val@1132bbd758d1 #1 obs))
-       (tree-clean (rec-val@1132bbd758d1 #5 obs))
-       (diff-hash (rec-val@1132bbd758d1 #6 obs))
-       (exit-status (rec-val@1132bbd758d1 #7 obs))
-       (counts (rec-val@1132bbd758d1 #9 obs)))
+      ((gate (rec-val@ee621cc3fc56 #1 obs))
+       (tree-clean (rec-val@ee621cc3fc56 #5 obs))
+       (diff-hash (rec-val@ee621cc3fc56 #6 obs))
+       (exit-status (rec-val@ee621cc3fc56 #7 obs))
+       (counts (rec-val@ee621cc3fc56 #9 obs)))
       (let
-        ((parsed (is-fork@d2de9f7505ed counts))
-         (run (first@3e53024bd13e counts))
-         (failed (first@3e53024bd13e (second@6b30f5d88a98 (second@6b30f5d88a98 counts))))
-         (skipped (first@3e53024bd13e (second@6b30f5d88a98 (second@6b30f5d88a98 (second@6b30f5d88a98 counts)))))
+        ((parsed (is-fork@47ae0411eabb counts))
+         (run (first@a39abbda611d counts))
+         (failed (first@a39abbda611d (second@5f8ec503a876 (second@5f8ec503a876 counts))))
+         (skipped (first@a39abbda611d (second@5f8ec503a876 (second@5f8ec503a876 (second@5f8ec503a876 counts)))))
          (skip-member
-           (list-fold@3a4225df7bd3
-             (lambda (slug) (lambda (acc) (bool-or@a07a9d92cbaa (tree-eq@fd549d45e1e2 slug gate) acc)))
+           (list-fold@46968fedc294
+             (lambda (slug) (lambda (acc) (bool-or@1c807b3af127 (tree-eq@b5f7c54b1358 slug gate) acc)))
              %0
              skip-allowed)))
         ;; the chapter's v1 policy, top to bottom: first match wins.
         ;; cond leans on the dictionary's if, which a cond form cannot pin:
         ;; it is the one unpinned name, and the compile's lock reports it.
         (cond
-          ((not@1f6cae19aff4 (tree-eq@fd549d45e1e2 exit-status %200)) %110)
-          ((not@1f6cae19aff4 parsed) %1110)
-          ((tree-eq@fd549d45e1e2 run %200) %1110)
-          ((not@1f6cae19aff4 (tree-eq@fd549d45e1e2 failed %200)) %110)
-          ((bool-and@2adfdbefa180 (not@1f6cae19aff4 (tree-eq@fd549d45e1e2 skipped %200)) (not@1f6cae19aff4 skip-member)) %1110)
-          ((bool-and@2adfdbefa180 (tree-eq@fd549d45e1e2 tree-clean %200) (is-leaf@aff47bf318ed diff-hash)) %1110)
+          ((not@336e50127a42 (tree-eq@b5f7c54b1358 exit-status %200)) %110)
+          ((not@336e50127a42 parsed) %1110)
+          ((tree-eq@b5f7c54b1358 run %200) %1110)
+          ((not@336e50127a42 (tree-eq@b5f7c54b1358 failed %200)) %110)
+          ((bool-and@42812bbc6b1b (not@336e50127a42 (tree-eq@b5f7c54b1358 skipped %200)) (not@336e50127a42 skip-member)) %1110)
+          ((bool-and@42812bbc6b1b (tree-eq@b5f7c54b1358 tree-clean %200) (is-leaf@17ba206e31b9 diff-hash)) %1110)
           (else %10))))))

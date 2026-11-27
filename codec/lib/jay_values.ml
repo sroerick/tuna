@@ -87,4 +87,4 @@ let checker_ternary =
      | Some t -> t
      | None -> failwith "Jay_values: no checker.O_bin in Jay_trees")
 
-let checker_hash = lazy (Tuna.Hash.hex_of_string (Lazy.force checker_ternary))
+let checker_hash = lazy (Tuna.Hash.hex_of_trits (Lazy.force checker_ternary))

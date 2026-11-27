@@ -26,8 +26,15 @@
          raised error, matching v1 prim conventions.
       4. TERNARY STAYS CODE-ONLY. No tree-language string encoding
          grows to smuggle text: a template or document is a byte value
-         referenced by hash. The unary-bloat thesis is falsified the
-         first time a byte form is larger than its tree-encoded twin. |))))
+         (or, under Midden, a canonical csexp document) referenced by
+         hash. The unary-bloat thesis is falsified the first time a
+         byte form is larger than its tree-encoded twin.
+      5. UNIFIED CAS (amendment 2026-11-27). With Base-243 packed tree
+         bytes (5 trits/byte) and Midden's kind-blind CAS
+         (midden_values(hash, bytes)), trees, csexp documents, schemas,
+         and raw byte blobs all live in one content-addressed byte store
+         under sha256(exact_stored_bytes). Readers interpret by schema
+         or requested kind (tree vs bytes) without coalescing semantics. |))))
   (subsection surface
    (status implemented)
    (details

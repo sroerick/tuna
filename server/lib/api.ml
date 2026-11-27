@@ -365,8 +365,8 @@ let post_program pool auth req =
       | Some t, _ -> (
           match parse_ternary t with
           | Error msg ->  (j_err msg)
-          | Ok _tree ->
-              let hash = Tuna.Hash.hex_of_string t in
+          | Ok tree ->
+              let hash = Tuna.Hash.hex_of_tree tree in
               Store.upsert_program pool ~hash ~ternary:t ~ir:None ~created_by
                 ~source:None
               >>= fun _row ->
@@ -1305,6 +1305,15 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                  prefixes such as "d" included - is refused, so a prim run can
                  never rewrite a dictionary; only def/undef rounds (and, under
                  ns/<peer>/, fed apply) write there. *)
+              let scope_schema = get_string_opt j "scope_schema" in
+              let scope_namespace = get_string_opt j "scope_namespace" in
+              let scope_projection = get_string_opt j "scope_projection" in
+              let claims_midden =
+                Prims.midden_addressed prim
+                || scope_schema <> None
+                || scope_namespace <> None
+                || scope_projection <> None
+              in
               if Prims.path_addressed prim && Tree_prims.reaches_dict path_prefix
               then
                 err
@@ -1320,6 +1329,16 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                   (Printf.sprintf
                      "%s addresses tree paths: supply \"path_prefix\" inside \
                       your own authority" prim)
+              else if
+                (not auth.auth_is_admin)
+                && Prims.midden_addressed prim
+                && scope_schema = None
+                && scope_projection = None
+              then
+                err
+                  (Printf.sprintf
+                     "%s addresses Midden state: supply \"scope_schema\" or \
+                      \"scope_projection\" inside your own authority" prim)
               else
                 let on_behalf = get_string_opt j "identity" in
                 (match on_behalf with
@@ -1333,14 +1352,13 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                       | Error m -> err ~code:404 m
                       | Ok caller -> (
                           (* the tenancy rule: scope can only be NARROWED,
-                             never created.  Any claimed prefix must sit
-                             inside a prefix the caller already covers, and
-                             a NULL row provides none; an admin (the
-                             operator) is unrestricted. *)
+                             never created.  Any claimed prefix or Midden scope
+                             must sit inside authority the caller already covers;
+                             an admin (the operator) is unrestricted. *)
                           (if auth.auth_is_admin then return true
                            else
                              match path_prefix with
-                             | None -> return true (* pathless: no scope claimed *)
+                             | None -> return true (* pathless: no tree scope claimed *)
                              | Some pfx -> Store.has_covering_grant pool caller pfx)
                           >>= function
                           | false ->
@@ -1350,21 +1368,37 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                                     authority"
                                    (Option.value path_prefix ~default:""))
                           | true -> (
-                              Store.mint_grant pool ~prim
-                                ~args_attenuation:attenuation
-                                ~path_prefix:path_prefix ~caller
-                                ~minted_by:(Some auth.auth_id) ()
-                              >>= fun g ->
-                              return
-                                ( 201
-                                , `Assoc
-                                    [ ("id", `String g.Store.g_id)
-                                    ; ("prim", `String g.Store.g_prim)
-                                    ; ("path_prefix", opt_str g.Store.g_path_prefix)
-                                    ; ("caller", `String g.Store.g_caller)
-                                    ; ( "args_attenuation"
-                                      , `String g.Store.g_args_attenuation )
-                                    ] ))))))
+                              (if auth.auth_is_admin || not claims_midden then
+                                 return true
+                               else
+                                 Store.has_covering_midden_grant pool caller
+                                   ~prim ~scope_schema ~scope_namespace
+                                   ~scope_projection)
+                              >>= function
+                              | false ->
+                                  err ~code:403
+                                    "midden scope is outside the caller's authority"
+                              | true ->
+                                  Store.mint_grant pool ~prim
+                                    ~args_attenuation:attenuation
+                                    ~path_prefix:path_prefix
+                                    ~scope_schema ~scope_namespace ~scope_projection
+                                    ~caller
+                                    ~minted_by:(Some auth.auth_id) ()
+                                  >>= fun g ->
+                                  return
+                                    ( 201
+                                    , `Assoc
+                                        [ ("id", `String g.Store.g_id)
+                                        ; ("prim", `String g.Store.g_prim)
+                                        ; ("path_prefix", opt_str g.Store.g_path_prefix)
+                                        ; ("scope_schema", opt_str g.Store.g_scope_schema)
+                                        ; ("scope_namespace", opt_str g.Store.g_scope_namespace)
+                                        ; ("scope_projection", opt_str g.Store.g_scope_projection)
+                                        ; ("caller", `String g.Store.g_caller)
+                                        ; ( "args_attenuation"
+                                          , `String g.Store.g_args_attenuation )
+                                        ] ))))))
 
 let post_grant pool auth req =
   body_json req >>= function
@@ -1679,8 +1713,25 @@ let attenuate_grant pool auth req =
                       Option.value attenuation
                         ~default:parent.Store.g_args_attenuation
                     in
+                    let opt_field k default =
+                      match member_opt k j with
+                      | None -> default
+                      | Some `Null -> None
+                      | Some (`String s) -> Some s
+                      | Some _ -> default
+                    in
+                    let scope_schema =
+                      opt_field "scope_schema" parent.Store.g_scope_schema
+                    in
+                    let scope_namespace =
+                      opt_field "scope_namespace" parent.Store.g_scope_namespace
+                    in
+                    let scope_projection =
+                      opt_field "scope_projection" parent.Store.g_scope_projection
+                    in
                     Store.attenuate_grant pool ~parent_id ~prim
                       ~args_attenuation:attenuation ~path_prefix
+                      ~scope_schema ~scope_namespace ~scope_projection
                       ~caller:auth.auth_id ()
                     >>= function
                     | `Ok g ->
@@ -1907,7 +1958,7 @@ let post_tree_put pool auth req =
           | Ok path -> (
               match parse_ternary value_ternary with
               | Error msg -> (j_err ("value_ternary: " ^ msg))
-              | Ok _value ->
+              | Ok value ->
                     tree_allowed pool auth path
                     >>= function
                     | false -> deny_tree pool auth ~op:"put" ~path
@@ -1915,7 +1966,7 @@ let post_tree_put pool auth req =
                   if String.length value_ternary > Prims.payload_cap then
                     (j_err "value exceeds the journal payload cap")
                   else
-                    let hash = Tuna.Hash.hex_of_string value_ternary in
+                    let hash = Tuna.Hash.hex_of_tree value in
                     Store.value_put pool ~hash ~ternary:value_ternary
                     >>= fun () ->
                     tree_put_write pool auth ~path ~hash
@@ -2112,7 +2163,7 @@ let value_put_kind pool ~(auth : auth) ~kind : (int * J.t) =
                  [ ("hash", `String hash); ("len", `Int len)
                  ; ("kind", `String "bytes") ])
         | `Tree t ->
-            let hash = Tuna.Hash.hex_of_string t in
+            let hash = Tuna.Hash.hex_of_trits t in
             Store.value_put pool ~hash ~ternary:t
             >>= fun () ->
             journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:hash
@@ -2496,15 +2547,22 @@ let fed_apply_core pool ~(auth : auth) (j : J.t) =
                    , Printf.sprintf "value %s exceeds the value cap" hash ))
             else
               let hash = Tuna.Hash.normalize_hex hash in
-              let got = Tuna.Hash.hex_of_string payload in
-              if got <> hash then
-                return
-                  (Error
-                     ( 400
-                     , Printf.sprintf "value %s does not rehash" hash ))
-              else
-                Store.value_put pool ~hash ~ternary:payload
-                >>= fun () -> return (Ok ()))
+              (match Tuna.Tpack.of_trits payload with
+               | Error _ ->
+                   return
+                     (Error
+                        ( 400
+                        , Printf.sprintf "value %s is not canonical ternary" hash ))
+               | Ok packed ->
+                   let got = Tuna.Hash.hex_of_tpack packed in
+                   if got <> hash then
+                     return
+                       (Error
+                          ( 400
+                          , Printf.sprintf "value %s does not rehash" hash ))
+                   else
+                     Store.value_put pool ~hash ~ternary:payload
+                     >>= fun () -> return (Ok ())))
         | Some hash, Some "bytes", Some payload -> (
             if String.length payload > Store.value_max_bytes () then
               return
@@ -2649,6 +2707,229 @@ let post_fed_ops_apply pool auth req =
   | Ok j ->
       guard (fun () ->
     (fed_apply_core pool ~auth j >>= fun (code, body) -> j_ok ~code body))
+
+(* -- Phase 4: Midden-native peer commit-window sync ------------------- *)
+
+let csexp_doc_field bytes field_name =
+  match Midden.Csexp.decode bytes with
+  | Ok (Midden.Csexp.List pairs) ->
+      List.find_map
+        (function
+          | Midden.Csexp.List [ Midden.Csexp.Atom k; Midden.Csexp.Atom v ]
+            when String.equal k field_name -> Some v
+          | _ -> None)
+        pairs
+  | _ -> None
+
+let fed_midden_commits_core pool ~(auth : auth) ~namespace ~after_seq ~limit =
+  Tuna_store.Tuna_schemas.ensure_all pool;
+  let limit = max 1 (min limit 5000) in
+  let m = Db.midden pool in
+  match Midden_store.Store.commits_window m ~namespace ~after_seq ~limit () with
+  | Error e ->
+      return (500, `Assoc [ ("error", `String (Midden_store.Store.string_of_error e)) ])
+  | Ok rows ->
+      let more = List.length rows >= limit in
+      let last_seq =
+        match List.rev rows with
+        | [] -> after_seq
+        | r :: _ -> r.Midden_store.Store.commit.seq
+      in
+      Store.dict_visibility_public pool >>= fun public_dicts ->
+      Store.is_admin pool auth.auth_id >>= fun caller_admin ->
+      let can_see_id id =
+        caller_admin || id = auth.auth_name || id = auth.auth_id
+        || List.mem id public_dicts
+      in
+      let visible (r : Midden_store.Store.commit_window_row) =
+        (* Default-deny for non-admins: only explicitly public or caller-owned
+           federation schemas are exposed; private state (messages, retention
+           policies, sessions, tree_compat, todos, cron tables) is admin-only. *)
+        let c = r.commit in
+        if caller_admin then true
+        else
+          match (c.schema, r.doc_bytes) with
+          | Some sh, Some b when String.equal sh Tuna_store.Tuna_schemas.def_hash ->
+              let id_name = Option.value (csexp_doc_field b "identity-name") ~default:"" in
+              let id_id = Option.value (csexp_doc_field b "identity-id") ~default:"" in
+              can_see_id id_name || can_see_id id_id
+          | Some sh, None when String.equal sh Tuna_store.Tuna_schemas.def_hash ->
+              can_see_id c.author
+          | Some sh, Some _ when String.equal sh Tuna_store.Tuna_schemas.def_visibility_hash ->
+              true
+          | Some sh, Some b when String.equal sh Tuna_store.Tuna_schemas.op_audit_hash -> (
+              match Option.bind (csexp_doc_field b "path") Store.dict_path_identity with
+              | None -> true
+              | Some id -> can_see_id id)
+          | Some sh, Some _ when String.equal sh Tuna_store.Tuna_schemas.claim_hash ->
+              true
+          | None, _ -> can_see_id c.author
+          | _ -> false
+      in
+      let opt_s = function Some s -> `String s | None -> `Null in
+      let opt_b64 = function
+        | Some b -> `String (Base64.encode_string b)
+        | None -> `Null
+      in
+      let commits_json =
+        List.filter visible rows
+        |> List.map (fun (r : Midden_store.Store.commit_window_row) ->
+               let c = r.commit in
+               `Assoc
+                 [ ("seq", `Int c.seq);
+                   ("entity", `String c.entity);
+                   ("prev", opt_s c.prev);
+                   ("head", opt_s c.head);
+                   ("schema", opt_s c.schema);
+                   ("author", `String c.author);
+                   ("actor", opt_s c.actor);
+                   ("reason", opt_s c.reason);
+                   ("tx", `String c.tx);
+                   ("at", `String c.at);
+                   ("chain", `String c.chain);
+                   ("prev_chain", opt_s r.prev_chain);
+                   ("schema_b64", opt_b64 r.schema_bytes);
+                   ("doc_b64", opt_b64 r.doc_bytes) ])
+      in
+      return
+        ( 200,
+          `Assoc
+            [ ("namespace", `String namespace);
+              ("after_seq", `Int after_seq);
+              ("last_seq", `Int last_seq);
+              ("limit", `Int limit);
+              ("more", `Bool more);
+              ("commits", `List commits_json) ] )
+
+let get_fed_midden_commits pool auth req =
+  let namespace = Option.value (Web.query req "namespace") ~default:"local" in
+  let after_seq =
+    match Web.query req "after_seq" with
+    | Some s -> (match int_of_string_opt s with Some v when v >= 0 -> v | _ -> 0)
+    | None -> 0
+  in
+  let limit =
+    match Web.query req "limit" with
+    | Some s -> (match int_of_string_opt s with Some v -> v | None -> 1000)
+    | None -> 1000
+  in
+  guard (fun () ->
+      fed_midden_commits_core pool ~auth ~namespace ~after_seq ~limit
+      >>= fun (code, body) -> j_ok ~code body)
+
+let fed_midden_apply_core pool ~(auth : auth) (j : J.t) =
+  Tuna_store.Tuna_schemas.ensure_all pool;
+  let peer = Option.value (get_string_opt j "peer") ~default:"" in
+  let commits_list =
+    match member_opt "commits" j with Some (`List l) -> l | _ -> []
+  in
+  if not (fed_peer_name_ok peer) then
+    return (400, `Assoc [ ("error", `String "invalid peer name") ])
+  else
+    let allowed =
+      auth.auth_is_admin
+      ||
+      match fed_peer_of_name auth.auth_name with
+      | Some p -> String.equal p peer
+      | None -> false
+    in
+    if not allowed then
+      return
+        ( 403,
+          `Assoc
+            [ ("error",
+               `String
+                 (Printf.sprintf "identity %s may not write Midden namespace ns/%s"
+                    auth.auth_name peer)) ] )
+    else
+      let cap = Store.value_max_bytes () in
+      let decode_opt_b64 label j k =
+        match get_string_opt j k with
+        | None -> Ok None
+        | Some b64 -> (
+            if String.length b64 > cap * 2 then
+              Error (413, Printf.sprintf "%s exceeds value cap" label)
+            else
+              match Base64.decode b64 with
+              | Error _ -> Error (400, label ^ " is not valid base64")
+              | Ok b when String.length b > cap ->
+                  Error (413, Printf.sprintf "%s exceeds value cap" label)
+              | Ok b -> Ok (Some b))
+      in
+      let parse_commit cj =
+        let int_opt k =
+          match member_opt k cj with Some (`Int n) -> Some n | _ -> None
+        in
+        match
+          ( int_opt "seq",
+            get_string_opt cj "entity",
+            get_string_opt cj "author",
+            get_string_opt cj "tx",
+            get_string_opt cj "at",
+            get_string_opt cj "chain" )
+        with
+        | Some seq, Some entity, Some author, Some tx, Some at, Some chain -> (
+            match decode_opt_b64 "schema_b64" cj "schema_b64" with
+            | Error e -> Error e
+            | Ok schema_bytes -> (
+                match decode_opt_b64 "doc_b64" cj "doc_b64" with
+                | Error e -> Error e
+                | Ok doc_bytes ->
+                    let commit : Midden.Log_commits.t =
+                      { seq;
+                        entity;
+                        prev = get_string_opt cj "prev";
+                        head = get_string_opt cj "head";
+                        schema = get_string_opt cj "schema";
+                        author;
+                        actor = get_string_opt cj "actor";
+                        reason = get_string_opt cj "reason";
+                        tx;
+                        at;
+                        chain }
+                    in
+                    Ok
+                      { Midden_store.Store.commit;
+                        prev_chain = get_string_opt cj "prev_chain";
+                        schema_bytes;
+                        doc_bytes }))
+        | _ ->
+            Error
+              ( 400,
+                "commit requires seq, entity, author, tx, at, chain" )
+      in
+      let rec parse_all acc = function
+        | [] -> Ok (List.rev acc)
+        | cj :: rest -> (
+            match parse_commit cj with
+            | Error e -> Error e
+            | Ok r -> parse_all (r :: acc) rest)
+      in
+      match parse_all [] commits_list with
+      | Error (code, msg) -> return (code, `Assoc [ ("error", `String msg) ])
+      | Ok rows -> (
+          let m = Db.midden pool in
+          match Midden_store.Store.apply_peer_window m ~peer rows with
+          | Error e ->
+              return
+                ( 400,
+                  `Assoc
+                    [ ("error", `String (Midden_store.Store.string_of_error e)) ] )
+          | Ok applied ->
+              return
+                ( 200,
+                  `Assoc
+                    [ ("ok", `Bool true);
+                      ("namespace", `String ("ns/" ^ peer));
+                      ("applied", `Int applied) ] ))
+
+let post_fed_midden_apply pool auth req =
+  body_json req >>= function
+  | Error msg -> j_err msg
+  | Ok j ->
+      guard (fun () ->
+          fed_midden_apply_core pool ~auth j >>= fun (code, body) ->
+          j_ok ~code body)
 
 
 (* -- routes (M11): the routing table as data ---------------------------
@@ -3318,6 +3599,10 @@ let api_routes pool =
       ; Web.get "/api/fed/value/:hash" (with_auth pool (get_fed_value pool))
       ; Web.get "/api/fed/ops" (with_auth pool (get_fed_ops pool))
       ; Web.post "/api/fed/ops/apply" (with_auth pool (post_fed_ops_apply pool))
+      ; Web.get "/api/fed/midden/commits"
+          (with_auth pool (get_fed_midden_commits pool))
+      ; Web.post "/api/fed/midden/apply"
+          (with_auth pool (post_fed_midden_apply pool))
       ; Web.post "/api/route/put" (with_auth pool (post_route_put pool))
       ; Web.post "/api/route/delete" (with_auth pool (post_route_delete pool))
       ; Web.get "/api/route/get" (with_auth pool (get_route_get pool))
@@ -3340,7 +3625,71 @@ let api_routes pool =
             (with_auth pool (put_retention_policy pool))
         ; Web.post "/api/admin/retention/sweep"
             (with_auth pool (post_retention_sweep pool))
-        ; Web.get "/api/retention" (with_auth pool (get_retention_policy pool)) ]
+        ; Web.get "/api/retention" (with_auth pool (get_retention_policy pool))
+        (* Midden M2 evaluator & schema/projection/claim surfaces *)
+        ; Web.get "/api/midden/schemas" (with_auth pool (fun _ _ ->
+            Midden_eval.list_schemas pool >>= fun (code, j) -> j_ok ~code j))
+        ; Web.post "/api/midden/schemas" (with_auth pool (fun auth req ->
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match get_string_opt j "form" with
+                  | None -> j_err "missing \"form\""
+                  | Some form_str ->
+                      Midden_eval.register_schema pool ~form_str
+                      >>= fun (code, out) -> j_ok ~code out)))
+        ; Web.post "/api/midden/projections" (with_auth pool (fun auth req ->
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match get_string_opt j "form" with
+                  | None -> j_err "missing \"form\""
+                  | Some form_str ->
+                      Midden_eval.define_projection pool ~form_str
+                      >>= fun (code, out) -> j_ok ~code out)))
+        ; Web.post "/api/midden/verify/well-formed" (with_auth pool (fun auth req ->
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match get_string_opt j "schema_hash" with
+                  | None -> j_err "missing \"schema_hash\""
+                  | Some schema_hash ->
+                      Midden_eval.verify_well_formed pool ~caller:auth.auth_id
+                        ~author:auth.auth_name ~schema_hash
+                      >>= fun (code, out) -> j_ok ~code out)))
+        ; Web.post "/api/midden/verify/lens-total" (with_auth pool (fun auth req ->
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match (get_string_opt j "from_hash", get_string_opt j "to_hash") with
+                  | Some from_hash, Some to_hash ->
+                      Midden_eval.verify_lens_total pool ~caller:auth.auth_id
+                        ~author:auth.auth_name ~from_hash ~to_hash
+                      >>= fun (code, out) -> j_ok ~code out
+                  | _ -> j_err "missing \"from_hash\" or \"to_hash\"")))
+        ; Web.post "/api/midden/verify/projection" (with_auth pool (fun auth req ->
+            if not auth.auth_is_admin then j_err ~code:403 "admin only"
+            else
+              body_json req >>= function
+              | Error msg -> j_err msg
+              | Ok j -> (
+                  match get_string_opt j "projection" with
+                  | None -> j_err "missing \"projection\""
+                  | Some projection_name ->
+                      Midden_eval.verify_projection pool ~caller:auth.auth_id
+                        ~author:auth.auth_name ~projection_name
+                      >>= fun (code, out) -> j_ok ~code out)))
+        ; Web.get "/api/midden/claims" (with_auth pool (fun _ req ->
+            let kind = Web.query req "kind" in
+            Midden_eval.list_claims pool ?kind () >>= fun (code, out) -> j_ok ~code out)) ]
 
 (* the public artifact directory (pp-slice T3): scripts/deploy/build-public.sh
    writes src.tgz here at boot/refresh; absent file is a plain 404 *)
@@ -3368,6 +3717,7 @@ let serve ~env ~sw ~port ~bootstrap_token =
   let cfg = Db.config_from_env () in
   Tuna_store.Pgx_eio.with_ctx (Tuna_store.Pgx_eio.Ctx.of_stdenv ~sw env) @@ fun () ->
   let pool = Db.init cfg in
+  Tuna_store.Tuna_schemas.ensure_all pool;
   let _boot =
     Store.fetch_identity_by_name pool "root"
     |> function

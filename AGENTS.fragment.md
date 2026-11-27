@@ -12,7 +12,11 @@ converge to it.
   departed — borg/rim-eio.borg); pages are server-rendered **htmx** fragments
   (`server/static/htmx.min.js` is vendored)
 - Postgres: **pure pgx over Eio.Net** (`store/lib/pgx_eio.ml`, driven under
-  the identity monad `store/lib/direct.ml`) — socket directory configured by `scripts/dev.sh`
+  the identity monad `store/lib/direct.ml`) — socket directory configured by `scripts/dev.sh`.
+  The evaluator kernel (`identities`, `grants`, `programs`, `runs`, `journals`,
+  `demand_memo`, `run_traces`, auth tables) lives in lean flat SQL; shared
+  content-addressed blobs (`midden_values`) and domain/product state live on
+  **Midden** (`midden`, `midden.store`) once the scoped Midden cutover lands.
 - JSON: **yojson**; hashing: **digestif** (sha256); tests: **alcotest**
 
 ## Build / test / run
@@ -34,10 +38,19 @@ into `schema_migrations` inside its own transaction).
 ## Domain rules (load-bearing; do not improvise)
 
 1. **Trees.** `type t = Leaf | Stem of t | Fork of t * t` — that's all.
-2. **Canonical serialization** is the ternary string format:
-   `0`=leaf, `1`+child=`stem`, `2`+left+right=`fork` (see
-   `reference/tree-calculus/implementation/python` — same encoding as
-   upstream). Hash = `sha256` of that string, lowercase hex.
+2. **Canonical serialization** (amended 2026-11-27 for Trihex/Base-243 +
+   Midden CAS unification):
+   - Pre-order Polish trits: `0`=leaf, `1`+child=`stem`, `2`+left+right=`fork`
+     (retained as `Canon.to_trits` / `Canon.of_trits` for the upstream
+     differential harness and legacy `%<012>` reader literals).
+   - **Canonical binary (`Tpack`, Base-243):** 5 trits per byte
+     (`t0*81 + t1*27 + t2*9 + t3*3 + t4`, bytes `0x00..0xF2`), zero-padded
+     in the final byte; Polish tree slot-counting makes it a headerless
+     bijection. Hash = `sha256` of those exact Base-243 bytes, lowercase
+     hex (matching Midden's universal `sha256(exact_stored_bytes)` law).
+   - **Canonical text (`Trihex`, Base-27):** 3 trits per char over
+     `0-9a-q`, same final-digit zero-padding bijection; written `0t<trihex>`
+     in Sabra/CLI alongside `%<012>`.
 3. **Reduction rules** are the olydis 2024 triage rules, exactly the
    `apply` function in `reference/tree-calculus/implementation/ocaml/lib/tree.ml`.
    Do not paraphrase — port it verbatim.
@@ -85,8 +98,8 @@ into `schema_migrations` inside its own transaction).
 common/       tree type, ternary serialize/parse, hashing, ids
 interpreter/  pure core: apply + fuel/size-bounded stepper
 compiler/     surface s-expr -> IR (with spans) -> bracket abstraction w/ eta -> tree + provenance
-store/        pgx_lwt access layer over migrations schema
-server/       Dream app: JSON API + htmx UI + REPL; bin/main.exe entry
+store/        pgx_eio kernel SQL + Midden state/product schemas
+server/       httpun_eio/gluten-eio app: JSON API + htmx UI + REPL; bin/main.exe entry
 cli/          thin terminal clients (repl, curl wrappers) if needed
 reference/    vendored upstream tree-calculus repo (normative) + our CL twin
 migrations/   additive SQL

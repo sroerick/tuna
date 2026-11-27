@@ -1,15 +1,13 @@
-; board-flip.sabra — the lost-update-safe state toggle (board.borg L5).
+; board-flip.sabra — Midden-backed optimistic-CAS toggle (board v2).
 ;
-; The host-era page did read-then-write-put: racy.  The swap is the
-; fix, not the regression: one ONE-WINDOW tree/list fetches the entry
-; (value rides tree/get, version rides the entry tail), then tree/cas
-; writes only if the version still matches - a raced flip ends as a
-; journaled cas conflict, never a silent overwrite.
-;
-; Journal shape: one list, one get, one cas row.  No reference re-fires
-; (let-free on purpose: each prim answer is consumed exactly once).
+; Reads `(pair head doc)` via `midden/get`, flips tag 2 (`state`) between
+; "open" and "done" with stdlib `rec-val` + `rec-upd`, and writes back via
+; `midden/put` citing `head` so a raced flip fails with a journaled conflict.
 
-(lambda (path)
-  (prim "tree/cas" path
-    (second (second (first (prim "tree/list" path "" "1"))))
-    (todo-flip (prim "tree/get" path))))
+(lambda (entity)
+  (let ((got (prim "midden/get" "todo" entity)))
+    (let ((head (first got)))
+      (let ((doc (second got)))
+        (let ((next (if "done" "open" (tree-eq (rec-val %110 doc) "open"))))
+          (prim "midden/put" "todo" entity head
+            (rec-upd %110 next doc)))))))

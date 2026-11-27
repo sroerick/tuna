@@ -528,15 +528,15 @@ let jay_families =
    is a new semantics version. *)
 let fast1_entries =
   let e name hash size arity impl = { name; hash; size; arity; cost = 1; impl = value impl; partial = None } in
-  [ e "tree-eq" "fd549d45e1e2e481488d0c0ff4ec9c4de263fca5a511e623bbbba0bd6291de03" 406 2 tree_eq;
-    e "list-append" "500eaee618df21a52bd4355ba2d60cf9639d108dd45a39bcb17841abb26a26e2" 307 2 list_append;
-    e "list-length" "b0f08c694e75ab698415377cf023c14be878e92b82bf87b3dfb30c3f7e6095e8" 298 1 list_length;
-    e "list-reverse" "b524cf23e4300b731fb909f00786f2f607989fb988ba309f6193857d79097ef6" 620 1 list_reverse;
-    e "html-escape" "edb068dda9294c4bd3fe3da2ae4fbd0abf24755a52ab9bce7b65f80f01e17b50" 3321 1 html_escape;
-    e "int-add" "7f33ee5c4b9c43818a74e359ebce0cbe88343551b3cffb75122498b42077eab3" 22259 2 int_add;
-    e "int-sub" "bb2e50fae5b33069d24d87072baf07ddf2d553f761781cda8f2049f756db12af" 22943 2 int_sub;
-    e "int-mul" "fb3f462a1b191e5065ebd21018ee85cd7b8116f9693f282fe9527dd13411f5fa" 6213 2 int_mul;
-    e "int-cmp" "de0a52cae88f868eea5a6fb128068dd88cd2a3a69898638c0222176ad3be8a40" 5613 2 int_cmp ]
+  [ e "tree-eq" "b5f7c54b1358bedd531d71d30d13142c6ea88c8cb695c17a73b913708c397a52" 406 2 tree_eq;
+    e "list-append" "62058b189f2df78530d5c896e8b0afa134a2cf8e8e8776856358da8d51da52da" 307 2 list_append;
+    e "list-length" "8686468571c2921480636c922f5d1d21d572470a688107fc30ad386189cc67de" 298 1 list_length;
+    e "list-reverse" "04fcd7202307ce6f82d4af67c734c0a87b1fea172707b843cbfbe82c3d7e75d4" 620 1 list_reverse;
+    e "html-escape" "c46f1d9d41eacc3c41694149a5af4978ffaa8aa6e17d4e4feb972460d1df5c5c" 3321 1 html_escape;
+    e "int-add" "8b7b3ad69bd9581ad581552cbc7ec2ce9fffe0ca27c990ce333e63c4848e081a" 22259 2 int_add;
+    e "int-sub" "fff76e66c01277f37fe89919d11271d44784cd3425c63176518189e8ec1c1ca1" 22943 2 int_sub;
+    e "int-mul" "06aa18b97c0d6f184706890b563540c9c6df01f1b7a0fa4ff0bf5c245e1ecb7a" 6213 2 int_mul;
+    e "int-cmp" "87b602f3303963379a7789af599506e1755f70ef7434d8ebe3d10aa8bd3b9a8b" 5613 2 int_cmp ]
 
 let fast1 = { semantics = "fast1"; entries = fast1_entries; static_partials = false; families = [];
   wrapper_partials = false }
@@ -550,12 +550,12 @@ let fast2 =
     families = [];
     wrapper_partials = false;
     entries =
-      [ e "rec-val" "1132bbd758d195165b345c89dc31b242e20902243ebda70ba7789c25762c034d" 888 2 (value rec_val);
-        e "rec-has" "e20bc94f9ebc66df748e4c91aa3505b1fa6afba238692e686ca0f91021d7a52e" 887 2 (value rec_has);
-        e "rec-get" "25ae72255db18f143b1b238656b6249e2f1473b97ccefa32d6479a00ebdf760b" 867 2 (value rec_get);
-        e "list-filter" "e51fbd4cdae60fa5d2d276001c921beeaae7e6c11a97db87dba927ebc7f7a615" 406 2 list_filter;
-        e "list-map" "b0bd1e1934d18dba698eeb2b9e42aca5e68e8c33146666958143dbb0488371c0" 340 2 list_map;
-        e "list-fold" "3a4225df7bd383bc2f1a6b3d0fa0a0bb84632f90e1415825a2be683503fabc4f" 326 3 list_fold ]
+      [ e "rec-val" "ee621cc3fc560867bf3bc29c13569323543334186223d1d60d820f7607dcbe0a" 888 2 (value rec_val);
+        e "rec-has" "7d3bedadb19849f1baad3ab3e25bf977b88f0d997242ef8ba0bf87e69ead06b0" 887 2 (value rec_has);
+        e "rec-get" "7facc2c700d8b6bfd760bc47ffbac5f73ad9b5638be50171304d0099cb84cda7" 867 2 (value rec_get);
+        e "list-filter" "7a93bc32bd22bd16c697d758592db07f044098e7d1530eebb406696b031eef58" 406 2 list_filter;
+        e "list-map" "1180889f6c3ced34380fc1e4b00269067c5896b1869cd8a6d8ff2b74ab389e79" 340 2 list_map;
+        e "list-fold" "46968fedc294967d7279a1aed8ca9f843d51484dca16fb5580040f8d71dbc0a3" 326 3 list_fold ]
       @ fast1_entries }
 
 (* fast3: fast2's rows unchanged, plus Jay's checker (E3): helper

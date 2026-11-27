@@ -54,7 +54,7 @@ PG=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
     --data-binary "{\"path\":\"${NS}attr-a\",\"value_ternary\":\"10\"}" \
     $BASE/api/tree/put)" = 201 ] || fail "peer's covered in-ns put must 201"
 ACTOR=$(psql_q -tAc \
-  "SELECT actor FROM tree_ops WHERE path='${NS}attr-a' ORDER BY seq DESC LIMIT 1" \
+  "SELECT actor FROM op_audit_by_seq WHERE path='${NS}attr-a' ORDER BY \"op-seq\" DESC LIMIT 1" \
   | tr -d ' ')
 [ "$ACTOR" = "$PID" ] \
   || fail "ops chain actor must be the peer ($ACTOR != $PID)"
@@ -74,9 +74,8 @@ echo "[14.3] fed apply with a SPOOFED source actor re-attributes at the boundary
 # the value must be held before the apply (value-pull-before-ops law);
 # the operator holds it - content-addressed, so who holds it is not
 # attribution
-VH=$(printf '%s' "10" | sha256sum | cut -d' ' -f1)
-curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-  --data-binary '{"ternary":"10"}' $BASE/api/value/put > /dev/null \
+VH=$(curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary '{"ternary":"10"}' $BASE/api/value/put | jget "d['hash']") \
   || fail "hold the probe value"
 # the spoof: the source row CLAIMS the operator's identity as actor -
 # the lie must ride the source chain only
@@ -109,12 +108,12 @@ for TRY in 1 2 3 4 5; do
 done
 [ -n "$APPLIED" ] || fail "spoofed-actor apply never landed (last code $CODE)"
 D_ACTOR=$(psql_q -tAc \
-  "SELECT actor FROM tree_ops WHERE path='${NS}f3-spoof' ORDER BY seq DESC LIMIT 1" \
+  "SELECT actor FROM op_audit_by_seq WHERE path='${NS}f3-spoof' ORDER BY \"op-seq\" DESC LIMIT 1" \
   | tr -d ' ')
 [ "$D_ACTOR" = "$PID" ] \
   || fail "destination ops actor must be the peer, never the spoofed root ($D_ACTOR)"
 D_OWNER=$(psql_q -tAc \
-  "SELECT owner FROM tree_paths WHERE path='${NS}f3-spoof'" | tr -d ' ')
+  "SELECT owner FROM tree_compat_by_path WHERE path='${NS}f3-spoof'" | tr -d ' ')
 [ "$D_OWNER" = "$PID" ] \
   || fail "destination owner must be the peer, never the spoofed root ($D_OWNER)"
 echo "  spoofed source actor verified as source data; destination re-attributed to the peer"
@@ -126,8 +125,8 @@ CODE=$(curl_code -X POST -H "$PAUTH" -H 'Content-Type: application/json' \
   $BASE/api/fed/ops/apply)
 [ "$CODE" = 403 ] || fail "out-of-namespace apply must 403 (got $CODE)"
 DENY=$(psql_q -tAc \
-  "SELECT actor FROM tree_ops WHERE op='fed-apply' AND path='ns/other-$S/' \
-   ORDER BY seq DESC LIMIT 1" | tr -d ' ')
+  "SELECT actor FROM op_audit_by_seq WHERE op='fed-apply' AND path='ns/other-$S/' \
+   ORDER BY \"op-seq\" DESC LIMIT 1" | tr -d ' ')
 [ "$DENY" = "$PID" ] \
   || fail "the fed-apply refusal must be journaled to the peer ($DENY)"
 echo "  403 + journaled fed-apply deny row attributed to the peer"

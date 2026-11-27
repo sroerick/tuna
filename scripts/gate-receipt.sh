@@ -199,11 +199,41 @@ skip_list=$(printf '%s' "$skip_env" | tr ',' '\n')
 skip_ternary=$(G_SKIP="$skip_list" bash "$ROOT/gate-receipts/encode.sh" skip)
 [ -n "$skip_ternary" ] || die "skip-allowed encoding produced nothing"
 
+tree_sha256hex() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import hashlib, sys
+s = sys.stdin.read().strip()
+out = bytearray()
+for i in range(0, len(s), 5):
+    c = s[i:i+5].ljust(5, "0")
+    v = 0
+    for ch in c: v = v * 3 + (ord(ch) - 48)
+    out.append(v)
+print(hashlib.sha256(bytes(out)).hexdigest())
+'
+  else
+    LC_ALL=C awk '
+      { all = all $0 }
+      END {
+        n = length(all)
+        for (i = 1; i <= n; i += 5) {
+          v = 0
+          for (j = 0; j < 5; j++) {
+            c = (i + j <= n) ? substr(all, i + j, 1) : "0"
+            v = v * 3 + (c + 0)
+          }
+          printf "%c", v
+        }
+      }' | sha256hex
+  fi
+}
+
 obs_hash=$(put_tree "$obs_ternary")
 skip_hash=$(put_tree "$skip_ternary")
-[ "$obs_hash" = "$(printf '%s' "$obs_ternary" | sha256hex)" ] ||
+[ "$obs_hash" = "$(printf '%s' "$obs_ternary" | tree_sha256hex)" ] ||
   die "observation value hash disagrees with its ternary"
-[ "$skip_hash" = "$(printf '%s' "$skip_ternary" | sha256hex)" ] ||
+[ "$skip_hash" = "$(printf '%s' "$skip_ternary" | tree_sha256hex)" ] ||
   die "skip-allowed value hash disagrees with its ternary"
 
 # -- the verdict run (prim-free, pinned caps) -------------------------

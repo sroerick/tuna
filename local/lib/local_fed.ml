@@ -284,7 +284,7 @@ let effect_hashes rows =
   List.filter_map (fun (o : S.op) -> o.S.value_hash) rows
   |> List.sort_uniq compare
 
-let value_json st h =
+let value_json ~src st h =
   (* the undef marker is the zero-length bytes value: the local store
      removes a name by citing it but keeps no bytes file for it, and fed
      apply needs the value inline to hold it, exactly as dict_op_undef
@@ -294,21 +294,30 @@ let value_json st h =
       (`Assoc
         [ ("hash", `String h); ("kind", `String "bytes")
         ; ("payload", `String "") ])
+  else if src = "runs/" then
+    (* sealed derivation records at runs/<id> are always raw bytes *)
+    match S.get_bytes st h with
+    | Some b ->
+        Some
+          (`Assoc
+            [ ("hash", `String h); ("kind", `String "bytes")
+            ; ("payload", `String (Base64.encode_string b)) ])
+    | None -> None
   else
-  match S.get_value st h with
-  | Some t ->
-      Some
-        (`Assoc
-          [ ("hash", `String h); ("kind", `String "tree")
-          ; ("payload", `String (Tuna.Canon.encode t)) ])
-  | None -> (
-      match S.get_bytes st h with
-      | Some b ->
-          Some
-            (`Assoc
-              [ ("hash", `String h); ("kind", `String "bytes")
-              ; ("payload", `String (Base64.encode_string b)) ])
-      | None -> None)
+    match S.get_value st h with
+    | Some t ->
+        Some
+          (`Assoc
+            [ ("hash", `String h); ("kind", `String "tree")
+            ; ("payload", `String (Tuna.Canon.encode t)) ])
+    | None -> (
+        match S.get_bytes st h with
+        | Some b ->
+            Some
+              (`Assoc
+                [ ("hash", `String h); ("kind", `String "bytes")
+                ; ("payload", `String (Base64.encode_string b)) ])
+        | None -> None)
 
 (* the op-log groups a push carries: dictionary rows, sealed records and
    visibility rows, each into its own destination prefix so the applied
@@ -326,7 +335,7 @@ let push_group st ~base ~peer:_peer ~tokens:tk ~src ~dst =
   if rows = [] then Ok { ap_rows = 0; ap_dropped = [] }
   else
     let apply rows =
-      let values = List.filter_map (value_json st) (effect_hashes rows) in
+      let values = List.filter_map (value_json ~src st) (effect_hashes rows) in
       let body =
         J.to_string
           (`Assoc
@@ -344,11 +353,71 @@ let push_group st ~base ~peer:_peer ~tokens:tk ~src ~dst =
     in
     push_rows ~apply rows
 
+(* Also push the native Midden commit window from commits.csexp into
+   ns/<peer> via POST /api/fed/midden/apply so the server's midden_commits
+   and midden_heads directly mirror the laptop's Midden entities. *)
+let push_midden_commits st ~base ~peer ~tokens:tk =
+  let ml = S.midden st in
+  let rows = Midden_local.Local_store.commits_with_prev ml in
+  if rows = [] then Ok ()
+  else
+    let opt_s = function Some s -> `String s | None -> `Null in
+    let opt_b64 = function
+      | Some b -> `String (Base64.encode_string b)
+      | None -> `Null
+    in
+    let commits_json =
+      List.map
+        (fun ((c : Midden.Log_commits.t), prev_chain) ->
+          let schema_bytes =
+            Option.bind c.schema (Midden_local.Local_store.get_blob ml)
+          in
+          let doc_bytes =
+            Option.bind c.head (Midden_local.Local_store.get_blob ml)
+          in
+          `Assoc
+            [ ("seq", `Int c.seq);
+              ("entity", `String c.entity);
+              ("prev", opt_s c.prev);
+              ("head", opt_s c.head);
+              ("schema", opt_s c.schema);
+              ("author", `String c.author);
+              ("actor", opt_s c.actor);
+              ("reason", opt_s c.reason);
+              ("tx", `String c.tx);
+              ("at", `String c.at);
+              ("chain", `String c.chain);
+              ("prev_chain", opt_s prev_chain);
+              ("schema_b64", opt_b64 schema_bytes);
+              ("doc_b64", opt_b64 doc_bytes) ])
+        rows
+    in
+    let body =
+      J.to_string
+        (`Assoc
+          [ ("peer", `String peer); ("commits", `List commits_json) ])
+    in
+    match
+      http ~meth:"POST"
+        ~url:(trim_slash base ^ "/api/fed/midden/apply")
+        ~token:tk.peer ~body ()
+    with
+    | Error e -> Error e
+    | Ok (200, _) -> Ok ()
+    | Ok (404, _) -> Ok ()
+    | Ok (code, b) ->
+        Error
+          (Printf.sprintf "midden commit apply refused (%d): %s" code
+             (String.trim b))
+
 let push st ~base ~peer ~tokens:tk =
   if tk.peer = "" then Error "token file names no peer token (=...)"
   else
     let rec go sent dropped = function
-      | [] -> Ok { ap_rows = sent; ap_dropped = List.rev dropped }
+      | [] -> (
+          match push_midden_commits st ~base ~peer ~tokens:tk with
+          | Error e -> Error e
+          | Ok () -> Ok { ap_rows = sent; ap_dropped = List.rev dropped })
       | (src, dst) :: rest -> (
           match push_group st ~base ~peer ~tokens:tk ~src ~dst with
           | Error e -> Error e
@@ -371,16 +440,16 @@ let fetch_value st ~base ~token h =
       | exception _ -> Error "value body is not JSON"
       | j -> (
           match (row_string j "kind", row_string j "payload") with
-          | Some "tree", Some payload ->
-              if Tuna.Hash.hex_of_string payload <> h then
-                Error (Printf.sprintf "value %s does not rehash" h)
-              else (
-                match Tuna.Canon.of_string payload with
-                | Ok t ->
+          | Some "tree", Some payload -> (
+              match Tuna.Canon.of_string payload with
+              | Error (_, m) ->
+                  Error (Printf.sprintf "value %s is not canonical: %s" h m)
+              | Ok t ->
+                  if Tuna.Hash.hex_of_tree t <> h then
+                    Error (Printf.sprintf "value %s does not rehash" h)
+                  else (
                     ignore (S.put_value st t);
-                    Ok ()
-                | Error (_, m) ->
-                    Error (Printf.sprintf "value %s is not canonical: %s" h m))
+                    Ok ()))
           | Some "bytes", Some payload -> (
               match Base64.decode payload with
               | Error (`Msg m) -> Error m

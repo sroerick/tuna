@@ -159,33 +159,38 @@ let test_store_chain () =
   (match LS.open_ ~identity:"other" st.LS.root with
    | _ -> Alcotest.fail "a directory holds one identity"
    | exception Failure _ -> ());
-  (* tamper: rewrite one value hash in the log *)
-  let p = Filename.concat st.LS.root "ops.jsonl" in
+  (* Phase 4: schemas in Local_store match server Tuna_schemas byte-for-byte *)
+  Alcotest.(check string) "def schema hash matches server"
+    Tuna_store.Tuna_schemas.def_hash LS.def_schema_hash;
+  Alcotest.(check string) "def_visibility schema hash matches server"
+    Tuna_store.Tuna_schemas.def_visibility_hash LS.def_visibility_schema_hash;
+  Alcotest.(check string) "op_audit schema hash matches server"
+    Tuna_store.Tuna_schemas.op_audit_hash LS.op_audit_schema_hash;
+  (* tamper: flip one byte in commits.csexp *)
+  let p = Filename.concat st.LS.root "commits.csexp" in
   let s = In_channel.with_open_bin p In_channel.input_all in
-  let s' = Str.global_replace (Str.regexp_string LS.undef_marker) (String.make 64 'f') s in
+  let s' = Str.global_replace (Str.regexp_string "op:put") "op:tam" s in
   Out_channel.with_open_bin p (fun oc -> Out_channel.output_string oc s');
   match LS.verify st with
   | Ok () -> Alcotest.fail "tampered log must not verify"
   | Error _ -> ()
 
-(* L6 pushes ops.jsonl as a federation window: every row must parse with
+(* L6 pushes the local op log as a federation window: every row must parse with
    the server's own window parser and verify with the store's chain walk *)
 let test_window_rows () =
   let st = LS.open_ (fresh_dir ()) in
   ignore (run st "def inc (lambda (x) (int-add x 1))");
   ignore (run st "undef inc");
-  let lines =
-    In_channel.with_open_bin (Filename.concat st.LS.root "ops.jsonl")
-      In_channel.input_all
-    |> String.split_on_char '\n' |> List.filter (( <> ) "")
-  in
   let rows =
     List.map
-      (fun l ->
-        match Tuna_server.Api.parse_tree_op_json (Yojson.Basic.from_string l) with
-        | Ok (o, prev) -> { Tuna_store.Store.w_op = o; w_prev_hash = prev }
-        | Error e -> Alcotest.failf "window parser refused %s: %s" l e)
-      lines
+      (fun o ->
+        let j = LS.json_of_op o in
+        match Tuna_server.Api.parse_tree_op_json j with
+        | Ok (op, prev) -> { Tuna_store.Store.w_op = op; w_prev_hash = prev }
+        | Error e ->
+            Alcotest.failf "window parser refused %s: %s"
+              (Yojson.Basic.to_string j) e)
+      (LS.ops st)
   in
   Alcotest.(check int) "two rows" 2 (List.length rows);
   match Tuna_store.Store.verify_window_rows rows with
@@ -197,16 +202,16 @@ let test_window_rows () =
 let test_torn_line () =
   let st = LS.open_ (fresh_dir ()) in
   ignore (run st "def a 1");
-  let p = Filename.concat st.LS.root "ops.jsonl" in
+  let p = Filename.concat st.LS.root "commits.csexp" in
   Out_channel.with_open_gen [ Open_append; Open_binary ] 0o600 p (fun oc ->
-      Out_channel.output_string oc "{\"seq\":");
+      Out_channel.output_string oc "999:(commit");
   Alcotest.(check (list string)) "fragment ignored" [ "a" ] (List.map fst (LS.dict_hashes st));
   ignore (run st "def b 2");
   Alcotest.(check (result unit string)) "chain intact" (Ok ()) (LS.verify st);
   Alcotest.(check int) "two committed rows" 2 (List.length (LS.ops st));
   (* a corrupt COMMITTED line is an error value, not a crash *)
   Out_channel.with_open_gen [ Open_append; Open_binary ] 0o600 p (fun oc ->
-      Out_channel.output_string oc "not json\n");
+      Out_channel.output_string oc "not csexp\n");
   match LR.execute st opts "dict" with
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "a corrupt log must answer an error"
@@ -345,7 +350,7 @@ let test_run_record () =
     { d with D.d_journal =
         List.mapi (fun i (j : D.Journal.t) ->
             if i = 1 then { j with D.Journal.j_result_ternary = Some "0";
-                                   j_result_hash = Some (Hash.hex_of_string "0") }
+                                   j_result_hash = Some (Hash.hex_of_trits "0") }
             else j) d.D.d_journal }
   in
   match D.verify flipped with

@@ -54,8 +54,8 @@ curl -sf -H "$AUTH" $BASE/api/programs/$NOT_HASH | grep -q '"ternary":"22102000"
 [ "$(curl_code -H "$AUTH" $BASE/api/programs/$(printf 0%.0s {1..64}))" = 404 ] || fail "GET unknown program"
 
 echo "[5] POST /api/programs/:hash/patch (CAS apply + conflict)"
-# not = "2"+"210200"+"0"; subtree at path 1 = "210200"
-SUB=$(python3 -c "import hashlib;print(hashlib.sha256(b'210200').hexdigest())")
+# not = "2"+"210200"+"0"; subtree at path 1 = "210200" (Base-243 Tpack hash)
+SUB=$(python3 -c "import hashlib; s='210200'; b=bytes(sum((ord(c)-48)*(3**(4-j)) for j,c in enumerate(s[i:i+5].ljust(5,'0'))) for i in range(0,len(s),5)); print(hashlib.sha256(b).hexdigest())")
 APPLIED=$(curl -sf -X POST -H "$AUTH" --data-binary \
   "{\"path\":\"1\",\"expected_old_hash\":\"$SUB\",\"new_ternary\":\"0\"}" \
   $BASE/api/programs/$NOT_HASH/patch) || fail "patch apply"
@@ -177,7 +177,7 @@ echo "$RP" | jget "d['round']['kind']" | grep -q eval || fail "round kind"
 echo "$RP" | jget "d['round']['run_id']" | grep -q '[0-9a-f-]' || fail "eval round must be a journaled run"
 DEFR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"def neg %22102000"}' $BASE/api/repl) \
   || fail "repl def round"
-echo "$DEFR" | jget "d['round']['hash']" | grep -q 1f6cae19 || fail "def must pin the not tree"
+echo "$DEFR" | jget "d['round']['hash']" | grep -q 336e5012 || fail "def must pin the not tree"
 DICTR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"eval (neg %22102000)"}' $BASE/api/repl) \
   || fail "repl round through the dictionary"
 echo "$DICTR" | jget "d['round']['ternary']" | grep -q 22102000 || fail "dictionary name must substitute"

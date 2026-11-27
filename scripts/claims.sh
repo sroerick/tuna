@@ -69,6 +69,37 @@ sha256hex() {
   else die "no sha256 tool on PATH"; fi
 }
 
+# Base-243 Tpack tree hash: packs 5 trits/byte (zero-padded final byte) then sha256.
+tree_sha256hex() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import hashlib, sys
+s = sys.stdin.read().strip()
+out = bytearray()
+for i in range(0, len(s), 5):
+    c = s[i:i+5].ljust(5, "0")
+    v = 0
+    for ch in c: v = v * 3 + (ord(ch) - 48)
+    out.append(v)
+print(hashlib.sha256(bytes(out)).hexdigest())
+'
+  else
+    LC_ALL=C awk '
+      { all = all $0 }
+      END {
+        n = length(all)
+        for (i = 1; i <= n; i += 5) {
+          v = 0
+          for (j = 0; j < 5; j++) {
+            c = (i + j <= n) ? substr(all, i + j, 1) : "0"
+            v = v * 3 + (c + 0)
+          }
+          printf "%c", v
+        }
+      }' | sha256hex
+  fi
+}
+
 # --- the Cstr string codec (common/lib/cstr.ml, the book's marshal convention):
 # leaf=0, stem=1<child>, fork=2<left><right>; a byte is a little-endian bit list
 # (LSB outermost, 1 = stem, 0 = leaf); a string is a right-nested list of bytes.
@@ -196,14 +227,14 @@ cmd_mint() {
           printf 'claimant=%s\n' "$caller"
           printf 'run=%s\n' "$runid"
           printf 'minted_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ; } | cstr_encode )
-  hash=$(printf '%s' "$enc" | sha256hex)
+  hash=$(printf '%s' "$enc" | tree_sha256hex)
   [ "${#enc}" -le 14000 ] || die "citation encodes to ${#enc} ternary digits; the PUT surface 500s above ~15000, so keep the citation short (gregor's chunked-claim convention slices at 600 chars)"
   p=$(printf '%s' "$path" | sed "s/%h/${hash%??????????????????????????????????????????????}/")
   # write-once: a claim path is written once; a correction is a new claim or a
   # retraction verdict, never an in-place bump, because a bump silently orphans
   # the verdicts and citations that pinned the previous revision
   prev=$(post /api/tree/get "{\"path\":\"$p\"}" | jstr value_hash)
-  if [ -n "$prev" ] && [ "$prev" != "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9" ]; then
+  if [ -n "$prev" ] && [ "$prev" != "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d" ]; then
     die "$p already holds a claim ($prev); write-once: mint a new claim path, or a retraction verdict"
   fi
   case "$p" in
@@ -312,7 +343,7 @@ cmd_verify() {
 # specific earlier claim.  A verdict correction can also be minted with
 # `claims.sh verdict` (a small standalone record beside its target).
 CLAIM_KINDS=' observed computed cited interpreted asserted axiom verdict gate '
-LEAF_HASH=5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
+LEAF_HASH=6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d
 
 seg() { printf '%s' "$1" | cut -d. -f"$2"; }
 
@@ -430,7 +461,7 @@ cmd_mint() {
     [ -f "$narr_file" ] || die "no such narrative file: $narr_file"
     narr_enc=$(cstr_encode < "$narr_file")
     [ "${#narr_enc}" -le 14000 ] || die "narrative encodes to ${#narr_enc} ternary digits; the PUT surface 500s above ~15000, so split it (gregor's chunked-claim convention slices at 600 chars)"
-    NARR_HASH=$(printf '%s' "$narr_enc" | sha256hex)
+    NARR_HASH=$(printf '%s' "$narr_enc" | tree_sha256hex)
   elif [ -n "$NARR_HASH" ]; then
     narr_enc=$(fetch "/api/value/$NARR_HASH?kind=tree" || true)
     [ -n "$narr_enc" ] || die "narrative $NARR_HASH is not published as a tree"
@@ -463,7 +494,7 @@ cmd_mint() {
   }
   enc=$(proj | cstr_encode)
   [ "${#enc}" -le 14000 ] || die "projection encodes to ${#enc} ternary digits; the PUT surface 500s above ~15000"
-  hash=$(printf '%s' "$enc" | sha256hex)
+  hash=$(printf '%s' "$enc" | tree_sha256hex)
   p12=${hash%${hash#????????????}}
 
   # note first, so a peer never finds a projection whose prose is missing
@@ -502,7 +533,7 @@ cmd_verdict() {
            printf 'note=%s\n' "$note"
            printf 'minted_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ; } | cstr_encode )
   [ "${#enc}" -le 14000 ] || die "verdict encodes to ${#enc} ternary digits; the PUT surface 500s above ~15000"
-  hash=$(printf '%s' "$enc" | sha256hex)
+  hash=$(printf '%s' "$enc" | tree_sha256hex)
   h12=${hash%${hash#????????????}}
   p="$target.verdict-$h12"
   claim_write "$p" "$hash" "$enc"
@@ -546,7 +577,7 @@ cmd_deploy() {
            printf 'battery=%s\n' "$battery"
            printf 'minted_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" ; } | cstr_encode )
   [ "${#enc}" -le 14000 ] || die "receipt encodes to ${#enc} ternary digits"
-  hash=$(printf '%s' "$enc" | sha256hex)
+  hash=$(printf '%s' "$enc" | tree_sha256hex)
   p12=${hash%${hash#????????????}}
   p="u.$claimant.claim.$(date -u +%Y-%m-%d).observed.deploy.$rev.audit-$p12"
   claim_write "$p" "$hash" "$enc"

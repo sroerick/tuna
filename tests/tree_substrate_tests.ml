@@ -51,7 +51,7 @@ let seed_program p ~caller src =
 
 let test_path_roundtrip () =
   setup () >>= fun p ->
-  let v1 = Tuna.Hash.hex_of_string "10" in
+  let v1 = Tuna.Hash.hex_of_trits "10" in
   S.value_put p ~hash:v1 ~ternary:"10" >>= fun () ->
   S.path_put p ~path:"t1/a/x" ~value_hash:v1 ~owner:"owner-1"
   >>= fun v ->
@@ -65,7 +65,7 @@ let test_path_roundtrip () =
             Alcotest.(check string) "owner" "owner-1" e.S.tp_owner;
             return ())
   >>= fun () ->
-  let v2 = Tuna.Hash.hex_of_string "0" in
+  let v2 = Tuna.Hash.hex_of_trits "0" in
   S.value_put p ~hash:v2 ~ternary:"0" >>= fun () ->
   S.path_put p ~path:"t1/a/x" ~value_hash:v2 ~owner:"owner-1"
   >>= fun v ->
@@ -79,7 +79,7 @@ let test_path_roundtrip () =
 
 let test_cas () =
   setup () >>= fun p ->
-  let vh = Tuna.Hash.hex_of_string "10" in
+  let vh = Tuna.Hash.hex_of_trits "10" in
   S.value_put p ~hash:vh ~ternary:"10" >>= fun () ->
   (* create: expected_version None inserts at version 1 *)
   S.path_put_cas p ~path:"t2/b/y" ~value_hash:vh ~owner:"o" ~expected_version:None
@@ -106,13 +106,13 @@ let test_cas () =
   >>= fun v -> expect_cas_absent "absent" v;
   (* cas with an expected value hash that does not match -> Conflict *)
   S.path_put_cas p ~path:"t2/b/y" ~value_hash:vh ~owner:"o"
-    ~expected_version:(Some 2L) ~expected_hash:(Some (Tuna.Hash.hex_of_string "0"))
+    ~expected_version:(Some 2L) ~expected_hash:(Some (Tuna.Hash.hex_of_trits "0"))
   >>= fun v -> expect_cas_conflict "stale value hash" v;
   return ()
 
 let test_prefix_list () =
   setup () >>= fun p ->
-  let vh = Tuna.Hash.hex_of_string "0" in
+  let vh = Tuna.Hash.hex_of_trits "0" in
   S.value_put p ~hash:vh ~ternary:"0" >>= fun () ->
   let put path = S.path_put p ~path ~value_hash:vh ~owner:"o" >>= fun _ -> return () in
   put "t3/c/3" >>= fun () ->
@@ -338,7 +338,7 @@ let test_grant_mint_scope () =
 
 let test_ns_fork () =
   setup () >>= fun p ->
-  let vh = Tuna.Hash.hex_of_string "22102000" in
+  let vh = Tuna.Hash.hex_of_trits "22102000" in
   S.value_put p ~hash:vh ~ternary:"22102000" >>= fun () ->
   S.path_put p ~path:"t5/src/1" ~value_hash:vh ~owner:"src-owner"
   >>= fun _ ->
@@ -405,7 +405,7 @@ let test_ops_chain () =
    | `Bad msg -> Alcotest.failf "fresh chain must verify: %s" msg);
   (* tamper a payload field in place -> the chain walk must fail *)
   Db.q_unit ~params:[ S.p_str "t6/ops/a" ] p
-    "UPDATE tree_ops SET path = 't6/tampered' WHERE path = $1"
+    "UPDATE op_audit_by_seq SET path = 't6/tampered' WHERE path = $1"
   >>= fun () ->
   S.ops_fold p ~from_seq:0L ()
   >>= fun ops' ->
@@ -417,8 +417,8 @@ let test_ops_chain () =
 
 let test_rewind () =
   setup () >>= fun p ->
-  let v1 = Tuna.Hash.hex_of_string "10" in
-  let v2 = Tuna.Hash.hex_of_string "0" in
+  let v1 = Tuna.Hash.hex_of_trits "10" in
+  let v2 = Tuna.Hash.hex_of_trits "0" in
   (* write through the journaled prim path: bare store puts carry no op
      rows, and the fold can only reproduce what the log recorded *)
   let put path value_ternary =
