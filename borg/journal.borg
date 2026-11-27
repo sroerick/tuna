@@ -162,8 +162,52 @@
              Returned, not what it Should have returned. Docs and the
              verification surface must say so in those words
              (SPEC.md §7 discipline).
+
+         POLICY KNOB (v1). GC today is an explicit admin call naming one
+         run. The knob makes retention automatic per caller identity, and
+         it is OFF until an admin writes a policy:
+
+           retention_policies(identity uuid PK -> identities,
+             keep_days int > 0, keep_failures bool, enabled bool,
+             updated_by uuid, updated_at timestamptz)
+
+         No row, or enabled=false, collects nothing: there is no
+         built-in period and no timer in the server. A sweep is an
+         explicit admin call (a cron entry may call it), so a mistake is
+         a refused or dry call, never a surprise delete.
+
+           PUT  /api/admin/retention/:identity
+                {"keep_days":N,"keep_failures":bool,"enabled":bool}
+                -> {"policy": {identity id/name, keep_days,
+                                keep_failures, enabled}}
+           GET  /api/admin/retention -> {"policies": [...]}   (admin)
+           GET  /api/retention -> {"policy": {...} | null}    (own row)
+           POST /api/admin/retention/sweep {"dry_run": bool}
+                -> {"dry_run":bool,"collected":N,"swept":[
+                     {"identity":name,
+                      "policy":"retention:<name>:keep-<N>d
+                                [:keep-failures]",
+                      "eligible":N,"collected":N,"run_ids":[up to 10]}]}
+
+         A missing dry_run is true; only an explicit false collects. The
+         admin routes answer 403 to a non-admin, with no existence leak.
+         Eligible = caller is that identity, journal_gced_at IS NULL,
+         created_at older than keep_days (strictly), status='normal',
+         and, when keep_failures, verify_status='verified'. A failure is
+         status<>'normal' or verify_status='failed'; an unverified run is
+         kept while failures are kept because it can still become
+         verified. Each collected run goes through the existing
+         single-transaction GC, so its tombstone cites the policy in
+         force, verify_status becomes 'gced' (never 'verified'), and a
+         second sweep collects nothing. One identity's policy never
+         touches another identity's runs.
     |))
    )
+   (execution
+    (scope retention)
+    (kind code))
+   (verify
+    (test "retention-policy: no policy row, or enabled=false, collects nothing and the server has no timer; a non-admin gets 403 from the admin policy routes; an enabled policy dry-runs by default (counts and a sample of run ids, journal rows unchanged) and only dry_run=false collects that identity's runs older than keep_days through the existing tombstone path (verify_status gced, the policy cited as retention:<identity>:keep-<N>d[:keep-failures]); a verified old run is collected while a failed run, an unverified run and a fresh run are kept when keep_failures=true, another identity's old run is untouched, a second sweep collects nothing, and with keep_failures=false the failed run becomes eligible (scripts/verify-20-retention-policy.sh live on PG; the 403s and the dry-run default are pinned there)"))
   )
  )
 )
