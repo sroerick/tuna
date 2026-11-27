@@ -1372,7 +1372,8 @@ let grant_mint_core pool (auth : auth) (j : J.t) : (int * J.t) =
                                  return true
                                else
                                  Store.has_covering_midden_grant pool caller
-                                   ~scope_schema ~scope_namespace ~scope_projection)
+                                   ~prim ~scope_schema ~scope_namespace
+                                   ~scope_projection)
                               >>= function
                               | false ->
                                   err ~code:403

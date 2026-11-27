@@ -1109,7 +1109,11 @@ let check_midden_grant p ~id ~caller ?schema ?(namespace = "local") ?projection 
             match (schema, projection) with
             | _, Some proj_name -> (
                 match g.g_scope_projection with
-                | Some p when String.equal p proj_name -> true
+                | Some p when String.equal p proj_name -> (
+                    match (g.g_scope_schema, schema) with
+                    | None, _ -> true
+                    | Some s, Some target_s -> String.equal s target_s
+                    | Some _, None -> false)
                 | _ -> (
                     match (g.g_scope_schema, schema) with
                     | Some s, Some target_s -> String.equal s target_s
@@ -1838,15 +1842,25 @@ let has_covering_grant p caller path =
         (Printexc.to_string e);
       Direct.return false)
 
-let has_covering_midden_grant p caller ~scope_schema ~scope_namespace
+let projection_belongs_to_schema p ~proj_name ~schema_name =
+  if String.equal proj_name schema_name then
+    Db.q ~params:[ p_str schema_name ] p
+      "SELECT 1 FROM midden_schema_refs WHERE name = $1 LIMIT 1"
+    <> []
+  else
+    Db.q ~params:[ p_str proj_name; p_str schema_name ] p
+      "SELECT 1 FROM midden_projections WHERE name = $1 AND schema_name = $2 LIMIT 1"
+    <> []
+
+let has_covering_midden_grant p caller ~prim ~scope_schema ~scope_namespace
     ~scope_projection =
   Direct.catch
     (fun () ->
-      Db.q ~params:[ p_str caller ] p
+      Db.q ~params:[ p_str caller; p_str prim ] p
         "SELECT scope_schema, scope_namespace, scope_projection, \
          parent_grant::text FROM grants \
          WHERE caller = $1::uuid AND revoked_at IS NULL \
-           AND (prim = '*' OR prim LIKE 'midden/%')"
+           AND (prim = '*' OR prim = $2)"
       >>= fun rows ->
       let rec seek = function
         | [] -> Direct.return false
@@ -1871,12 +1885,13 @@ let has_covering_midden_grant p caller ~scope_schema ~scope_namespace
               match (gp, scope_projection) with
               | _, None -> true
               | Some a, Some b -> String.equal a b
-              | None, Some _ -> (
-                  (* A schema grant covers projections over that schema when
-                     the requested scope_schema matches gs. *)
-                  match (gs, scope_schema) with
-                  | Some a, Some b -> String.equal a b
-                  | _ -> false)
+              | None, Some proj_name -> (
+                  (* A schema grant covers a projection ONLY when that
+                     projection actually reads that schema. *)
+                  match gs with
+                  | Some a ->
+                      projection_belongs_to_schema p ~proj_name ~schema_name:a
+                  | None -> false)
             in
             let target_claimed =
               scope_schema <> None || scope_projection <> None
