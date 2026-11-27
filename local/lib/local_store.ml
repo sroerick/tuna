@@ -158,13 +158,13 @@ let get_value t hash =
 (* -- kv (store/get, store/put) and byte values ---------------------------- *)
 
 let kv_get t key =
-  let p = t.root / "kv" / Tuna.Hash.hex_of_string (Tuna.Canon.encode key) in
+  let p = t.root / "kv" / Tuna.Hash.hex_of_tree key in
   if not (Sys.file_exists p) then None else get_value t (String.trim (read_file p))
 
 let kv_put t ~key ~value =
   mkdir_p (t.root / "kv");
   let h = put_value t value in
-  write_file (t.root / "kv" / Tuna.Hash.hex_of_string (Tuna.Canon.encode key)) (h ^ "\n")
+  write_file (t.root / "kv" / Tuna.Hash.hex_of_tree key) (h ^ "\n")
 
 let put_bytes t s =
   mkdir_p (t.root / "bytes");

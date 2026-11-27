@@ -134,7 +134,7 @@ let grant_paths (name : string) (args : Tuna.Tree.t) : string list option =
 (* store a value tree content-addressed; returns (hash, ternary) *)
 let value_store p ~value =
   let ternary = Tuna.Canon.encode value in
-  let hash = Tuna.Hash.hex_of_string ternary in
+  let hash = Tuna.Hash.hex_of_tree value in
   S.value_put p ~hash ~ternary >>= fun () -> return (hash, ternary)
 
 let fetch_value_tree p value_hash =
@@ -189,7 +189,7 @@ let tree_put p ~actor args =
               if String.length ternary > Prims.payload_cap then
                 return (`Error "tree/put: value exceeds the journal payload cap")
               else
-                let hash = Tuna.Hash.hex_of_string ternary in
+                let hash = Tuna.Hash.hex_of_tree value in
                 S.value_put p ~hash ~ternary
                 >>= fun () ->
                 S.path_put p ~path ~value_hash:hash ~owner:actor
@@ -221,7 +221,7 @@ let tree_cas p ~actor args =
                     return
                       (`Error "tree/cas: value exceeds the journal payload cap")
                   else
-                    let hash = Tuna.Hash.hex_of_string ternary in
+                    let hash = Tuna.Hash.hex_of_tree value in
                     S.value_put p ~hash ~ternary
                     >>= fun () ->
                     S.path_put_cas p ~path ~value_hash:hash ~owner:actor

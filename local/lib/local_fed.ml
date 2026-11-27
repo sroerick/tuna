@@ -371,16 +371,16 @@ let fetch_value st ~base ~token h =
       | exception _ -> Error "value body is not JSON"
       | j -> (
           match (row_string j "kind", row_string j "payload") with
-          | Some "tree", Some payload ->
-              if Tuna.Hash.hex_of_string payload <> h then
-                Error (Printf.sprintf "value %s does not rehash" h)
-              else (
-                match Tuna.Canon.of_string payload with
-                | Ok t ->
+          | Some "tree", Some payload -> (
+              match Tuna.Canon.of_string payload with
+              | Error (_, m) ->
+                  Error (Printf.sprintf "value %s is not canonical: %s" h m)
+              | Ok t ->
+                  if Tuna.Hash.hex_of_tree t <> h then
+                    Error (Printf.sprintf "value %s does not rehash" h)
+                  else (
                     ignore (S.put_value st t);
-                    Ok ()
-                | Error (_, m) ->
-                    Error (Printf.sprintf "value %s is not canonical: %s" h m))
+                    Ok ()))
           | Some "bytes", Some payload -> (
               match Base64.decode payload with
               | Error (`Msg m) -> Error m

@@ -365,8 +365,8 @@ let post_program pool auth req =
       | Some t, _ -> (
           match parse_ternary t with
           | Error msg ->  (j_err msg)
-          | Ok _tree ->
-              let hash = Tuna.Hash.hex_of_string t in
+          | Ok tree ->
+              let hash = Tuna.Hash.hex_of_tree tree in
               Store.upsert_program pool ~hash ~ternary:t ~ir:None ~created_by
                 ~source:None
               >>= fun _row ->
@@ -1907,7 +1907,7 @@ let post_tree_put pool auth req =
           | Ok path -> (
               match parse_ternary value_ternary with
               | Error msg -> (j_err ("value_ternary: " ^ msg))
-              | Ok _value ->
+              | Ok value ->
                     tree_allowed pool auth path
                     >>= function
                     | false -> deny_tree pool auth ~op:"put" ~path
@@ -1915,7 +1915,7 @@ let post_tree_put pool auth req =
                   if String.length value_ternary > Prims.payload_cap then
                     (j_err "value exceeds the journal payload cap")
                   else
-                    let hash = Tuna.Hash.hex_of_string value_ternary in
+                    let hash = Tuna.Hash.hex_of_tree value in
                     Store.value_put pool ~hash ~ternary:value_ternary
                     >>= fun () ->
                     tree_put_write pool auth ~path ~hash
@@ -2112,7 +2112,7 @@ let value_put_kind pool ~(auth : auth) ~kind : (int * J.t) =
                  [ ("hash", `String hash); ("len", `Int len)
                  ; ("kind", `String "bytes") ])
         | `Tree t ->
-            let hash = Tuna.Hash.hex_of_string t in
+            let hash = Tuna.Hash.hex_of_trits t in
             Store.value_put pool ~hash ~ternary:t
             >>= fun () ->
             journal_value pool ~actor:auth.auth_id ~op:"value-put" ~path:hash
@@ -2496,15 +2496,22 @@ let fed_apply_core pool ~(auth : auth) (j : J.t) =
                    , Printf.sprintf "value %s exceeds the value cap" hash ))
             else
               let hash = Tuna.Hash.normalize_hex hash in
-              let got = Tuna.Hash.hex_of_string payload in
-              if got <> hash then
-                return
-                  (Error
-                     ( 400
-                     , Printf.sprintf "value %s does not rehash" hash ))
-              else
-                Store.value_put pool ~hash ~ternary:payload
-                >>= fun () -> return (Ok ()))
+              (match Tuna.Tpack.of_trits payload with
+               | Error _ ->
+                   return
+                     (Error
+                        ( 400
+                        , Printf.sprintf "value %s is not canonical ternary" hash ))
+               | Ok packed ->
+                   let got = Tuna.Hash.hex_of_tpack packed in
+                   if got <> hash then
+                     return
+                       (Error
+                          ( 400
+                          , Printf.sprintf "value %s does not rehash" hash ))
+                   else
+                     Store.value_put pool ~hash ~ternary:payload
+                     >>= fun () -> return (Ok ())))
         | Some hash, Some "bytes", Some payload -> (
             if String.length payload > Store.value_max_bytes () then
               return

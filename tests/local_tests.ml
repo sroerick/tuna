@@ -345,7 +345,7 @@ let test_run_record () =
     { d with D.d_journal =
         List.mapi (fun i (j : D.Journal.t) ->
             if i = 1 then { j with D.Journal.j_result_ternary = Some "0";
-                                   j_result_hash = Some (Hash.hex_of_string "0") }
+                                   j_result_hash = Some (Hash.hex_of_trits "0") }
             else j) d.D.d_journal }
   in
   match D.verify flipped with

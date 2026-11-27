@@ -258,7 +258,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
     | [] -> return ()
     | t :: rest ->
         let ternary = Tuna.Canon.encode t in
-        let hash = Tuna.Hash.hex_of_string ternary in
+        let hash = Tuna.Hash.hex_of_tree t in
         S.upsert_program pool ~hash ~ternary ~ir:None
           ~created_by:(Some caller) ~source:None
         >>= fun _ -> store_inputs rest
@@ -428,7 +428,7 @@ let execute pool ~caller ~grant_ids ~program_hash ~program ~ir_json ~inputs
        | [] -> return ()
        | (fh, ah, rt) :: rest ->
            S.demand_memo_put pool ~caller ~fun_hash:fh ~arg_hash:ah
-             ~result_hash:(Tuna.Hash.hex_of_string rt) ~result_ternary:rt
+             ~result_hash:(Tuna.Hash.hex_of_trits rt) ~result_ternary:rt
            >>= fun () -> put rest
      in
      put clean

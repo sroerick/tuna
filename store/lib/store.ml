@@ -232,7 +232,7 @@ let insert_run p ~program_hash ?(inputs = []) ?(caller = None) ?(parent_run_id =
 
 let update_run_result p ~id ~status ?result_ternary ?step_count
     ?(denial_count = 0) () =
-  let result_hash = Option.map Tuna.Hash.hex_of_string result_ternary in
+  let result_hash = Option.map Tuna.Hash.hex_of_trits result_ternary in
   Db.q_unit
     ~params:[ p_str (Run_status.to_string status)
             ; p_opt result_hash
@@ -607,8 +607,8 @@ let append_journal p ?(host_build = "tuna-dev") ~run_id ev =
     | [ r ] -> (int r 0 "last.seq" + 1, text r 1 "last.row_hash")
     | _ -> store_error "journal head: multiple rows" 
   in
-  let args_hash = Option.map Tuna.Hash.hex_of_string ev.e_args_ternary in
-  let result_hash = Option.map Tuna.Hash.hex_of_string ev.e_result_ternary in
+  let args_hash = Option.map Tuna.Hash.hex_of_trits ev.e_args_ternary in
+  let result_hash = Option.map Tuna.Hash.hex_of_trits ev.e_result_ternary in
   let h = row_hash run_id seq ev prev_hash in
   Db.q_unit
     ~params:[ p_str run_id
@@ -747,7 +747,7 @@ let repl_state_put p ~identity_id ~run_id =
 
 (* Fetch by the key's content hash. Returns the (key, value) pair. *)
 let prim_get p key_ternary =
-  let kh = Tuna.Hash.hex_of_string key_ternary in
+  let kh = Tuna.Hash.hex_of_trits key_ternary in
   Db.q ~params:[ p_str kh ] p "SELECT key_ternary, value_ternary FROM prim_kv WHERE key_hash = $1"
   >>= function
   | [] -> Direct.return None
@@ -755,7 +755,7 @@ let prim_get p key_ternary =
   | _ -> store_error "prim_kv: multiple rows for key %s" kh
 
 let prim_put p ~key_ternary ~value_ternary =
-  let kh = Tuna.Hash.hex_of_string key_ternary in
+  let kh = Tuna.Hash.hex_of_trits key_ternary in
   Db.q_unit
     ~params:[ p_str kh; p_str key_ternary; p_str value_ternary ]
     p
@@ -2619,7 +2619,7 @@ let dict_backfill p =
             >>= fun held ->
             if List.mem_assoc name held then go rest
             else
-              let hash = Tuna.Hash.hex_of_string ternary in
+              let hash = Tuna.Hash.hex_of_trits ternary in
               value_put p ~hash ~ternary
               >>= fun () ->
               op_append p ~op:"put"

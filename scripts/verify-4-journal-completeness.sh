@@ -16,7 +16,7 @@ set -e
 . "$(dirname "$0")/verify-lib.sh"
 
 echo "[4.1] seed kv: key '10' -> value '200'; run the get-then-put program"
-KEY_HASH=4a44dc15364204a80fe80e9039455cc1608281820fe2b24f1e5233ade6af1dd5
+KEY_HASH=4ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260
 psql_q -q -c "INSERT INTO prim_kv (key_hash, key_ternary, value_ternary) \
   VALUES ('$KEY_HASH','10','200') \
   ON CONFLICT (key_hash) DO UPDATE SET value_ternary='200'" >/dev/null

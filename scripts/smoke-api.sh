@@ -177,7 +177,7 @@ echo "$RP" | jget "d['round']['kind']" | grep -q eval || fail "round kind"
 echo "$RP" | jget "d['round']['run_id']" | grep -q '[0-9a-f-]' || fail "eval round must be a journaled run"
 DEFR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"def neg %22102000"}' $BASE/api/repl) \
   || fail "repl def round"
-echo "$DEFR" | jget "d['round']['hash']" | grep -q 1f6cae19 || fail "def must pin the not tree"
+echo "$DEFR" | jget "d['round']['hash']" | grep -q 336e5012 || fail "def must pin the not tree"
 DICTR=$(curl -sf -X POST -H "$AUTH" -d '{"command":"eval (neg %22102000)"}' $BASE/api/repl) \
   || fail "repl round through the dictionary"
 echo "$DICTR" | jget "d['round']['ternary']" | grep -q 22102000 || fail "dictionary name must substitute"

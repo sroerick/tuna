@@ -57,7 +57,7 @@ let seed pool ~execute () =
     match List.assoc_opt name have with
     | None -> return true
     | Some tern ->
-        S.fetch_program pool (Tuna.Hash.hex_of_string tern)
+        S.fetch_program pool (Tuna.Hash.hex_of_trits tern)
         >>= (function
               | Some p -> (
                   match p.S.p_source with
@@ -86,4 +86,4 @@ let program_hash pool ~name : (string, string) result =
   S.dict_list pool ~identity_id:i.S.i_id >>= fun rows ->
   match List.find_opt (fun d -> d.S.d_name = name) rows with
   | None -> return (Error ("board program " ^ name ^ " is not seeded"))
-  | Some d -> return (Ok (Tuna.Hash.hex_of_string d.S.d_ternary))
+  | Some d -> return (Ok (Tuna.Hash.hex_of_trits d.S.d_ternary))

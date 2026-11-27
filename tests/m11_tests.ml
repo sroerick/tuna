@@ -608,7 +608,7 @@ let test_tree_del_boundary () =
   peer p "m11-del" >>= fun del ->
   delete_program p ~caller:(Some del.S.i_id) >>= fun art ->
   (* seed a put so the delete has something to remove *)
-  let vh = Tuna.Hash.hex_of_string "10" in
+  let vh = Tuna.Hash.hex_of_trits "10" in
   S.value_put p ~hash:vh ~ternary:"10" >>= fun () ->
   Tp.dispatch ~pool:p ~actor:me.S.i_id ~name:"tree/put"
     ~args:(P.tree_of_list [ Tuna.Cstr.encode "td/a/one"; Tuna.Canon.parse "10" ])
@@ -711,7 +711,7 @@ let test_tree_del_boundary () =
 let test_tree_del_rewind () =
   setup () >>= fun p ->
   admin p >>= fun me ->
-  let vh = Tuna.Hash.hex_of_string "0" in
+  let vh = Tuna.Hash.hex_of_trits "0" in
   S.value_put p ~hash:vh ~ternary:"0" >>= fun () ->
   let put path =
     Tp.dispatch ~pool:p ~actor:me.S.i_id ~name:"tree/put"

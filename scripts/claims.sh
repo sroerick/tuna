@@ -203,7 +203,7 @@ cmd_mint() {
   # retraction verdict, never an in-place bump, because a bump silently orphans
   # the verdicts and citations that pinned the previous revision
   prev=$(post /api/tree/get "{\"path\":\"$p\"}" | jstr value_hash)
-  if [ -n "$prev" ] && [ "$prev" != "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9" ]; then
+  if [ -n "$prev" ] && [ "$prev" != "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d" ]; then
     die "$p already holds a claim ($prev); write-once: mint a new claim path, or a retraction verdict"
   fi
   case "$p" in
@@ -312,7 +312,7 @@ cmd_verify() {
 # specific earlier claim.  A verdict correction can also be minted with
 # `claims.sh verdict` (a small standalone record beside its target).
 CLAIM_KINDS=' observed computed cited interpreted asserted axiom verdict gate '
-LEAF_HASH=5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9
+LEAF_HASH=6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d
 
 seg() { printf '%s' "$1" | cut -d. -f"$2"; }
 

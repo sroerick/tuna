@@ -12,16 +12,17 @@ DC=$2
 VERDICT=$3
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail() { echo "FAIL cli_local: $*" >&2; exit 1; }
-LF=3a4225df7bd383bc2f1a6b3d0fa0a0bb84632f90e1415825a2be683503fabc4f
+LF=46968fedc294967d7279a1aed8ca9f843d51484dca16fb5580040f8d71dbc0a3
 
 echo '(not true)' > "$T/a.sabra"
 out=$("$CLI" compile "$T/a.sabra") || fail "(not true) did not compile"
+grep -qx 'trihex 0t0' <<<"$out" || fail "(not true) trihex missing: $out"
 grep -qx 'ternary 0' <<<"$out" || fail "(not true) is not the leaf: $out"
 grep -qx 'steps 2' <<<"$out" || fail "(not true) not 2 steps: $out"
-grep -qx 'lock not 1f6cae19aff40a81b0f8fcf17ea936269fcd2eaf27bf85148dbd8750a61ce320' <<<"$out" || fail "lock not missing: $out"
-grep -qx 'lock true 4a44dc15364204a80fe80e9039455cc1608281820fe2b24f1e5233ade6af1dd5' <<<"$out" || fail "lock true missing: $out"
+grep -qx 'lock not 336e50127a425f3eb3d05bf8c80e91ab448d9eda20085ad4316a91c5b87251b8' <<<"$out" || fail "lock not missing: $out"
+grep -qx 'lock true 4ae81572f06e1b88fd5ced7a1a000945432e83e1551e6f721ee9c00b8cc33260' <<<"$out" || fail "lock true missing: $out"
 
-echo 'list-fold@3a4225df' > "$T/p.sabra"
+echo 'list-fold@46968fed' > "$T/p.sabra"
 out=$("$CLI" compile "$T/p.sabra") || fail "holding pin refused"
 grep -qx "hash $LF" <<<"$out" || fail "holding pin: wrong hash: $out"
 echo 'list-fold@00000000' > "$T/q.sabra"

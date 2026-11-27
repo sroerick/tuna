@@ -424,7 +424,7 @@ let outcome_steps = function
   | Eng.Normal (_, s) | Eng.Loop s | Eng.Fuel_exhausted s
   | Eng.Size_exhausted s | Eng.Deadline_exceeded s -> s
 
-let outcome_hash o = Option.map Tuna.Hash.hex_of_string (outcome_ternary o)
+let outcome_hash o = Option.map Tuna.Hash.hex_of_trits (outcome_ternary o)
 
 (* The five tests. Returns () on success; raises Check_failed with the
    first broken invariant. *)
@@ -459,19 +459,25 @@ let check (d : t) : unit =
              (Printf.sprintf "journal seq %d: row_hash mismatch" j.Journal.j_seq)))
     rows;
   (* 4. content addressing *)
-  if Tuna.Hash.hex_of_string d.d_program_ternary <> d.d_program_hash then
+  let hash_trits label s =
+    match Tuna.Tpack.of_trits s with
+    | Ok packed -> Tuna.Hash.hex_of_tpack packed
+    | Error (off, msg) ->
+        raise (Check_failed (Printf.sprintf "%s unparseable at offset %d: %s" label off msg))
+  in
+  if hash_trits "program_ternary" d.d_program_ternary <> d.d_program_hash then
     raise (Check_failed "program_ternary does not hash to program_hash");
   if List.length d.d_input_hashes <> List.length d.d_input_ternaries then
     raise (Check_failed "input_hashes/input_ternaries count mismatch");
   List.iteri
     (fun i t ->
-      if Tuna.Hash.hex_of_string t <> List.nth d.d_input_hashes i then
+      if hash_trits (Printf.sprintf "input %d" i) t <> List.nth d.d_input_hashes i then
         raise
           (Check_failed
              (Printf.sprintf "input %d does not hash to its recorded id" i)))
     d.d_input_ternaries;
   (match (d.d_result_ternary, d.d_result_hash) with
-   | Some t, Some h when Tuna.Hash.hex_of_string t <> h ->
+   | Some t, Some h when hash_trits "result_ternary" t <> h ->
        raise (Check_failed "result_ternary does not hash to result_hash")
    | Some _, None | None, Some _ ->
        raise (Check_failed "result_ternary/result_hash must come together")

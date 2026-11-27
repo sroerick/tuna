@@ -126,7 +126,7 @@ let test_runs () =
   let r = expect_some "run row" again in
   Alcotest.(check (option string)) "result" (Some "0") r.S.r_result_ternary;
   Alcotest.(check (option int)) "steps" (Some 2) r.S.r_step_count;
-  Alcotest.(check (option string)) "result hash" (Some (Tuna.Hash.hex_of_string "0"))
+  Alcotest.(check (option string)) "result hash" (Some (Tuna.Hash.hex_of_trits "0"))
     r.S.r_result_hash;
   S.list_runs p ~program:(Some not_hash) ~limit:10 () >>= fun rs ->
   Alcotest.(check bool) "listed" true (List.exists (fun r -> r.S.r_id = run_id) rs);

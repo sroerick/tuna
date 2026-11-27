@@ -272,6 +272,10 @@ let tool_language_tests =
   in
   [
     desugars "#0 is the leaf" "#0" "%0" (Some "0");
+    desugars "0t0 trihex leaf equals %0" "0t0" "%0" (Some "0");
+    desugars "0t9 trihex stem leaf equals %10" "0t9" "%10" (Some "10");
+    desugars "0tm60 trihex not equals %22102000" ("0t" ^ Tuna.Trihex.encode (Tuna.Canon.parse "22102000")) "%22102000" (Some "22102000");
+    compile_error "0t with invalid char fails" "0tZ" "" "bad trihex literal";
     desugars "#1 is stem leaf" "#1" "%10" (Some "10");
     desugars "#5 is stem^5 leaf" "#5" "%111110" (Some "111110");
     desugars "#n inside a record pair" "[[#2 1] [#3 2]]" "[[%110 1] [%1110 2]]" None;

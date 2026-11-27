@@ -81,7 +81,7 @@ let outcome_steps = function
   | Size_exhausted s
   | Deadline_exceeded s -> s
 
-let outcome_hash o = Option.map Tuna.Hash.hex_of_string (outcome_ternary o)
+let outcome_hash o = Option.map Tuna.Hash.hex_of_trits (outcome_ternary o)
 
 (* wall-clock aborts are operator policy, never a calculus fact *)
 let is_deadline = function Deadline_exceeded _ -> true | _ -> false
@@ -159,7 +159,7 @@ let execute_fed ?(deadline = Float.infinity) ?(mode = Eng.Canonical) ?accel ~pro
         | Some recorded -> (
             let actual = Tuna.Canon.encode args in
             match Tuna.Canon.of_string recorded with
-            | Ok rt when Tuna.Hash.hex_of_string recorded <> Tuna.Hash.hex_of_string actual ->
+            | Ok rt when Tuna.Hash.hex_of_trits recorded <> Tuna.Hash.hex_of_trits actual ->
                 diverge
                   ~first_diff_path:(first_diff_path rt args)
                   ~recorded_hash:row.S.j_args_hash

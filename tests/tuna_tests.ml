@@ -106,23 +106,77 @@ let () =
           check_parse_error "trailing" "00" (1, "trailing characters after tree");
           check_parse_error "early end" "1" (1, "unexpected end of input");
         ] );
+      ( "tpack-trihex"
+      , [
+          Alcotest.test_case "tpack and trihex roundtrip and compression" `Quick (fun () ->
+              let cases =
+                [ leaf; stem leaf; fork (leaf, leaf); not_tree; omega_f; grower;
+                  fork (stem (fork (leaf, stem leaf)), fork (leaf, leaf)) ]
+              in
+              List.iter
+                (fun tree ->
+                  let packed = Tuna.Tpack.encode tree in
+                  let th = Tuna.Trihex.encode tree in
+                  let trits = Tuna.Canon.encode tree in
+                  Alcotest.(check int) "tpack length ceil(trits/5)"
+                    ((String.length trits + 4) / 5) (String.length packed);
+                  Alcotest.(check int) "trihex length ceil(trits/3)"
+                    ((String.length trits + 2) / 3) (String.length th);
+                  Alcotest.(check bool) "tpack decode" true
+                    (Tuna.Tpack.decode packed = Ok tree);
+                  Alcotest.(check bool) "trihex decode" true
+                    (Tuna.Trihex.decode th = Ok tree);
+                  Alcotest.(check bool) "parse_any 0t" true
+                    (Tuna.Canon.parse_any ("0t" ^ th) = Ok tree);
+                  Alcotest.(check bool) "tpack of_trits matches encode" true
+                    (Tuna.Tpack.of_trits trits = Ok packed);
+                  Alcotest.(check bool) "tpack to_trits matches trits" true
+                    (Tuna.Tpack.to_trits packed = Ok trits);
+                  Alcotest.(check bool) "trihex of_tpack matches encode" true
+                    (Tuna.Trihex.of_tpack packed = Ok th);
+                  Alcotest.(check bool) "trihex to_tpack matches encode" true
+                    (Tuna.Trihex.to_tpack th = Ok packed))
+                cases);
+          Alcotest.test_case "tpack rejects invalid bytes, trailing, non-zero pad" `Quick (fun () ->
+              Alcotest.(check bool) "empty" true (Result.is_error (Tuna.Tpack.decode ""));
+              Alcotest.(check bool) "byte 243" true
+                (Result.is_error (Tuna.Tpack.decode (String.make 1 (Char.chr 243))));
+              Alcotest.(check bool) "non-zero pad on leaf" true
+                (Result.is_error (Tuna.Tpack.decode (String.make 1 (Char.chr 1))));
+              Alcotest.(check bool) "trailing byte after leaf" true
+                (Result.is_error (Tuna.Tpack.decode "\x00\x00")));
+          Alcotest.test_case "trihex rejects invalid chars, trailing, non-zero pad" `Quick (fun () ->
+              Alcotest.(check bool) "empty" true (Result.is_error (Tuna.Trihex.decode ""));
+              Alcotest.(check bool) "uppercase rejected" true (Result.is_error (Tuna.Trihex.decode "A"));
+              Alcotest.(check bool) "char r rejected" true (Result.is_error (Tuna.Trihex.decode "r"));
+              Alcotest.(check bool) "non-zero pad on leaf" true (Result.is_error (Tuna.Trihex.decode "1"));
+              Alcotest.(check bool) "trailing digit after leaf" true (Result.is_error (Tuna.Trihex.decode "00")));
+          Alcotest.test_case "deep tree linear stack-safe encode/decode" `Quick (fun () ->
+              let rec deep n acc = if n = 0 then acc else deep (n - 1) (stem acc) in
+              let t = deep 25_000 leaf in
+              let p = Tuna.Tpack.encode t in
+              Alcotest.(check int) "25001 trits -> 5001 bytes" 5001 (String.length p);
+              Alcotest.(check bool) "deep roundtrip" true (Tuna.Tpack.decode p = Ok t));
+        ] );
       ( "hash"
       , [
-          Alcotest.test_case "sha256 of ternary string, lowercase hex" `Quick (fun () ->
-              let s = Tuna.Canon.encode not_tree in
+          Alcotest.test_case "sha256 of canonical Base-243 bytes, lowercase hex" `Quick (fun () ->
+              let b = Tuna.Tpack.encode not_tree in
               let h = Tuna.Hash.hex_of_tree not_tree in
-              Alcotest.(check string) "matches sha256 of encoding"
-                (Tuna.Hash.hex_of_string s) h;
+              Alcotest.(check string) "matches sha256 of tpack bytes"
+                (Tuna.Hash.hex_of_string b) h;
+              Alcotest.(check string) "matches hex_of_trits"
+                (Tuna.Hash.hex_of_trits (Tuna.Canon.encode not_tree)) h;
               Alcotest.(check string) "lowercase" (String.lowercase_ascii h) h;
               Alcotest.(check int) "length" 64 (String.length h));
           Alcotest.test_case "hand values" `Quick (fun () ->
-              (* sha256("0") *)
+              (* sha256(tpack(Leaf)) = sha256("\x00") *)
               Alcotest.(check string) "sha256 leaf"
-                "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+                "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
                 (Tuna.Hash.hex_of_tree leaf);
-              (* sha256("22102000") — not's canonical form *)
+              (* sha256(tpack(22102000)) — not's canonical Base-243 bytes *)
               Alcotest.(check string) "sha256 of not's encoding"
-                "1f6cae19aff40a81b0f8fcf17ea936269fcd2eaf27bf85148dbd8750a61ce320"
+                "336e50127a425f3eb3d05bf8c80e91ab448d9eda20085ad4316a91c5b87251b8"
                 (Tuna.Hash.hex_of_tree not_tree));
           Alcotest.test_case "hash distinguishes trees" `Quick (fun () ->
               Alcotest.(check bool) "not equal" false

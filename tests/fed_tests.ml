@@ -98,7 +98,7 @@ let test_fed_program_hash () =
   setup () >>= fun p ->
   admin p >>= fun me ->
   let ternary = "221010210" in
-  let hash = Tuna.Hash.hex_of_string ternary in
+  let hash = Tuna.Hash.hex_of_trits ternary in
   S.upsert_program p ~hash ~ternary ~ir:None ~created_by:None ~source:None >>= fun _ ->
   Api.fed_value_core p ~auth:(auth_of me) ~hash >>= fun (code, body) ->
   let j = J.from_string body in
@@ -679,7 +679,7 @@ let test_l5_defs_as_ops () =
     "repl_dict is the fold of the log" foldA
     (List.map
        (fun (d : S.dict_entry) ->
-         (d.S.d_name, Tuna.Hash.hex_of_string d.S.d_ternary))
+         (d.S.d_name, Tuna.Hash.hex_of_trits d.S.d_ternary))
        listed);
   Alcotest.(check bool) "the name is in the effective dictionary" true
     (List.mem_assoc "l5x" foldA);
@@ -766,12 +766,12 @@ let test_l5_backfill_unchanged () =
   (match rows with
    | [ o ] ->
        Alcotest.(check (option string)) "backfill row cites the value hash"
-         (Some (Tuna.Hash.hex_of_string "2202102010")) o.S.o_value_hash
+         (Some (Tuna.Hash.hex_of_trits "2202102010")) o.S.o_value_hash
    | _ -> Alcotest.fail "expected exactly one backfill put at the dict path");
   (* the dictionary at any past op is a fold of the log *)
   S.dict_fold p ~identity:"l5bk" () >>= fun fold ->
   Alcotest.(check (list (pair string string))) "fold holds the entry"
-    [ ("bkConst", Tuna.Hash.hex_of_string "2202102010") ] fold;
+    [ ("bkConst", Tuna.Hash.hex_of_trits "2202102010") ] fold;
   (* idempotent: a second backfill appends nothing *)
   S.dict_backfill p >>= fun () ->
   ops_with p ~op:"put" ~path:"dict/l5bk/bkConst" >>= fun rows2 ->
@@ -795,11 +795,11 @@ let test_l5_def_round_ops () =
     (List.length rows);
   let first = List.hd rows in
   Alcotest.(check (option string)) "the row cites the defined tree"
-    (Some (Tuna.Hash.hex_of_string "22102000")) first.S.o_value_hash;
+    (Some (Tuna.Hash.hex_of_trits "22102000")) first.S.o_value_hash;
   (* the dictionary at that past op is the fold up to its seq *)
   S.dict_fold p ~to_seq:first.S.o_seq ~identity:"l5def" () >>= fun past ->
   Alcotest.(check (list (pair string string))) "past dictionary is a fold"
-    [ ("bk", Tuna.Hash.hex_of_string "22102000") ] past;
+    [ ("bk", Tuna.Hash.hex_of_trits "22102000") ] past;
   (* a redef appends one more row; the fold follows the log *)
   run "def bk %0" >>= fun () ->
   ops_with p ~op:"put" ~path:"dict/l5def/bk" >>= fun rows2 ->
@@ -810,7 +810,7 @@ let test_l5_def_round_ops () =
    | Some d ->
        Alcotest.(check (pair string string))
          "the dictionary is the log's fold"
-         ("bk", Tuna.Hash.hex_of_string d.S.d_ternary) (List.hd now)
+         ("bk", Tuna.Hash.hex_of_trits d.S.d_ternary) (List.hd now)
    | None -> Alcotest.fail "derived row missing after a def");
   (* undef is a put of the marker: no delete row ever lands on dict/ *)
   run "undef bk" >>= fun () ->
@@ -952,7 +952,7 @@ let test_l5_backfill_keeps_dictionary () =
   (match List.assoc_opt "l5old" fold with
    | Some h ->
        Alcotest.(check string) "the fold binds the backfilled value hash"
-         (Tuna.Hash.hex_of_string "22102000") h
+         (Tuna.Hash.hex_of_trits "22102000") h
    | None -> Alcotest.fail "the fold must hold the backfilled name");
   (* idempotent: a second run appends nothing *)
   S.dict_backfill p >>= fun () ->

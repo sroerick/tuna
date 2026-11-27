@@ -62,7 +62,7 @@ probes = ["(not true)", "(list-length [1 2 3])",
           "(lambda (xs) (list-map (lambda (x) (int-add x 1)) xs))",
           "(lambda (not) (not 0))", "(comb-s true true)",
           "(rec-get #1 [[#1 42]])",
-          "list-fold@3a4225df", "list-fold@00000000"]
+          "list-fold@46968fed", "list-fold@00000000"]
 sources = [(p, p) for p in probes] + [(f, open(f).read()) for f in files]
 
 def cli_compile(src):

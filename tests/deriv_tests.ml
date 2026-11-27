@@ -28,9 +28,9 @@ let echo_row ~run_id ~seq ~args ~result ~prev =
     ; j_prim_contract = "2"
     ; j_grant_id = None
     ; j_args_ternary = Some args
-    ; j_args_hash = Some (Tuna.Hash.hex_of_string args)
+    ; j_args_hash = Some (Tuna.Hash.hex_of_trits args)
     ; j_result_ternary = result
-    ; j_result_hash = Option.map Tuna.Hash.hex_of_string result
+    ; j_result_hash = Option.map Tuna.Hash.hex_of_trits result
     ; j_error = None
     ; j_wall_ms = Some 1
     ; j_host_build = "test"
@@ -43,10 +43,10 @@ let echo_row ~run_id ~seq ~args ~result ~prev =
 (* build + seal a record from the given journal *)
 let mk_record ~run_id ~program_ternary ~journal ~result_ternary ~steps =
   D.build ~run_id ~semantics:"v0"
-    ~program_hash:(Tuna.Hash.hex_of_string program_ternary)
-    ~program_ternary ~input_hashes:[ Tuna.Hash.hex_of_string "10" ]
+    ~program_hash:(Tuna.Hash.hex_of_trits program_ternary)
+    ~program_ternary ~input_hashes:[ Tuna.Hash.hex_of_trits "10" ]
     ~input_ternaries:[ "10" ] ~fuel:10000 ~size_cap:100000 ~status:D.Normal
-    ~result_ternary ~result_hash:(Option.map Tuna.Hash.hex_of_string result_ternary)
+    ~result_ternary ~result_hash:(Option.map Tuna.Hash.hex_of_trits result_ternary)
     ~step_count:steps ~parent_run_id:None ~journal
 
 let expect_verified what = function
@@ -62,19 +62,19 @@ let expect_failed what = function
 let test_golden_canon () =
   let d =
     D.build ~run_id:"00000000-0000-0000-0000-000000000000" ~semantics:"v0"
-      ~program_hash:(Tuna.Hash.hex_of_string "22102000")
-      ~program_ternary:"22102000" ~input_hashes:[ Tuna.Hash.hex_of_string "10" ]
+      ~program_hash:(Tuna.Hash.hex_of_trits "22102000")
+      ~program_ternary:"22102000" ~input_hashes:[ Tuna.Hash.hex_of_trits "10" ]
       ~input_ternaries:[ "10" ] ~fuel:100 ~size_cap:1000 ~status:D.Normal
-      ~result_ternary:(Some "0") ~result_hash:(Some (Tuna.Hash.hex_of_string "0"))
+      ~result_ternary:(Some "0") ~result_hash:(Some (Tuna.Hash.hex_of_trits "0"))
       ~step_count:2 ~parent_run_id:None ~journal:[]
   in
   (* pinned canon: field order, separators, counts.  A change here is a
      FORMAT CHANGE: bump the version string and the book. *)
   let expect =
     "tuna-deriv-v1\x1f00000000-0000-0000-0000-000000000000\x1fv0\x1f"
-    ^ Tuna.Hash.hex_of_string "22102000"
+    ^ Tuna.Hash.hex_of_trits "22102000"
     ^ "\x1f22102000\x1f1\x1f10\x1f100\x1f1000\x1fnormal\x1f0\x1f"
-    ^ Tuna.Hash.hex_of_string "0"
+    ^ Tuna.Hash.hex_of_trits "0"
     ^ "\x1f2\x1f\x1f0\x1f"
   in
   Alcotest.(check string) "canon is pinned" expect d.D.d_deriv_canon;
@@ -103,20 +103,20 @@ let test_rejects_tampering () =
   in
   let base =
     D.build ~run_id:"r" ~semantics:"v0"
-      ~program_hash:(Tuna.Hash.hex_of_string "22102000")
-      ~program_ternary:"22102000" ~input_hashes:[ Tuna.Hash.hex_of_string "10" ]
+      ~program_hash:(Tuna.Hash.hex_of_trits "22102000")
+      ~program_ternary:"22102000" ~input_hashes:[ Tuna.Hash.hex_of_trits "10" ]
       ~input_ternaries:[ "10" ] ~fuel:10000 ~size_cap:100000 ~status:D.Normal
-      ~result_ternary:(Some "0") ~result_hash:(Some (Tuna.Hash.hex_of_string "0"))
+      ~result_ternary:(Some "0") ~result_hash:(Some (Tuna.Hash.hex_of_trits "0"))
       ~step_count:2 ~parent_run_id:None ~journal:[]
   in
   (* flip the claimed result without resealing: byte check 1 catches it *)
   let lied = { base with D.d_result_ternary = Some "10" } in
   expect_failed "unsealed result edit" (D.verify lied);
     (* flipped output hash, unsealed: canon + id no longer agree *)
-    let flipped = { base with D.d_result_hash = Some (Tuna.Hash.hex_of_string "10") } in
+    let flipped = { base with D.d_result_hash = Some (Tuna.Hash.hex_of_trits "10") } in
     expect_failed "flipped result hash" (D.verify flipped);
     (* wrong program hash, unsealed: canon + id no longer agree *)
-    let wrong_prog = { base with D.d_program_hash = Tuna.Hash.hex_of_string "0" } in
+    let wrong_prog = { base with D.d_program_hash = Tuna.Hash.hex_of_trits "0" } in
     expect_failed "wrong program hash" (D.verify wrong_prog);
   (* claim more steps and RESEAL: canon + id agree again, but replay
      identity (test 5) catches the lie - resealing does not save a lie
