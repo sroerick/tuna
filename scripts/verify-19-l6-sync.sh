@@ -55,11 +55,18 @@ for sql in migrations/*.sql; do
   psql_db -q -v ON_ERROR_STOP=1 -f "$sql" >/dev/null || fail "migration $sql"
 done
 
-dune build --root "$PWD" cli/bin/main.exe server/bin/main.exe \
-  tools/deriv-check/deriv_check.exe 2>&1 | head -20
-CLI=_build/default/cli/bin/main.exe
-SRV=_build/default/server/bin/main.exe
-DC=_build/default/tools/deriv-check/deriv_check.exe
+# Standalone: build the binaries.  Under the dune alias the rule has
+# already built them as deps, and this script's root is the build root.
+if [ -z "${TUNA_L6_PREBUILT:-}" ]; then
+  dune build --root "$PWD" cli/bin/main.exe server/bin/main.exe \
+    tools/deriv-check/deriv_check.exe 2>&1 | head -20
+  BIN=$PWD/_build/default
+else
+  BIN=$PWD
+fi
+CLI=$BIN/cli/bin/main.exe
+SRV=$BIN/server/bin/main.exe
+DC=$BIN/tools/deriv-check/deriv_check.exe
 [ -x "$CLI" ] && [ -x "$SRV" ] && [ -x "$DC" ] || fail "binaries did not build"
 
 jget() { python3 -c "import json,sys;d=json.load(sys.stdin);print(eval(sys.argv[1]))" "$1"; }
