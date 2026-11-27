@@ -84,7 +84,21 @@
          over a hash answers the review question: why is this not
          a ref row over content-addressed values plus a derived
          index? "It is convenient" is not an answer; the seven
-         subsystems of the one-tree corpse were convenient too. |))))
+         subsystems of the one-tree corpse were convenient too.
+      7. SCOPED MIDDEN CUTOVER & BASE-243 ADDRESSING (owner-dated
+         amendment 2026-11-27). Tuna's shared state/product plane
+         (formerly tree_paths, tree_ops, repl_dict, routes, claims,
+         messages, cron_*, todo) moves onto Midden (midden.borg, which
+         adopts Laws 1-6 verbatim): schemas are values, structured
+         tables/aggregates are rebuildable projections over
+         midden_commits, and the evaluator kernel (identities, grants,
+         programs, runs, journals, demand_memo, run_traces, auth_*)
+         stays in lean flat SQL with no dual-write state (F9 preserved:
+         midden_commits replaces tree_ops completely). Tree values
+         pack 5 trits/byte (Base-243 Tpack, 0x00..0xF2, self-delimiting
+         bijection; Base-27 Trihex 0-9a-q on text surfaces) and hash as
+         sha256 of those exact bytes, unifying tree blobs, csexp docs,
+         and raw byte blobs under one kind-blind CAS address law. |))))
   (subsection pre-registered-failure
    (status implemented)
    (details
