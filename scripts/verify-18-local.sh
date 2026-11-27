@@ -152,7 +152,8 @@ def local(cmd, inputs, fuel):
     return ("ok", {"kind": f.get("kind"), "status": f.get("status"),
                    "hash": f.get("hash", ""),
                    "steps": int(f["steps"]) if "steps" in f else None,
-                   "lock": sorted(f["lock"]), "dict": sorted(f["dict"])})
+                   "lock": sorted(f["lock"]), "dict": sorted(f["dict"])},
+            f.get("ternary", ""))
 
 # rounds: (command, inputs, fuel); "THREE" = the tree of round 0,
 # "H<n>" in a command = the result hash of round n
@@ -182,7 +183,8 @@ hashes = {}
 for i, (cmd, inputs, fuel) in enumerate(script):
     if inputs == "THREE": inputs = [three]
     cmd = re.sub(r"H(\d+)", lambda m: hashes[int(m.group(1))], cmd)
-    s, l = server(cmd, inputs, fuel), local(cmd, inputs, fuel)
+    s, lraw = server(cmd, inputs, fuel), local(cmd, inputs, fuel)
+    l, l_ternary = (lraw[0], lraw[1]), (lraw[2] if len(lraw) > 2 else "")
     if s[0] != l[0]:
         raise SystemExit("18.2 round %d %r: server %s vs local %s" % (i, cmd, s, l))
     if s[0] == "error":
@@ -193,7 +195,7 @@ for i, (cmd, inputs, fuel) in enumerate(script):
     if s[0] == "ok": hashes[i] = s[1]["hash"]
     if i == 0:
         # the round's result tree, for the inputs of round 3
-        with open(os.path.join(ldir, "values", l[1]["hash"])) as f: three = f.read().strip()
+        three = l_ternary
     print("  %-44s %s" % (cmd[:44], "same error" if s[0] == "error" else
           "same %s %s steps=%s" % (s[1]["kind"], s[1]["hash"][:8], s[1]["steps"])))
 print("  %d/%d rounds identical (kind, status, hash, steps, lock, dict)" % (len(script), len(script)))

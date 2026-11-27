@@ -2665,6 +2665,220 @@ let post_fed_ops_apply pool auth req =
       guard (fun () ->
     (fed_apply_core pool ~auth j >>= fun (code, body) -> j_ok ~code body))
 
+(* -- Phase 4: Midden-native peer commit-window sync ------------------- *)
+
+let csexp_doc_field bytes field_name =
+  match Midden.Csexp.decode bytes with
+  | Ok (Midden.Csexp.List pairs) ->
+      List.find_map
+        (function
+          | Midden.Csexp.List [ Midden.Csexp.Atom k; Midden.Csexp.Atom v ]
+            when String.equal k field_name -> Some v
+          | _ -> None)
+        pairs
+  | _ -> None
+
+let fed_midden_commits_core pool ~(auth : auth) ~namespace ~after_seq ~limit =
+  Tuna_store.Tuna_schemas.ensure_all pool;
+  let limit = max 1 (min limit 5000) in
+  let m = Db.midden pool in
+  match Midden_store.Store.commits_window m ~namespace ~after_seq ~limit () with
+  | Error e ->
+      return (500, `Assoc [ ("error", `String (Midden_store.Store.string_of_error e)) ])
+  | Ok rows ->
+      let more = List.length rows >= limit in
+      let last_seq =
+        match List.rev rows with
+        | [] -> after_seq
+        | r :: _ -> r.Midden_store.Store.commit.seq
+      in
+      Store.dict_visibility_public pool >>= fun public_dicts ->
+      Store.is_admin pool auth.auth_id >>= fun caller_admin ->
+      let can_see_id id =
+        caller_admin || id = auth.auth_name || id = auth.auth_id
+        || List.mem id public_dicts
+      in
+      let visible (r : Midden_store.Store.commit_window_row) =
+        let c = r.commit in
+        if caller_admin then true
+        else
+          match (c.schema, r.doc_bytes) with
+          | Some sh, Some b when String.equal sh Tuna_store.Tuna_schemas.def_hash ->
+              let id_name = Option.value (csexp_doc_field b "identity-name") ~default:"" in
+              let id_id = Option.value (csexp_doc_field b "identity-id") ~default:"" in
+              can_see_id id_name || can_see_id id_id
+          | Some sh, Some b when String.equal sh Tuna_store.Tuna_schemas.op_audit_hash -> (
+              match Option.bind (csexp_doc_field b "path") Store.dict_path_identity with
+              | None -> true
+              | Some id -> can_see_id id)
+          | None, _ -> can_see_id c.author
+          | _ -> true
+      in
+      let opt_s = function Some s -> `String s | None -> `Null in
+      let opt_b64 = function
+        | Some b -> `String (Base64.encode_string b)
+        | None -> `Null
+      in
+      let commits_json =
+        List.filter visible rows
+        |> List.map (fun (r : Midden_store.Store.commit_window_row) ->
+               let c = r.commit in
+               `Assoc
+                 [ ("seq", `Int c.seq);
+                   ("entity", `String c.entity);
+                   ("prev", opt_s c.prev);
+                   ("head", opt_s c.head);
+                   ("schema", opt_s c.schema);
+                   ("author", `String c.author);
+                   ("actor", opt_s c.actor);
+                   ("reason", opt_s c.reason);
+                   ("tx", `String c.tx);
+                   ("at", `String c.at);
+                   ("chain", `String c.chain);
+                   ("prev_chain", opt_s r.prev_chain);
+                   ("schema_b64", opt_b64 r.schema_bytes);
+                   ("doc_b64", opt_b64 r.doc_bytes) ])
+      in
+      return
+        ( 200,
+          `Assoc
+            [ ("namespace", `String namespace);
+              ("after_seq", `Int after_seq);
+              ("last_seq", `Int last_seq);
+              ("limit", `Int limit);
+              ("more", `Bool more);
+              ("commits", `List commits_json) ] )
+
+let get_fed_midden_commits pool auth req =
+  let namespace = Option.value (Web.query req "namespace") ~default:"local" in
+  let after_seq =
+    match Web.query req "after_seq" with
+    | Some s -> (match int_of_string_opt s with Some v when v >= 0 -> v | _ -> 0)
+    | None -> 0
+  in
+  let limit =
+    match Web.query req "limit" with
+    | Some s -> (match int_of_string_opt s with Some v -> v | None -> 1000)
+    | None -> 1000
+  in
+  guard (fun () ->
+      fed_midden_commits_core pool ~auth ~namespace ~after_seq ~limit
+      >>= fun (code, body) -> j_ok ~code body)
+
+let fed_midden_apply_core pool ~(auth : auth) (j : J.t) =
+  Tuna_store.Tuna_schemas.ensure_all pool;
+  let peer = Option.value (get_string_opt j "peer") ~default:"" in
+  let commits_list =
+    match member_opt "commits" j with Some (`List l) -> l | _ -> []
+  in
+  if not (fed_peer_name_ok peer) then
+    return (400, `Assoc [ ("error", `String "invalid peer name") ])
+  else
+    let allowed =
+      auth.auth_is_admin
+      ||
+      match fed_peer_of_name auth.auth_name with
+      | Some p -> String.equal p peer
+      | None -> false
+    in
+    if not allowed then
+      return
+        ( 403,
+          `Assoc
+            [ ("error",
+               `String
+                 (Printf.sprintf "identity %s may not write Midden namespace ns/%s"
+                    auth.auth_name peer)) ] )
+    else
+      let cap = Store.value_max_bytes () in
+      let decode_opt_b64 label j k =
+        match get_string_opt j k with
+        | None -> Ok None
+        | Some b64 -> (
+            if String.length b64 > cap * 2 then
+              Error (413, Printf.sprintf "%s exceeds value cap" label)
+            else
+              match Base64.decode b64 with
+              | Error _ -> Error (400, label ^ " is not valid base64")
+              | Ok b when String.length b > cap ->
+                  Error (413, Printf.sprintf "%s exceeds value cap" label)
+              | Ok b -> Ok (Some b))
+      in
+      let parse_commit cj =
+        let int_opt k =
+          match member_opt k cj with Some (`Int n) -> Some n | _ -> None
+        in
+        match
+          ( int_opt "seq",
+            get_string_opt cj "entity",
+            get_string_opt cj "author",
+            get_string_opt cj "tx",
+            get_string_opt cj "at",
+            get_string_opt cj "chain" )
+        with
+        | Some seq, Some entity, Some author, Some tx, Some at, Some chain -> (
+            match decode_opt_b64 "schema_b64" cj "schema_b64" with
+            | Error e -> Error e
+            | Ok schema_bytes -> (
+                match decode_opt_b64 "doc_b64" cj "doc_b64" with
+                | Error e -> Error e
+                | Ok doc_bytes ->
+                    let commit : Midden.Log_commits.t =
+                      { seq;
+                        entity;
+                        prev = get_string_opt cj "prev";
+                        head = get_string_opt cj "head";
+                        schema = get_string_opt cj "schema";
+                        author;
+                        actor = get_string_opt cj "actor";
+                        reason = get_string_opt cj "reason";
+                        tx;
+                        at;
+                        chain }
+                    in
+                    Ok
+                      { Midden_store.Store.commit;
+                        prev_chain = get_string_opt cj "prev_chain";
+                        schema_bytes;
+                        doc_bytes }))
+        | _ ->
+            Error
+              ( 400,
+                "commit requires seq, entity, author, tx, at, chain" )
+      in
+      let rec parse_all acc = function
+        | [] -> Ok (List.rev acc)
+        | cj :: rest -> (
+            match parse_commit cj with
+            | Error e -> Error e
+            | Ok r -> parse_all (r :: acc) rest)
+      in
+      match parse_all [] commits_list with
+      | Error (code, msg) -> return (code, `Assoc [ ("error", `String msg) ])
+      | Ok rows -> (
+          let m = Db.midden pool in
+          match Midden_store.Store.apply_peer_window m ~peer rows with
+          | Error e ->
+              return
+                ( 400,
+                  `Assoc
+                    [ ("error", `String (Midden_store.Store.string_of_error e)) ] )
+          | Ok applied ->
+              return
+                ( 200,
+                  `Assoc
+                    [ ("ok", `Bool true);
+                      ("namespace", `String ("ns/" ^ peer));
+                      ("applied", `Int applied) ] ))
+
+let post_fed_midden_apply pool auth req =
+  body_json req >>= function
+  | Error msg -> j_err msg
+  | Ok j ->
+      guard (fun () ->
+          fed_midden_apply_core pool ~auth j >>= fun (code, body) ->
+          j_ok ~code body)
+
 
 (* -- routes (M11): the routing table as data ---------------------------
 
@@ -3333,6 +3547,10 @@ let api_routes pool =
       ; Web.get "/api/fed/value/:hash" (with_auth pool (get_fed_value pool))
       ; Web.get "/api/fed/ops" (with_auth pool (get_fed_ops pool))
       ; Web.post "/api/fed/ops/apply" (with_auth pool (post_fed_ops_apply pool))
+      ; Web.get "/api/fed/midden/commits"
+          (with_auth pool (get_fed_midden_commits pool))
+      ; Web.post "/api/fed/midden/apply"
+          (with_auth pool (post_fed_midden_apply pool))
       ; Web.post "/api/route/put" (with_auth pool (post_route_put pool))
       ; Web.post "/api/route/delete" (with_auth pool (post_route_delete pool))
       ; Web.get "/api/route/get" (with_auth pool (get_route_get pool))

@@ -102,14 +102,9 @@ echo '(lambda (x) [(runtime (prim "echo" x)) (runtime (prim "now"))])' > "$T/r.s
 REC=$(sed -n 's/^record //p' "$T/run.out")
 [ -f "$REC" ] || fail "no sealed record ($T/run.out)"
 REC_HASH=$(sha256sum "$REC" | cut -d' ' -f1)
-LOCAL_DEF=$(python3 - "$LAP/ops.jsonl" <<'PY'
-import json, sys
-rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-hits = [r for r in rows if r.get("path") == "dict/e2eowner/greet"]
-print(hits[-1]["value_hash"] if hits else "")
-PY
-)
-[ -n "$LOCAL_DEF" ] || fail "the offline def is not in the local op log"
+LOCAL_DEF=$(sed -n 's/^hash //p' "$T/def.out" | head -n1)
+[ -n "$LOCAL_DEF" ] || fail "the offline def hash is missing ($T/def.out)"
+[ -f "$LAP/commits.csexp" ] || fail "Midden_local commits.csexp missing"
 
 printf 'peer=%s\nowner=%s\n' "$PEER_TOKEN" "$OWNER" > "$T/tokens"
 chmod 600 "$T/tokens"
@@ -128,7 +123,12 @@ print(hits[-1]["value_hash"] if hits else "")
 PY
 )
 [ "$GOT" = "$LOCAL_DEF" ] || fail "pushed def hash $GOT != local $LOCAL_DEF"
-echo "  [19.1] offline def pushed to ns/lap/dict/e2eowner/greet at $LOCAL_DEF"
+MIDDEN_PUSHED=$(curl -sf -m 60 -G -H "Authorization: Bearer $OWNER" \
+  --data-urlencode 'namespace=ns/lap' --data-urlencode 'limit=100' \
+  "$BASE/api/fed/midden/commits") || fail "read pushed midden commits"
+MIDDEN_COUNT=$(printf '%s' "$MIDDEN_PUSHED" | jget "len(d['commits'])")
+[ "${MIDDEN_COUNT:-0}" -ge 2 ] || fail "expected >=2 midden commits in ns/lap, got $MIDDEN_COUNT"
+echo "  [19.1] offline def pushed to ns/lap/dict/e2eowner/greet at $LOCAL_DEF ($MIDDEN_COUNT midden commits in ns/lap)"
 
 # 19.2 the record comes back by hash and deriv-check accepts it
 curl -sf -m 60 -H "Authorization: Bearer $OWNER" \
@@ -169,9 +169,17 @@ SRV_COPY=$(curl -sf -m 120 -X POST -H "Authorization: Bearer $OWNER" \
   --data-binary '{"command":"dict"}' "$BASE/api/repl" \
   | python3 -c "
 import hashlib, json, sys
+def tpack(trits):
+    out = bytearray()
+    for i in range(0, len(trits), 5):
+        chunk = trits[i:i+5].ljust(5, '0')
+        v = 0
+        for c in chunk: v = v * 3 + (ord(c) - 48)
+        out.append(v)
+    return bytes(out)
 rows = json.load(sys.stdin)['round'].get('dictionary') or []
 t = [r['ternary'] for r in rows if r.get('name')=='greet'][0] if rows else ''
-print(hashlib.sha256(t.encode()).hexdigest() if t else '')")
+print(hashlib.sha256(tpack(t)).hexdigest() if t else '')")
 [ "$SRV_COPY" = "$SERV_H" ] || fail "the server copy changed: $SRV_COPY != $SERV_H"
 echo "  [19.3] divergence greet local $LOCAL_H server $SERV_H, neither overwritten"
 

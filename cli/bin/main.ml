@@ -317,8 +317,7 @@ let run_cmd argv off =
   Printf.printf "%s %s %d\n" (D.status_to_string d.D.d_status)
     (Option.value d.D.d_result_ternary ~default:"-") d.D.d_step_count;
   Printf.printf "record %s\n"
-    (Filename.concat (Filename.concat st.Tuna_local.Local_store.root "bytes")
-       r.Tuna_local.Local_run.record_hash);
+    (Tuna_local.Local_store.value_path st r.Tuna_local.Local_run.record_hash);
   exit 0
 
 (* tuna repl: one round per stdin line against the local store.  A
