@@ -308,6 +308,12 @@ let unittest_counts () =
     (run_adapter "unittest" unittest_unexpected_log);
   Alcotest.(check string) "Ran without OK/FAILED is unparsed" "unparsed"
     (run_adapter "unittest" unittest_no_summary_log);
+  Alcotest.(check string) "a bare FAILED line is one failure" "1 0 1 0"
+    (run_adapter "unittest" "Ran 1 test in 0.001s\nFAILED\n");
+  Alcotest.(check string) "a bare FAILED in the aggregate is one failure"
+    "11 10 1 0"
+    (run_adapter "make-test"
+       ("Test Successful in 0.1s. 10 tests run.\nFAILED\n"));
   Alcotest.(check string) "the aggregate reads the same shapes" "16 14 2 0"
     (run_adapter "make-test" (unittest_ok_log ^ unittest_failed_log));
   Alcotest.(check string) "a coloured alcotest summary still parses" "3 3 0 0"
@@ -322,7 +328,12 @@ let counts_line () =
     "12 11 0 1" (run_adapter "make-test" counts_line_log);
   Alcotest.(check string) "an inconsistent COUNTS line is not a summary"
     "unparsed"
-    (run_adapter "make-test" "COUNTS run=5 passed=1 failed=0 skipped=0\n")
+    (run_adapter "make-test" "COUNTS run=5 passed=1 failed=0 skipped=0\n");
+  Alcotest.(check string) "an inconsistent COUNTS poisons a mixed log"
+    "unparsed"
+    (run_adapter "make-test"
+       ("Test Successful in 0.1s. 10 tests run.\n"
+       ^ "COUNTS run=5 passed=1 failed=0 skipped=0\n"))
 
 let pp_shape_end_to_end () =
   let c = counts_of_string (run_adapter "alcotest" pp_log) in

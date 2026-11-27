@@ -142,12 +142,14 @@ LC_ALL=C awk -v adapter="$adapter" '
         else if (kv[1] == "skipped") k = kv[2]
       }
       if (r == p + f + k) { run += r; passed += p; failed += f; skipped += k; summaries++ }
-      # an inconsistent line is not a summary: the gate stays unparsed
-      # rather than believing numbers that cannot describe one run
+      # an inconsistent line cannot describe one run: mark the whole gate
+      # unparsed, even when another suite in the same log parsed, rather than
+      # believing a subset of the evidence
+      else skip_marker = 1
     }
     else if (line ~ /^Ran [0-9]+ tests? in /) { ran = $2 + 0 }
     else if (line ~ /^OK/) unittest_ok()
-    else if (line ~ /^FAILED \(/) unittest_failed()
+    else if (line ~ /^FAILED/) unittest_failed()
     else if (line ~ /^SKIP/) skipped++
     else if (line ~ /^store tests skipped \(postgres down/) skip_marker = 1
     else if (line ~ /^filmstrip_cdp: skip/) skip_marker = 1
@@ -159,7 +161,7 @@ LC_ALL=C awk -v adapter="$adapter" '
   adapter == "unittest" {
     if (line ~ /^Ran [0-9]+ tests? in /) { ran = $2 + 0 }
     else if (line ~ /^OK/) unittest_ok()
-    else if (line ~ /^FAILED \(/) unittest_failed()
+    else if (line ~ /^FAILED/) unittest_failed()
     next
   }
   END {
