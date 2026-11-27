@@ -224,6 +224,38 @@
     |))
    )
   )
+  (subsection g2-receipt-check
+   (status planned)
+   (execution
+    (scope g2)
+    (kind code))
+   (details
+    (doc (|
+      G2 of gate-receipts/integration. nomia's
+      skills/review-change/scripts/check-evidence.sh
+      (nomia/skills/review-change/scripts/check-evidence.sh is the
+      reviewed source) gains a `--receipts` mode: a command's evidence
+      may carry a `"receipt"` field naming the claim path
+      gate-receipt.sh minted for it, and the mode resolves that receipt
+      with claims.sh verify and fails when the receipt's verdict
+      disagrees with the command's claimed exit or pass. G1's receipt is
+      the verdict run's claim, so its verdict is that run's result tree
+      (pass 10, fail 110, unverified 1110); claims.sh verify therefore
+      prints verdict=<pass|fail|unverified> beside VERIFIED/MISMATCH for
+      a claim whose citation carries kind=gate, mapped from the
+      reproduced result tree, and prints no verdict line for any other
+      claim, so an ordinary claim's output is unchanged (a non-gate
+      result that happens to be the tree 10, 110 or 1110 gets no verdict
+      line). An unreproducible (MISMATCH) or unresolvable receipt,
+      or a reproduced unverified verdict against a claimed pass, fails
+      the check - never "unchecked but fine". Without `--receipts` the
+      existing completeness check is unchanged, and the mode is offline
+      except for the claims.sh verify call a report explicitly asks for.
+    |))
+   )
+   (verify
+    (test "G2: check-evidence.sh --receipts resolves each command's `receipt` claim with claims.sh verify (stubbed in the offline test): a pass receipt with exit 0 and a fail receipt with exit 1 agree and pass; a pass receipt with exit 1 or a fail receipt with exit 0 disagrees and fails; a MISMATCH, an unresolvable receipt, or a reproduced unverified receipt with exit 0 (claimed pass) fails, while a command without a `receipt` is not a receipt failure; without the mode the existing completeness fixtures behave unchanged"))
+  )
   (subsection failure-definitions
    (status planned)
    (details
