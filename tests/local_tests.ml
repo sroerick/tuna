@@ -245,6 +245,24 @@ let test_repl_rounds () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "unknown command must fail"
 
+(* the dictionary-visibility command in the offline CLI: self-only, and
+   the setting is a journaled dict-visibility row at vis/<identity> *)
+let test_repl_dict_visibility () =
+  let st = LS.open_ (fresh_dir ()) in
+  let o = run st "dict-visibility public" in
+  Alcotest.(check string) "kind" "dict-visibility" o.LR.kind;
+  let rows =
+    List.filter (fun (r : LS.op) -> r.LS.op = "dict-visibility") (LS.ops st)
+  in
+  (match rows with
+   | [ r ] -> Alcotest.(check string) "path" "vis/local/public" r.LS.path
+   | _ -> Alcotest.fail "expected exactly one dict-visibility row");
+  match LR.execute st opts "dict-visibility other public" with
+  | Error e ->
+      Alcotest.(check bool) "a non-self target is refused" true
+        (String.length e > 0)
+  | Ok _ -> Alcotest.fail "the offline CLI must refuse a non-self target"
+
 (* -- L3: the local run host ---------------------------------------------- *)
 
 module LRun = Tuna_local.Local_run
@@ -448,7 +466,8 @@ let () =
           Alcotest.test_case "store: chain, fold, identity, tamper" `Quick test_store_chain;
           Alcotest.test_case "log rows = federation window rows" `Quick test_window_rows;
           Alcotest.test_case "torn final line, corrupt line" `Quick test_torn_line;
-          Alcotest.test_case "rounds: std, shadow, undef, get, errors" `Quick test_repl_rounds ] );
+          Alcotest.test_case "rounds: std, shadow, undef, get, errors" `Quick test_repl_rounds;
+          Alcotest.test_case "dict-visibility is self-only and journaled" `Quick test_repl_dict_visibility ] );
       ( "l3-local-prims",
         [ Alcotest.test_case "record verifies, server replay agrees, tamper fails" `Quick test_run_record;
           Alcotest.test_case "grants are arguments" `Quick test_run_denial;
