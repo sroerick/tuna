@@ -24,8 +24,15 @@ fi
 # bootstraps identities named 'root'/'m7-root', and running it against
 # the dev db would poison the dev server's TUNA_BOOTSTRAP boot
 # (bootstrap_identity is get-or-create — a foreign 'root' row makes
-# the server refuse to start).  Recreated fresh on every run.
-TEST_DB="${3:-tuna_test}"
+# the server refuse to start).  Recreated fresh on every run, and named per
+# process: four parallel Borge workers on one host ran the same suites, and
+# one worker's DROP DATABASE removed the database another was using.
+TEST_DB="${3:-tuna_test}_$$"
+drop_db() {
+  "$PSQL" -h "$DB_HOST" -p "${TUNA_DB_PORT:-5434}" -U "$DB_USER" -d postgres -q \
+    -c "DROP DATABASE IF EXISTS $TEST_DB" >/dev/null 2>&1 || true
+}
+trap drop_db EXIT INT TERM
 "$PSQL" -h "$DB_HOST" -p "${TUNA_DB_PORT:-5434}" -U "$DB_USER" -d postgres -q -c \
   "DROP DATABASE IF EXISTS $TEST_DB" >/dev/null
 "$PSQL" -h "$DB_HOST" -p "${TUNA_DB_PORT:-5434}" -U "$DB_USER" -d postgres -q -c \
