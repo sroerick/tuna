@@ -55,6 +55,12 @@ start() {
   echo "[serve] booting PG via dev.sh start-pg (TUNA_DB_* honored)..."
   "$ROOT/scripts/dev.sh" start-pg
   echo "[serve] building @all..."
+  if [ -f "$ROOT/../midden/dune-project" ]; then
+    MIDDEN_PREFIX="$ROOT/_build/midden-prefix"
+    dune build --root "$ROOT/../midden" @install
+    dune install --root "$ROOT/../midden" --prefix "$MIDDEN_PREFIX" midden >/dev/null
+    export OCAMLPATH="$MIDDEN_PREFIX/lib${OCAMLPATH:+:$OCAMLPATH}"
+  fi
   ( cd "$ROOT" && dune build --root "$ROOT" @all )
   echo "[serve] building public artifacts..."
   "$ROOT/scripts/deploy/build-public.sh" "$PUBLIC_DIR"
