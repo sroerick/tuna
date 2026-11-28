@@ -18,9 +18,13 @@ is live. Current deployed rev:
                                         deploy (kept for debug, cleaned
                                         on next promote)
 
-Deploy flow: push refs/heads/master to wyo tuna.git -> post-receive
-relay -> vultr -> tuna-promote here (build + battery + migrations +
-swap + rcctl restart + health GET / 303, auto-rollback to .prev).
+Deploy flow (monorepo): push `refs/heads/main` to `wyo.town:/srv/git/wyo.git`
+-> path-filtered `post-receive` (`tuna/**` or `midden/**` changed) -> relay to
+`gregor:/home/al/tuna-deploy/hook-entry.sh <rev>` (archives `midden/` + `tuna/`
+from `wyo.git`) -> `town:/usr/local/sbin/tuna-promote` (stages `midden` into
+`tuna/_build/midden-prefix`, builds `tuna` + runs `TUNA_DB_PORT=5432 dune
+runtest`, applies `tuna/migrations/*.sql`, swaps `main.exe`, `rcctl restart
+tuna`, health `GET /` 200|303 with auto-rollback to `.prev`).
 
 ## Server rev observability (10-27)
 
