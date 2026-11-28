@@ -544,11 +544,13 @@ cmd_verdict() {
 # discovery: the registry page (GET /claims, open) is the feed; list pulls
 # the paths out of it and matches each against an optional shell glob.
 cmd_list() {
-  local pat="${1:-*}" p
-  $CURL "$BASE/claims" \
-    | grep -o '<tr><td><code>[^<]*</code>' \
-    | sed 's#^<tr><td><code>\(.*\)</code>$#\1#' \
-    | while read -r p; do
+  local pat="${1:-*}" p body
+  body=$($CURL "$BASE/claims")
+  { printf '%s' "$body" | grep -o '<tr><td><a href="/claims/[^"]*"' \
+      | sed 's#.*/claims/##; s#"$##'
+    printf '%s' "$body" | grep -o '<tr><td><code>[^<]*</code>' \
+      | sed 's#^<tr><td><code>##; s#</code>$##'
+  } | while read -r p; do
         [ -n "$p" ] || continue
         case "$p" in
           $pat) printf '%s\n' "$p" ;;
